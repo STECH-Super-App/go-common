@@ -1,0 +1,147 @@
+# .golangci.yml configuration file
+# Options for running golangci-lint
+run:
+  # timeout for analysis, e.g. 30s, 5m, default is 1m
+  timeout: 5m
+  # exit code when at least one issue was found, default is 1
+  issues-exit-code: 1
+  # include test files or not, default is true
+  tests: true
+
+# Output configuration options
+output:
+  # colored-line-number|line-number|json|tab|checkstyle|code-climate, default is "colored-line-number"
+  format: colored-line-number
+  # print lines of code with issue, default is true
+  print-issued-lines: true
+  # print linter name in the end of issue text, default is true
+  print-linter-name: true
+
+# Linters settings
+linters-settings:
+  # govets settings
+  govet:
+    # report about shadowed variables
+    check-shadowing: true
+  # golint settings
+  golint:
+    # minimal confidence for issues, default is 0.8
+    min-confidence: 0.8
+  # gocyclo settings
+  gocyclo:
+    # minimal complexity of function to report it, default is 30
+    min-complexity: 15
+  # maligned settings
+  maligned:
+    # print struct with more effective memory layout or not, default is true
+    suggest-new: true
+  # dupl settings
+  dupl:
+    # tokens count for duplication, default is 150
+    threshold: 100
+  # goconst settings
+  goconst:
+    # minimal length of string constant, default is 3
+    min-len: 3
+    # minimal occurrences count to trigger, default is 3
+    min-occurrences: 3
+  # misspell settings
+  misspell:
+    # locale to use, default is "English"
+    locale: US
+  # lll settings
+  lll:
+    # max line length, lines longer will be reported. Default is 120.
+    line-length: 120
+    # tab width in spaces. Default is 1.
+    tab-width: 4
+  # unused settings
+  unused:
+    # treat code as a program (not a library) and report unused exported identifiers. default is false.
+    check-exported: false
+  # unparam settings
+  unparam:
+    # Inspect exported functions, default is true.
+    check-exported: false
+  # nakedret settings
+  nakedret:
+    # make an issue if func has more lines of code than this setting and it has naked returns. default is 30.
+    max-func-lines: 30
+  # prealloc settings
+  prealloc:
+    # Report preallocation suggestions only on simple loops that have no returns/breaks/continues/gotos in them. True by default.
+    simple: true
+    # Report preallocation suggestions on range loops, true by default
+    range-loops: true
+    # Report preallocation suggestions on for loops, false by default
+    for-loops: true
+
+# Linters to enable
+linters:
+  # Enable specific linters
+  enable:
+    # govet examines Go source code and reports suspicious constructs, such as Printf calls whose arguments do not align with the format string
+    - govet
+    # errcheck checks that you checked for errors.
+    - errcheck
+    # staticcheck is a go vet on steroids, applying a ton of static analysis checks
+    - staticcheck
+    # unused checks for unused constants, variables, functions and types
+    - unused
+    # gosimple specializes in simplifying a code
+    - gosimple
+    # structcheck finds unused struct fields
+    - structcheck
+    # varcheck finds unused global variables and constants
+    - varcheck
+    # ineffassign detects when assignments to existing variables are not used
+    - ineffassign
+    # deadcode finds unused code
+    - deadcode
+    # typecheck is a program to type-check Go code
+    - typecheck
+    # bodyclose checks whether HTTP response body is closed successfully
+    - bodyclose
+    # stylecheck is a replacement for golint
+    - stylecheck
+    # revive is a fast, configurable, extensible, flexible, and beautiful linter for Go
+    - revive
+    # unconvert removes unnecessary type conversions
+    - unconvert
+    # goconst finds repeated strings that could be replaced by a constant
+    - goconst
+    # gocyclo computes and checks the cyclomatic complexity of functions
+    - gocyclo
+    # gosec inspects source code for security problems
+    - gosec
+    # misspell finds commonly misspelled English words in comments
+    - misspell
+  # Disable specific linters
+  disable:
+    # depguard checks if package imports are in a list of acceptable packages
+    - depguard
+  # Enable all available linters
+  enable-all: false
+  # Disable all linters
+  disable-all: false
+  # Run only fast linters
+  fast: false
+
+# Issues configuration
+issues:
+  # List of regexps of issue texts to exclude, empty list by default.
+  exclude:
+    # Exclude error checking for read operations on the response body
+    - "Error return value of .((os\\.)?std(out|err)\\..*|.*Close|.*Flush|os\\.Remove(All)?|.*print(f|ln)?|os\\.(Un)?Setenv). is not checked"
+  # List of regexps of issue texts to include, empty list by default.
+  include: 
+    # Enable specific check
+    - "EXC0001"
+  # Maximum issues count per one linter. Set to 0 to disable. Default is 50.
+  max-issues-per-linter: 0
+  # Maximum count of issues with the same text. Set to 0 to disable. Default is 3.
+  max-same-issues: 0
+  # Show only new issues: if there are unstaged changes or untracked files, only those changes are analyzed, else only changes in HEAD~ are analyzed.
+  new: false
+  # Fix found issues (if it's supported by the linter)
+  fix: false
