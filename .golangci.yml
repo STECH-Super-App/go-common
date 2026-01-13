@@ -10,8 +10,8 @@ run:
 
 # Output configuration options
 output:
-  # colored-line-number|line-number|json|tab|checkstyle|code-climate, default is "colored-line-number"
-  format: colored-line-number
+  formats:
+    - format: colored-line-number
   # print lines of code with issue, default is true
   print-issued-lines: true
   # print linter name in the end of issue text, default is true
@@ -22,23 +22,12 @@ linters-settings:
   # govets settings
   govet:
     # report about shadowed variables
-    check-shadowing: true
-  # golint settings
-  golint:
-    # minimal confidence for issues, default is 0.8
-    min-confidence: 0.8
+    enable:
+      - shadow
   # gocyclo settings
   gocyclo:
     # minimal complexity of function to report it, default is 30
     min-complexity: 15
-  # maligned settings
-  maligned:
-    # print struct with more effective memory layout or not, default is true
-    suggest-new: true
-  # dupl settings
-  dupl:
-    # tokens count for duplication, default is 150
-    threshold: 100
   # goconst settings
   goconst:
     # minimal length of string constant, default is 3
@@ -49,32 +38,11 @@ linters-settings:
   misspell:
     # locale to use, default is "English"
     locale: US
-  # lll settings
-  lll:
-    # max line length, lines longer will be reported. Default is 120.
-    line-length: 120
-    # tab width in spaces. Default is 1.
-    tab-width: 4
   # unused settings
   unused:
     # treat code as a program (not a library) and report unused exported identifiers. default is false.
     check-exported: false
-  # unparam settings
-  unparam:
-    # Inspect exported functions, default is true.
-    check-exported: false
-  # nakedret settings
-  nakedret:
-    # make an issue if func has more lines of code than this setting and it has naked returns. default is 30.
-    max-func-lines: 30
-  # prealloc settings
-  prealloc:
-    # Report preallocation suggestions only on simple loops that have no returns/breaks/continues/gotos in them. True by default.
-    simple: true
-    # Report preallocation suggestions on range loops, true by default
-    range-loops: true
-    # Report preallocation suggestions on for loops, false by default
-    for-loops: true
+
 
 # Linters to enable
 linters:
@@ -90,14 +58,9 @@ linters:
     - unused
     # gosimple specializes in simplifying a code
     - gosimple
-    # structcheck finds unused struct fields
-    - structcheck
-    # varcheck finds unused global variables and constants
-    - varcheck
+
     # ineffassign detects when assignments to existing variables are not used
     - ineffassign
-    # deadcode finds unused code
-    - deadcode
     # typecheck is a program to type-check Go code
     - typecheck
     # bodyclose checks whether HTTP response body is closed successfully
@@ -111,7 +74,7 @@ linters:
     # goconst finds repeated strings that could be replaced by a constant
     - goconst
     # gocyclo computes and checks the cyclomatic complexity of functions
-    - gocyclo
+    - gocyclo 
     # gosec inspects source code for security problems
     - gosec
     # misspell finds commonly misspelled English words in comments
