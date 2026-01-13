@@ -95,7 +95,7 @@ issues:
   # List of regexps of issue texts to exclude, empty list by default.
   exclude:
     # Exclude error checking for read operations on the response body
-    - "Error return value of .((os\\.)?std(out|err)\\..*|.*Close|.*Flush|os\\.Remove(All)?|.*print(f|ln)?|os\\.(Un)?Setenv). is not checked"
+    - "Error return value of .((os\\.)?std(out|err)\\..*|.*Close|.*Flush|os\\.Remove(All)?|.*print(f|ln)?). is not checked"
   # List of regexps of issue texts to include, empty list by default.
   include: 
     # Enable specific check
