@@ -30,6 +30,20 @@ func GetEnvInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
+// GetEnvFloat retrieves the value of the environment variable named by the key and converts it to a float64.
+// If the variable is not present or cannot be converted, the default value is returned.
+func GetEnvFloat(key string, defaultVal float64) float64 {
+	val := GetEnv(key)
+	if val == "" {
+		return defaultVal
+	}
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return defaultVal
+	}
+	return f
+}
+
 // GetEnvBool retrieves the value of the environment variable named by the key and converts it to a bool.
 // If the variable is not present or cannot be converted, the default value is returned.
 func GetEnvBool(key string, defaultVal bool) bool {
