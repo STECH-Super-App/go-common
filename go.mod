@@ -9,6 +9,8 @@ require (
 	go.uber.org/zap v1.27.1
 )
 
+require github.com/joho/godotenv v1.5.1
+
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
