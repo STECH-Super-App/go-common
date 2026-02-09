@@ -1,8 +1,9 @@
 package auth
 
-// Context keys for user authentication data.
+// ContextKey is a custom type for context keys to avoid collisions.
 type ContextKey string
 
+// Context keys for user authentication data.
 const (
 	ContextKeyUserID   ContextKey = "user_id"
 	ContextKeyUserRole ContextKey = "user_role"
