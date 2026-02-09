@@ -1,79 +1,73 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
+	"github.com/labstack/echo/v4"
 )
 
 // AuthMiddleware checks for the presence of the X-User-ID header.
 // If present, it populates the context with user information.
 // If missing, it returns 401 Unauthorized.
-func AuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		userID := r.Header.Get(auth.HeaderUserID)
+func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		userID := c.Request().Header.Get(auth.HeaderUserID)
 		if userID == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		}
 
-		ctx := r.Context()
-		ctx = context.WithValue(ctx, auth.ContextKeyUserID, userID)
-		ctx = context.WithValue(ctx, auth.ContextKeyUserRole, r.Header.Get(auth.HeaderUserRole))
-		ctx = context.WithValue(ctx, auth.ContextKeyUserName, r.Header.Get(auth.HeaderUserName))
-		ctx = context.WithValue(ctx, auth.ContextKeyUserType, r.Header.Get(auth.HeaderUserType))
-		ctx = context.WithValue(ctx, auth.ContextKeyTenantID, r.Header.Get(auth.HeaderTenantID))
-
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+		setContextValues(c)
+		return next(c)
+	}
 }
 
 // OptionalAuthMiddleware populates the context with user information if present.
 // Unlike AuthMiddleware, it does not reject unauthenticated requests.
-func OptionalAuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		userID := r.Header.Get(auth.HeaderUserID)
+func OptionalAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		userID := c.Request().Header.Get(auth.HeaderUserID)
 		if userID != "" {
-			ctx := r.Context()
-			ctx = context.WithValue(ctx, auth.ContextKeyUserID, userID)
-			ctx = context.WithValue(ctx, auth.ContextKeyUserRole, r.Header.Get(auth.HeaderUserRole))
-			ctx = context.WithValue(ctx, auth.ContextKeyUserName, r.Header.Get(auth.HeaderUserName))
-			ctx = context.WithValue(ctx, auth.ContextKeyUserType, r.Header.Get(auth.HeaderUserType))
-			ctx = context.WithValue(ctx, auth.ContextKeyTenantID, r.Header.Get(auth.HeaderTenantID))
-			r = r.WithContext(ctx)
+			setContextValues(c)
 		}
-
-		next.ServeHTTP(w, r)
-	})
+		return next(c)
+	}
 }
 
-// UserIDFromContext retrieves the user ID from the context.
-func UserIDFromContext(ctx context.Context) (string, bool) {
-	val, ok := ctx.Value(auth.ContextKeyUserID).(string)
+func setContextValues(c echo.Context) {
+	c.Set(string(auth.ContextKeyUserID), c.Request().Header.Get(auth.HeaderUserID))
+	c.Set(string(auth.ContextKeyUserRole), c.Request().Header.Get(auth.HeaderUserRole))
+	c.Set(string(auth.ContextKeyUserName), c.Request().Header.Get(auth.HeaderUserName))
+	c.Set(string(auth.ContextKeyUserType), c.Request().Header.Get(auth.HeaderUserType))
+	c.Set(string(auth.ContextKeyTenantID), c.Request().Header.Get(auth.HeaderTenantID))
+}
+
+// UserIDFromContext retrieves the user ID from Echo context.
+func UserIDFromContext(c echo.Context) (string, bool) {
+	val, ok := c.Get(string(auth.ContextKeyUserID)).(string)
 	return val, ok
 }
 
-// UserRoleFromContext retrieves the user role from the context.
-func UserRoleFromContext(ctx context.Context) (string, bool) {
-	val, ok := ctx.Value(auth.ContextKeyUserRole).(string)
+// UserRoleFromContext retrieves the user role from Echo context.
+func UserRoleFromContext(c echo.Context) (string, bool) {
+	val, ok := c.Get(string(auth.ContextKeyUserRole)).(string)
 	return val, ok
 }
 
-// UserNameFromContext retrieves the user name from the context.
-func UserNameFromContext(ctx context.Context) (string, bool) {
-	val, ok := ctx.Value(auth.ContextKeyUserName).(string)
+// UserNameFromContext retrieves the user name from Echo context.
+func UserNameFromContext(c echo.Context) (string, bool) {
+	val, ok := c.Get(string(auth.ContextKeyUserName)).(string)
 	return val, ok
 }
 
-// UserTypeFromContext retrieves the user type from the context.
-func UserTypeFromContext(ctx context.Context) (string, bool) {
-	val, ok := ctx.Value(auth.ContextKeyUserType).(string)
+// UserTypeFromContext retrieves the user type from Echo context.
+func UserTypeFromContext(c echo.Context) (string, bool) {
+	val, ok := c.Get(string(auth.ContextKeyUserType)).(string)
 	return val, ok
 }
 
-// TenantIDFromContext retrieves the tenant ID from the context.
-func TenantIDFromContext(ctx context.Context) (string, bool) {
-	val, ok := ctx.Value(auth.ContextKeyTenantID).(string)
+// TenantIDFromContext retrieves the tenant ID from Echo context.
+func TenantIDFromContext(c echo.Context) (string, bool) {
+	val, ok := c.Get(string(auth.ContextKeyTenantID)).(string)
 	return val, ok
 }
