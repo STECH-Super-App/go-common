@@ -1,3 +1,4 @@
+// Package response provides standardized API response structures and helper functions.
 package response
 
 import (
@@ -39,7 +40,7 @@ func Created(c echo.Context, data interface{}) error {
 	})
 }
 
-// Error sends an error response based on the error type
+// JSONError sends an error response based on the error type
 func JSONError(c echo.Context, err error) error {
 	var appErr *commonErrors.AppError
 	code := http.StatusInternalServerError

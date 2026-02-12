@@ -18,4 +18,6 @@ linters:
   settings:
     forbidigo:
       forbid:
-        - ^c\.JSON$
+        - pattern: ^c\.JSON$
+          pkg: ^github\.com/labstack/echo/v4\.Context$
+          msg: "Use github.com/STECH-Super-App/go-common/pkg/response instead of direct c.JSON"
