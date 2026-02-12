@@ -53,6 +53,8 @@ func JSONError(c echo.Context, err error) error {
 		msg = appErr.Message
 		errCode = appErr.Code
 	} else {
+		// Log error to stdout
+		c.Logger().Error(err)
 		errCode = code
 	}
 
