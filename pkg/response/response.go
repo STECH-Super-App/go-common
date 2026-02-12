@@ -42,6 +42,8 @@ func Created(c echo.Context, data interface{}) error {
 
 // JSONError sends an error response based on the error type
 func JSONError(c echo.Context, err error) error {
+	// Log error to stdout
+	c.Logger().Error(err)
 	var appErr *commonErrors.AppError
 	code := http.StatusInternalServerError
 	msg := "internal server error"
