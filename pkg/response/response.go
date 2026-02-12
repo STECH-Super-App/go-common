@@ -25,7 +25,7 @@ type Error struct {
 
 // Success sends a success response with status 200 OK
 func Success(c echo.Context, data interface{}) error {
-	return c.JSON(http.StatusOK, Response{
+	return c.JSON(http.StatusOK, Response{ //nolint:forbidigo
 		Success: true,
 		Data:    data,
 	})
@@ -33,7 +33,7 @@ func Success(c echo.Context, data interface{}) error {
 
 // Created sends a success response with status 201 Created
 func Created(c echo.Context, data interface{}) error {
-	return c.JSON(http.StatusCreated, Response{
+	return c.JSON(http.StatusCreated, Response{ //nolint:forbidigo
 		Success: true,
 		Data:    data,
 	})
@@ -55,7 +55,7 @@ func JSONError(c echo.Context, err error) error {
 		errCode = code
 	}
 
-	return c.JSON(code, Response{
+	return c.JSON(code, Response{ //nolint:forbidigo
 		Success: false,
 		Error: &Error{
 			Code:    errCode, // Or a specific internal error code if AppError supports it
