@@ -1,9 +1,9 @@
 package middleware
 
 import (
-	"net/http"
-
 	"github.com/STECH-Super-App/go-common/pkg/auth"
+	commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
+	"github.com/STECH-Super-App/go-common/pkg/response"
 	"github.com/labstack/echo/v4"
 )
 
@@ -14,7 +14,7 @@ func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		userID := c.Request().Header.Get(auth.HeaderUserID)
 		if userID == "" {
-			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return response.JSONError(c, commonErrors.Unauthorized("Unauthorized", nil))
 		}
 
 		setContextValues(c)
