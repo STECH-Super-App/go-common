@@ -34,12 +34,29 @@ func OptionalAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
+// RegistrationAuthMiddleware checks for the presence of the X-Phone and X-Scope headers.
+// It is used for registration-scope tokens that don't have a user ID yet.
+func RegistrationAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		phone := c.Request().Header.Get(auth.HeaderPhone)
+		scope := c.Request().Header.Get(auth.HeaderScope)
+		if phone == "" || scope != "registration" {
+			return response.JSONError(c, commonErrors.Unauthorized("valid registration token required", nil))
+		}
+
+		setContextValues(c)
+		return next(c)
+	}
+}
+
 func setContextValues(c echo.Context) {
 	c.Set(string(auth.ContextKeyUserID), c.Request().Header.Get(auth.HeaderUserID))
 	c.Set(string(auth.ContextKeyUserRoles), c.Request().Header.Get(auth.HeaderUserRoles))
 	c.Set(string(auth.ContextKeyUserName), c.Request().Header.Get(auth.HeaderUserName))
 	c.Set(string(auth.ContextKeyUserType), c.Request().Header.Get(auth.HeaderUserType))
 	c.Set(string(auth.ContextKeyTenantID), c.Request().Header.Get(auth.HeaderTenantID))
+	c.Set(string(auth.ContextKeyScope), c.Request().Header.Get(auth.HeaderScope))
+	c.Set(string(auth.ContextKeyPhone), c.Request().Header.Get(auth.HeaderPhone))
 }
 
 // UserIDFromContext retrieves the user ID from Echo context.
@@ -69,5 +86,17 @@ func UserTypeFromContext(c echo.Context) (string, bool) {
 // TenantIDFromContext retrieves the tenant ID from Echo context.
 func TenantIDFromContext(c echo.Context) (string, bool) {
 	val, ok := c.Get(string(auth.ContextKeyTenantID)).(string)
+	return val, ok
+}
+
+// ScopeFromContext retrieves the token scope from Echo context.
+func ScopeFromContext(c echo.Context) (string, bool) {
+	val, ok := c.Get(string(auth.ContextKeyScope)).(string)
+	return val, ok
+}
+
+// PhoneFromContext retrieves the phone number from Echo context.
+func PhoneFromContext(c echo.Context) (string, bool) {
+	val, ok := c.Get(string(auth.ContextKeyPhone)).(string)
 	return val, ok
 }

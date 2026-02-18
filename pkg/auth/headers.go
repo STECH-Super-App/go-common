@@ -7,4 +7,6 @@ const (
 	HeaderUserName  = "X-User-Name"
 	HeaderUserType  = "X-User-Type"
 	HeaderTenantID  = "X-Tenant-ID"
+	HeaderScope     = "X-Scope"
+	HeaderPhone     = "X-Phone"
 )

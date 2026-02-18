@@ -10,4 +10,6 @@ const (
 	ContextKeyUserName  ContextKey = "user_name"
 	ContextKeyUserType  ContextKey = "user_type"
 	ContextKeyTenantID  ContextKey = "tenant_id"
+	ContextKeyScope     ContextKey = "scope"
+	ContextKeyPhone     ContextKey = "phone"
 )
