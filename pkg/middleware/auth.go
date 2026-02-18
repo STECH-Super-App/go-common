@@ -36,7 +36,7 @@ func OptionalAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 func setContextValues(c echo.Context) {
 	c.Set(string(auth.ContextKeyUserID), c.Request().Header.Get(auth.HeaderUserID))
-	c.Set(string(auth.ContextKeyUserRole), c.Request().Header.Get(auth.HeaderUserRole))
+	c.Set(string(auth.ContextKeyUserRoles), c.Request().Header.Get(auth.HeaderUserRoles))
 	c.Set(string(auth.ContextKeyUserName), c.Request().Header.Get(auth.HeaderUserName))
 	c.Set(string(auth.ContextKeyUserType), c.Request().Header.Get(auth.HeaderUserType))
 	c.Set(string(auth.ContextKeyTenantID), c.Request().Header.Get(auth.HeaderTenantID))
@@ -48,9 +48,9 @@ func UserIDFromContext(c echo.Context) (string, bool) {
 	return val, ok
 }
 
-// UserRoleFromContext retrieves the user role from Echo context.
-func UserRoleFromContext(c echo.Context) (string, bool) {
-	val, ok := c.Get(string(auth.ContextKeyUserRole)).(string)
+// UserRolesFromContext retrieves the user roles from Echo context.
+func UserRolesFromContext(c echo.Context) (string, bool) {
+	val, ok := c.Get(string(auth.ContextKeyUserRoles)).(string)
 	return val, ok
 }
 
