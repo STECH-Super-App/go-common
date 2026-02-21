@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"log"
+
 	"github.com/STECH-Super-App/go-common/pkg/auth"
 	commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
 	"github.com/STECH-Super-App/go-common/pkg/response"
@@ -40,6 +42,9 @@ func RegistrationAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		phone := c.Request().Header.Get(auth.HeaderPhone)
 		scope := c.Request().Header.Get(auth.HeaderScope)
+
+		log.Printf("RegistrationAuthMiddleware - Phone: %q, Scope: %q", phone, scope)
+
 		if phone == "" || scope != "registration" {
 			return response.JSONError(c, commonErrors.Unauthorized("valid registration token required", nil))
 		}

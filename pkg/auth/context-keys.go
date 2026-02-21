@@ -12,4 +12,5 @@ const (
 	ContextKeyTenantID  ContextKey = "tenant_id"
 	ContextKeyScope     ContextKey = "scope"
 	ContextKeyPhone     ContextKey = "phone"
+	ContextKeyClient    ContextKey = "client_info"
 )

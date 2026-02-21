@@ -12,6 +12,7 @@ require (
 require (
 	github.com/joho/godotenv v1.5.1
 	github.com/labstack/echo/v4 v4.15.0
+	github.com/mssola/user_agent v0.6.0
 	github.com/stretchr/testify v1.11.1
 )
 
