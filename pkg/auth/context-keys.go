@@ -9,8 +9,9 @@ const (
 	ContextKeyUserRoles ContextKey = "user_roles"
 	ContextKeyUserName  ContextKey = "user_name"
 	ContextKeyUserType  ContextKey = "user_type"
-	ContextKeyTenantID  ContextKey = "tenant_id"
-	ContextKeyScope     ContextKey = "scope"
-	ContextKeyPhone     ContextKey = "phone"
-	ContextKeyClient    ContextKey = "client_info"
+	ContextKeyTenants   ContextKey = "tenants"
+
+	ContextKeyScope  ContextKey = "scope"
+	ContextKeyPhone  ContextKey = "phone"
+	ContextKeyClient ContextKey = "client_info"
 )
