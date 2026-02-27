@@ -10,6 +10,7 @@ const (
 
 	HeaderScope        = "X-Scope"
 	HeaderPhone        = "X-Phone"
+	HeaderAuthChecked  = "X-Auth-Checked"
 	HeaderDeviceID     = "X-Device-Id"
 	HeaderUserAgent    = "User-Agent"
 	HeaderRealIP       = "X-Real-IP"
