@@ -101,3 +101,28 @@ func PhoneFromContext(c echo.Context) (string, bool) {
 	val, ok := c.Get(string(auth.ContextKeyPhone)).(string)
 	return val, ok
 }
+
+// TenantsFromContext retrieves the tenant IDs from Echo context.
+func TenantsFromContext(c echo.Context) ([]string, bool) {
+	val, ok := c.Get(string(auth.ContextKeyTenants)).([]string)
+	return val, ok
+}
+
+// AdminMiddleware rejects requests that do not carry the "admin" role.
+// Must be applied after AuthMiddleware so that context values are populated.
+func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		rolesStr, ok := UserRolesFromContext(c)
+		if !ok {
+			return response.JSONError(c, commonErrors.Forbidden("admin role required", nil))
+		}
+
+		for _, role := range strings.Split(rolesStr, ",") {
+			if strings.TrimSpace(role) == "admin" {
+				return next(c)
+			}
+		}
+
+		return response.JSONError(c, commonErrors.Forbidden("admin role required", nil))
+	}
+}
