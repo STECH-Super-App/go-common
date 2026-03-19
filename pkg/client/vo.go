@@ -1,3 +1,4 @@
+// Package client provides value objects for client device identification and validation.
 package client
 
 import (
