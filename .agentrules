@@ -1,0 +1,32 @@
+# go-common Agent Context
+
+## Purpose
+Shared Go utility library for all STECH services. **PUBLIC REPO** — never commit secrets.
+
+## Module
+```
+github.com/STECH-Super-App/go-common
+```
+
+## Package Reference
+
+| Package | Key Exports | Used For |
+|---------|-------------|----------|
+| `pkg/auth` | `Claims`, `HeaderUserID/Role/Name/Type/TenantID` | JWT claims, auth header constants |
+| `pkg/config` | `Init()`, `GetEnv()`, `GetEnvInt/Bool/Duration()` | Env var loading from `.env` |
+| `pkg/db` | `NewPostgres(ctx, cfg)`, `NewRedis(ctx, cfg)` | DB connection factories |
+| `pkg/errors` | `AppError`, `BadRequest/NotFound/Unauthorized/Forbidden/InternalServerError()` | Standardized HTTP errors |
+| `pkg/logger` | `New(level) (*zap.Logger, error)` | Structured JSON logging |
+| `pkg/metrics` | `Registry`, `NewCounter/Gauge/Histogram()` | Prometheus metrics |
+| `pkg/middleware` | `CORS()`, `Logger()`, `AuthMiddleware()`, `UserIDFromContext()` | HTTP middlewares, context helpers |
+| `pkg/utils` | `Ptr()`, `ToVal()`, `Contains()`, `Map()`, `Filter()` | Generic utilities |
+| `pkg/health` | Health check endpoint | Service health monitoring |
+| `pkg/client` | gRPC client utilities | Service-to-service communication |
+
+## Context Keys (pkg/middleware)
+`ContextKeyUserID`, `ContextKeyUserRole`, `ContextKeyUserName`, `ContextKeyUserType`, `ContextKeyTenantID`
+
+## Critical Rules
+- This is a PUBLIC repo — never add secrets, credentials, or internal URLs
+- All services depend on this — breaking changes affect everything
+- After pushing changes: run `./update_go_common.sh` from monorepo root
