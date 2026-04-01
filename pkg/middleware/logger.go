@@ -39,3 +39,17 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
 }
+
+// Flush delegates to the underlying ResponseWriter if it implements http.Flusher.
+// This is required for compatibility with httputil.ReverseProxy's streaming flush behavior.
+func (rw *responseWriter) Flush() {
+	if flusher, ok := rw.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Unwrap returns the underlying ResponseWriter, allowing middleware chains
+// to discover interfaces (like http.Flusher) on the original writer.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
