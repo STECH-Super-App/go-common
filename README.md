@@ -45,6 +45,52 @@ Generic utility functions.
 - **Ptr**: Pointer helpers (`Ptr[T]`, `ToVal[T]`).
 - **Slice**: Slice manipulation (`Contains`, `Map`, `Filter`).
 
+### `pkg/outbox`
+Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafka.
+
+- `New(pool, kafkaWriter, logger, cfg)`: Creates the full outbox subsystem.
+- `Start(ctx)`: Launches background relay (poll → Kafka) and reaper (cleanup) goroutines.
+- `Publisher.Publish(ctx, tx, opts)`: Writes an event into the outbox table within a DB transaction.
+- `RunInTx(ctx, pool, fn)`: Executes a function within a Postgres transaction.
+- `DBTX`: Interface abstracting `pgx.Tx` and `*pgxpool.Pool` for repository compatibility.
+- `Migrate(postgresURL)`: Runs the embedded goose migrations (outbox + dedup tables).
+- `Deduplicator.Process(ctx, outboxID, fn)`: Consumer-side idempotency — skips `fn` if `outboxID` was already processed.
+- `ExtractOutboxID(headers)`: Reads `outbox_id` from Kafka message headers.
+- `ExtractEventType(headers)`: Reads `event_type` from Kafka message headers.
+
+**Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OUTBOX_POLL_INTERVAL` | `1s` | Relay polling frequency |
+| `OUTBOX_BATCH_SIZE` | `100` | Messages per poll cycle |
+| `OUTBOX_REAPER_INTERVAL` | `5m` | Cleanup schedule |
+| `OUTBOX_RETENTION` | `72h` | Sent message retention before deletion |
+
+**Quick Start:**
+```go
+// In main.go — after existing migrations
+outbox.Migrate(cfg.Postgres.URL)
+
+ob := outbox.New(pool, kafkaWriter, zlog, outbox.DefaultConfig())
+stop := ob.Start(ctx)
+defer stop()
+
+// In a use case — atomic domain write + event publish
+outbox.RunInTx(ctx, pool, func(tx pgx.Tx) error {
+    if err := repo.WithTx(tx).Create(ctx, entity); err != nil {
+        return err
+    }
+    return ob.Publisher.Publish(ctx, tx, outbox.PublishOptions{
+        AggregateType: "user",
+        AggregateID:   entity.ID,
+        EventType:     "user.created",
+        Topic:         "user-events",
+        Payload:       event,
+    })
+})
+```
+
 ## Commit message prefixes
 
 This project uses common commit message prefixes inspired by Conventional Commits.

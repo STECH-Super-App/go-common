@@ -22,6 +22,7 @@ github.com/STECH-Super-App/go-common
 | `pkg/utils` | `Ptr()`, `ToVal()`, `Contains()`, `Map()`, `Filter()` | Generic utilities |
 | `pkg/health` | Health check endpoint | Service health monitoring |
 | `pkg/client` | gRPC client utilities | Service-to-service communication |
+| `pkg/outbox` | `New()`, `Start()`, `Publish()`, `RunInTx()`, `DBTX`, `Migrate()`, `Deduplicator`, `ExtractOutboxID()`, `ExtractEventType()` | Transactional outbox pattern (at-least-once Kafka delivery + consumer dedup) |
 
 ## Context Keys (pkg/middleware)
 `ContextKeyUserID`, `ContextKeyUserRole`, `ContextKeyUserName`, `ContextKeyUserType`, `ContextKeyTenantID`
