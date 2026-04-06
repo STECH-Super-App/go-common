@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"io/fs"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql
 	"github.com/pressly/goose/v3"
@@ -12,6 +13,9 @@ import (
 
 //go:embed migrations/*.sql
 var migrations embed.FS
+
+// migrationsFS strips the "migrations/" prefix so goose sees .sql files at root.
+var migrationsFS, _ = fs.Sub(migrations, "migrations")
 
 // outboxGooseTable is the dedicated goose version table for outbox migrations.
 // Using a separate table prevents collision with service-specific migrations
@@ -36,7 +40,7 @@ func Migrate(postgresURL string) error {
 	provider, err := goose.NewProvider(
 		goose.DialectPostgres,
 		db,
-		migrations,
+		migrationsFS,
 		goose.WithTableName(outboxGooseTable),
 	)
 	if err != nil {
