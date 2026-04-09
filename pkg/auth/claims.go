@@ -10,8 +10,9 @@ type Claims struct {
 	Name    string   `json:"name"`
 	Type    string   `json:"type"`
 	Tenants []string `json:"tenants,omitempty"`
-	Avatar  string   `json:"avatar,omitempty"`
-	Email   string   `json:"email,omitempty"`
+	Avatar        string   `json:"avatar,omitempty"`
+	Email         string   `json:"email,omitempty"`
+	EmailVerified bool     `json:"email_verified,omitempty"`
 
 	Scope string `json:"scope,omitempty"` // "registration" for restricted tokens, empty for full tokens
 	Phone string `json:"phone,omitempty"` // only set in registration-scope tokens
