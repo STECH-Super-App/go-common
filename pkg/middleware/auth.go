@@ -15,6 +15,10 @@ import (
 // If missing, it returns 401 Unauthorized.
 func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		if c.Request().Header.Get(auth.HeaderTokenRevoked) == "true" {
+			return response.JSONError(c, commonErrors.Unauthorized("token has been revoked, please refresh your session", nil))
+		}
+
 		userID := c.Request().Header.Get(auth.HeaderUserID)
 		if userID == "" {
 			return response.JSONError(c, commonErrors.Unauthorized("Unauthorized", nil))
