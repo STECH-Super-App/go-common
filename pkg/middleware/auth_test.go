@@ -9,6 +9,7 @@ import (
 	"github.com/STECH-Super-App/go-common/pkg/auth"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAuthMiddleware_ValidUser(t *testing.T) {
@@ -38,7 +39,7 @@ func TestAuthMiddleware_MissingUserID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	handler := AuthMiddleware(func(c echo.Context) error {
+	handler := AuthMiddleware(func(_ echo.Context) error {
 		t.Fatal("handler should not be called")
 		return nil
 	})
@@ -48,7 +49,7 @@ func TestAuthMiddleware_MissingUserID(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 
 	var body map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &body)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	errObj := body["error"].(map[string]interface{})
 	assert.Equal(t, "Unauthorized", errObj["message"])
 }
@@ -61,7 +62,7 @@ func TestAuthMiddleware_RevokedToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	handler := AuthMiddleware(func(c echo.Context) error {
+	handler := AuthMiddleware(func(_ echo.Context) error {
 		t.Fatal("handler should not be called for revoked token")
 		return nil
 	})
@@ -71,7 +72,7 @@ func TestAuthMiddleware_RevokedToken(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 
 	var body map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &body)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	errObj := body["error"].(map[string]interface{})
 	assert.Contains(t, errObj["message"], "revoked")
 }

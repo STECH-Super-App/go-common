@@ -11,9 +11,9 @@ const (
 
 	HeaderScope        = "X-Scope"
 	HeaderPhone        = "X-Phone"
-	HeaderTokenJTI     = "X-Token-JTI"
-	HeaderTokenRevoked = "X-Token-Revoked" // Request header: gateway → service, set when JTI is in blacklist
-	HeaderTokenStatus  = "X-Token-Status"  // Response header: gateway → client, value "revoked" signals refresh needed
+	HeaderTokenJTI     = "X-Token-JTI"     //nolint:gosec // Not credentials — HTTP header names for token revocation signaling.
+	HeaderTokenRevoked = "X-Token-Revoked" //nolint:gosec // Request header: gateway → service, set when JTI is in blacklist.
+	HeaderTokenStatus  = "X-Token-Status"  //nolint:gosec // Response header: gateway → client, value "revoked" signals refresh needed.
 	HeaderAuthChecked  = "X-Auth-Checked"
 	HeaderDeviceID     = "X-Device-Id"
 	HeaderUserAgent    = "User-Agent"
