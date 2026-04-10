@@ -9,28 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockTx is a fake pgx.Tx used for unit-testing the publisher.
-// It does not actually connect to a database.
-type mockTx struct {
-	DBTX
-	execCalls []mockExecCall
-}
-
-type mockExecCall struct {
-	sql  string
-	args []any
-}
-
-func (m *mockTx) Exec(ctx context.Context, sql string, args ...any) (mockCommandTag, error) {
-	m.execCalls = append(m.execCalls, mockExecCall{sql: sql, args: args})
-	return mockCommandTag{}, nil
-}
-
-type mockCommandTag struct{}
-
-func (t mockCommandTag) RowsAffected() int64 { return 1 }
-func (t mockCommandTag) String() string       { return "INSERT 0 1" }
-
 func TestPublishOptions_Validation(t *testing.T) {
 	opts := PublishOptions{
 		AggregateType: "user",
