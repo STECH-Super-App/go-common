@@ -17,9 +17,14 @@ type Response struct {
 	Meta    interface{} `json:"meta,omitempty"`
 }
 
-// Error represents a standardized error structure
+// Error represents a standardized error structure.
+//
+// Code is the numeric HTTP status. Reason is a stable, machine-readable
+// identifier (e.g. "TRANSFER_EXPIRED") suitable for client-side branching;
+// it may be empty on legacy call sites that predate the reason catalog.
 type Error struct {
 	Code    int         `json:"code"`
+	Reason  string      `json:"reason,omitempty"`
 	Message string      `json:"message"`
 	Details interface{} `json:"details,omitempty"`
 }
@@ -47,21 +52,20 @@ func JSONError(c echo.Context, err error) error {
 	var appErr *commonErrors.AppError
 	code := http.StatusInternalServerError
 	msg := "internal server error"
+	var reason string
 	var details interface{}
-	var errCode int
 
 	if errors.As(err, &appErr) {
 		code = appErr.Code
 		msg = appErr.Message
-		errCode = appErr.Code
-	} else {
-		errCode = code
+		reason = appErr.Reason
 	}
 
 	return c.JSON(code, Response{ //nolint:forbidigo
 		Success: false,
 		Error: &Error{
-			Code:    errCode, // Or a specific internal error code if AppError supports it
+			Code:    code,
+			Reason:  reason,
 			Message: msg,
 			Details: details,
 		},

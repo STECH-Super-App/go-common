@@ -75,6 +75,27 @@ func TestJSONError_AppError(t *testing.T) {
 	assert.Equal(t, "invalid input", res.Error.Message)
 }
 
+func TestJSONError_IncludesReason(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	appErr := commonErrors.BadRequestWithReason("bad input", "BAD_INPUT", nil)
+	err := response.JSONError(c, appErr)
+
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var res response.Response
+	err = json.Unmarshal(rec.Body.Bytes(), &res)
+	assert.NoError(t, err)
+	assert.NotNil(t, res.Error)
+	assert.Equal(t, "BAD_INPUT", res.Error.Reason)
+	assert.Equal(t, http.StatusBadRequest, res.Error.Code)
+	assert.Equal(t, "bad input", res.Error.Message)
+}
+
 func TestJSONError_StandardError(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
