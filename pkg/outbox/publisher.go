@@ -10,6 +10,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// MessageInserter abstracts the write side of outbox storage.
+// Implemented by *Store (Postgres) and *TestStore (in-memory).
+type MessageInserter interface {
+	InsertTx(ctx context.Context, tx pgx.Tx, msg *Message) error
+}
+
 // Publisher provides transactional event publishing via the outbox pattern.
 // It is the primary API for upstream services — call Publish() inside a
 // RunInTx block to atomically write both the domain mutation and the event.
@@ -17,13 +23,13 @@ import (
 // The defaultTopic is applied when PublishOptions.Topic is empty, keeping
 // Kafka routing out of the application layer (infrastructure concern).
 type Publisher struct {
-	store        *Store
+	store        MessageInserter
 	defaultTopic string
 }
 
 // NewPublisher creates a new transactional event publisher.
 // defaultTopic is the Kafka destination for all messages unless overridden per-call.
-func NewPublisher(store *Store, defaultTopic string) *Publisher {
+func NewPublisher(store MessageInserter, defaultTopic string) *Publisher {
 	return &Publisher{store: store, defaultTopic: defaultTopic}
 }
 
