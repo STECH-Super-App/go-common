@@ -5,11 +5,11 @@ type ContextKey string
 
 // Context keys for user authentication data.
 const (
-	ContextKeyUserID    ContextKey = "user_id"
-	ContextKeyUserRoles ContextKey = "user_roles"
-	ContextKeyUserName  ContextKey = "user_name"
-	ContextKeyUserType  ContextKey = "user_type"
-	ContextKeyTenants   ContextKey = "tenants"
+	ContextKeyUserID            ContextKey = "user_id"
+	ContextKeyUserRoles         ContextKey = "user_roles"
+	ContextKeyUserName          ContextKey = "user_name"
+	ContextKeyUserType          ContextKey = "user_type"
+	ContextKeyTeamMemberships   ContextKey = "team_memberships"
 
 	ContextKeyScope  ContextKey = "scope"
 	ContextKeyPhone  ContextKey = "phone"
