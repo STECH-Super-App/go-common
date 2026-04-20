@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
+	"github.com/STECH-Super-App/go-common/pkg/authz"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,4 +137,45 @@ func TestOptionalAuthMiddleware_RevokedToken(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	// User context should NOT be populated — treated as anonymous.
 	assert.Nil(t, c.Get(string(auth.ContextKeyUserID)))
+}
+
+func TestAuthMiddleware_ParsesTeamMemberships(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(auth.HeaderUserID, "user-xyz")
+	req.Header.Set(auth.HeaderTeamMemberships, "TENANT:tn-1=MANAGER,USER:u-1=ADMIN")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	handler := AuthMiddleware(func(c echo.Context) error {
+		mems, ok := authz.MembershipsFromContext(c)
+		assert.True(t, ok)
+		assert.Equal(t, authz.Memberships{
+			{OwnerType: authz.OwnerTenant, OwnerID: "tn-1", Role: authz.RoleManager},
+			{OwnerType: authz.OwnerUser, OwnerID: "u-1", Role: authz.RoleAdmin},
+		}, mems)
+		return c.String(http.StatusOK, "OK")
+	})
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestAuthMiddleware_NoTeamMembershipsHeaderYieldsNil(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(auth.HeaderUserID, "user-xyz")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	handler := AuthMiddleware(func(c echo.Context) error {
+		mems, ok := authz.MembershipsFromContext(c)
+		// Nil slice stored; ok=true because the key exists, but the value is nil.
+		assert.True(t, ok || mems == nil)
+		assert.Nil(t, mems)
+		return c.String(http.StatusOK, "OK")
+	})
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
 }

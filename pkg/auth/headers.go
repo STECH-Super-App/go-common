@@ -6,8 +6,12 @@ const (
 	HeaderUserRoles = "X-User-Roles"
 	HeaderUserName  = "X-User-Name"
 	HeaderUserType  = "X-User-Type"
-	HeaderTenants   = "X-Tenants"
 	HeaderAvatar    = "X-Avatar"
+
+	// HeaderTeamMemberships carries the caller's team roles as a comma-separated
+	// list like "TENANT:<uuid>=MANAGER,USER:<uuid>=ADMIN". Services read it via
+	// the go-common/pkg/authz package.
+	HeaderTeamMemberships = "X-Team-Memberships"
 
 	HeaderScope        = "X-Scope"
 	HeaderPhone        = "X-Phone"

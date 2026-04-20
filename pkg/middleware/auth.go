@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
+	"github.com/STECH-Super-App/go-common/pkg/authz"
 	commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
 	"github.com/STECH-Super-App/go-common/pkg/response"
 	"github.com/labstack/echo/v4"
@@ -64,7 +65,7 @@ func setContextValues(c echo.Context) {
 	c.Set(string(auth.ContextKeyUserRoles), c.Request().Header.Get(auth.HeaderUserRoles))
 	c.Set(string(auth.ContextKeyUserName), c.Request().Header.Get(auth.HeaderUserName))
 	c.Set(string(auth.ContextKeyUserType), c.Request().Header.Get(auth.HeaderUserType))
-	c.Set(string(auth.ContextKeyTenants), strings.Split(c.Request().Header.Get(auth.HeaderTenants), ","))
+	c.Set(string(auth.ContextKeyTeamMemberships), authz.Parse(c.Request().Header.Get(auth.HeaderTeamMemberships)))
 
 	c.Set(string(auth.ContextKeyScope), c.Request().Header.Get(auth.HeaderScope))
 	c.Set(string(auth.ContextKeyPhone), c.Request().Header.Get(auth.HeaderPhone))
@@ -103,12 +104,6 @@ func ScopeFromContext(c echo.Context) (string, bool) {
 // PhoneFromContext retrieves the phone number from Echo context.
 func PhoneFromContext(c echo.Context) (string, bool) {
 	val, ok := c.Get(string(auth.ContextKeyPhone)).(string)
-	return val, ok
-}
-
-// TenantsFromContext retrieves the tenant IDs from Echo context.
-func TenantsFromContext(c echo.Context) ([]string, bool) {
-	val, ok := c.Get(string(auth.ContextKeyTenants)).([]string)
 	return val, ok
 }
 
