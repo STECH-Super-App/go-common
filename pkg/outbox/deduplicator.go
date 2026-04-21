@@ -42,8 +42,12 @@ func (d *Deduplicator) Process(ctx context.Context, outboxID string, fn func() e
 		return fn()
 	}
 
-	return RunInTx(ctx, d.pool, func(tx pgx.Tx) error {
-		alreadyProcessed, err := d.exists(ctx, tx, outboxID)
+	return RunInTx(ctx, d.pool, func(tx Tx) error {
+		pgxTx, ok := TxAsPgx(tx)
+		if !ok {
+			return fmt.Errorf("outbox dedup: expected pgx.Tx, got %T", tx)
+		}
+		alreadyProcessed, err := d.exists(ctx, pgxTx, outboxID)
 		if err != nil {
 			return err
 		}
@@ -56,7 +60,7 @@ func (d *Deduplicator) Process(ctx context.Context, outboxID string, fn func() e
 			return err
 		}
 
-		return d.record(ctx, tx, outboxID)
+		return d.record(ctx, pgxTx, outboxID)
 	})
 }
 

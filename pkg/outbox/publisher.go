@@ -7,13 +7,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 )
 
 // MessageInserter abstracts the write side of outbox storage.
 // Implemented by *Store (Postgres) and *TestStore (in-memory).
+//
+// Accepts the opaque outbox.Tx so application callers never need to import
+// a concrete transaction type.
 type MessageInserter interface {
-	InsertTx(ctx context.Context, tx pgx.Tx, msg *Message) error
+	InsertTx(ctx context.Context, tx Tx, msg *Message) error
 }
 
 // Publisher provides transactional event publishing via the outbox pattern.
@@ -50,7 +52,7 @@ type PublishOptions struct {
 //   - outbox_id header for consumer-side idempotency/deduplication
 //   - event_type header matching EventType
 //   - AggregateID as the Kafka partition key
-func (p *Publisher) Publish(ctx context.Context, tx pgx.Tx, opts PublishOptions) error {
+func (p *Publisher) Publish(ctx context.Context, tx Tx, opts PublishOptions) error {
 	payload, err := json.Marshal(opts.Payload)
 	if err != nil {
 		return fmt.Errorf("outbox: marshal payload: %w", err)
