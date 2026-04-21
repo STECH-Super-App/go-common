@@ -24,8 +24,13 @@ func NewStore(pool *pgxpool.Pool) *Store {
 
 // InsertTx writes a message within an existing transaction.
 // This is the critical method — the caller's domain write and this insert
-// share the same pgx.Tx, guaranteeing atomicity.
-func (s *Store) InsertTx(ctx context.Context, tx pgx.Tx, msg *Message) error {
+// share the same pgx.Tx (wrapped in Tx), guaranteeing atomicity.
+func (s *Store) InsertTx(ctx context.Context, tx Tx, msg *Message) error {
+	pgxTx, ok := TxAsPgx(tx)
+	if !ok {
+		return fmt.Errorf("outbox: Store.InsertTx expects pgx.Tx, got %T", tx)
+	}
+
 	const query = `
 		INSERT INTO outbox_messages
 			(id, aggregate_type, aggregate_id, event_type, topic, key, payload, headers, status, created_at)
@@ -36,7 +41,7 @@ func (s *Store) InsertTx(ctx context.Context, tx pgx.Tx, msg *Message) error {
 		return fmt.Errorf("outbox: marshal headers: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, query,
+	_, err = pgxTx.Exec(ctx, query,
 		msg.ID,
 		msg.AggregateType,
 		msg.AggregateID,

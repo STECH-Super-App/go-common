@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +46,7 @@ func TestRunInTx_NilPool(t *testing.T) {
 	// RunInTx with a nil pool bypasses the transaction and calls fn(nil).
 	// This supports test/dev scenarios where no database is available.
 	called := false
-	err := RunInTx(context.Background(), nil, func(tx pgx.Tx) error {
+	err := RunInTx(context.Background(), nil, func(tx Tx) error {
 		called = true
 		assert.Nil(t, tx, "tx should be nil when pool is nil")
 		return nil

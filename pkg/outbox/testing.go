@@ -3,8 +3,6 @@ package outbox
 import (
 	"context"
 	"sync"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // TestStore is an in-memory MessageInserter for unit testing.
@@ -21,8 +19,9 @@ func NewTestStore() *TestStore {
 	return &TestStore{}
 }
 
-// InsertTx captures the message in memory. The tx argument is ignored.
-func (s *TestStore) InsertTx(_ context.Context, _ pgx.Tx, msg *Message) error {
+// InsertTx captures the message in memory. The tx argument is ignored — the
+// in-memory store has no concept of transactions.
+func (s *TestStore) InsertTx(_ context.Context, _ Tx, msg *Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, msg)
