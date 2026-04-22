@@ -36,7 +36,7 @@ func (r *fakeReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
 	return m, nil
 }
 
-func (r *fakeReader) CommitMessages(ctx context.Context, msgs ...kafka.Message) error {
+func (r *fakeReader) CommitMessages(_ context.Context, _ ...kafka.Message) error {
 	return nil
 }
 
@@ -45,7 +45,7 @@ type fakeWriter struct {
 	msgs []kafka.Message
 }
 
-func (w *fakeWriter) WriteMessages(ctx context.Context, msgs ...kafka.Message) error {
+func (w *fakeWriter) WriteMessages(_ context.Context, msgs ...kafka.Message) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.msgs = append(w.msgs, msgs...)
@@ -91,7 +91,7 @@ func TestDispatcher_routesToHandler(t *testing.T) {
 	handlerCh := make(chan struct{}, 1)
 
 	disp := events.NewDispatcher(reader, dlq)
-	events.Handle(disp, func(ctx context.Context, e *usersv1.UserRegistered) error {
+	events.Handle(disp, func(_ context.Context, e *usersv1.UserRegistered) error {
 		gotName = e.Name
 		handlerCh <- struct{}{}
 		return nil
@@ -99,7 +99,7 @@ func TestDispatcher_routesToHandler(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	go disp.Run(ctx)
+	go func() { _ = disp.Run(ctx) }()
 
 	select {
 	case <-handlerCh:
@@ -127,7 +127,7 @@ func TestDispatcher_unknownEventType_skipsNoDLQ(t *testing.T) {
 
 	invoked := false
 	disp := events.NewDispatcher(reader, dlq)
-	events.Handle(disp, func(ctx context.Context, e *usersv1.UserRegistered) error {
+	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		invoked = true
 		return nil
 	})
@@ -170,7 +170,7 @@ func TestDispatcher_poisonPill_goesStraightToDLQ(t *testing.T) {
 	dlq := &fakeWriter{}
 
 	disp := events.NewDispatcher(reader, dlq)
-	events.Handle(disp, func(ctx context.Context, e *usersv1.UserRegistered) error {
+	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		return fmt.Errorf("bad: %w", events.ErrPoisonPill)
 	})
 
@@ -199,7 +199,7 @@ func TestDispatcher_unmarshalError_goesToDLQ(t *testing.T) {
 	dlq := &fakeWriter{}
 
 	disp := events.NewDispatcher(reader, dlq)
-	events.Handle(disp, func(ctx context.Context, e *usersv1.UserRegistered) error {
+	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		t.Fatal("handler must not be invoked for unmarshal failures")
 		return nil
 	})
@@ -230,7 +230,7 @@ func TestDispatcher_handlerPanic_goesToDLQ(t *testing.T) {
 	dlq := &fakeWriter{}
 
 	disp := events.NewDispatcher(reader, dlq)
-	events.Handle(disp, func(ctx context.Context, e *usersv1.UserRegistered) error {
+	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		panic("boom")
 	})
 
@@ -263,7 +263,7 @@ func TestDispatcher_maxRetries_goesToDLQ(t *testing.T) {
 	dlq := &fakeWriter{}
 
 	disp := events.NewDispatcher(reader, dlq, events.WithMaxRetries(3))
-	events.Handle(disp, func(ctx context.Context, e *usersv1.UserRegistered) error {
+	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		return errors.New("transient failure")
 	})
 
@@ -299,7 +299,7 @@ func TestDispatcher_retryTopic_forwardsAndIncrementsCount(t *testing.T) {
 	disp := events.NewDispatcher(reader, dlq,
 		events.WithRetry(retry),
 		events.WithMaxRetries(3))
-	events.Handle(disp, func(ctx context.Context, e *usersv1.UserRegistered) error {
+	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		return errors.New("transient")
 	})
 
@@ -332,7 +332,7 @@ type fakeDedup struct {
 
 func newFakeDedup() *fakeDedup { return &fakeDedup{processed: map[string]bool{}} }
 
-func (d *fakeDedup) Process(ctx context.Context, id string, fn func() error) error {
+func (d *fakeDedup) Process(_ context.Context, id string, fn func() error) error {
 	d.mu.Lock()
 	if d.processed[id] {
 		d.mu.Unlock()
@@ -365,7 +365,7 @@ func TestDispatcher_dedup_skipsDuplicate(t *testing.T) {
 
 	var calls int
 	disp := events.NewDispatcher(reader, dlq, events.WithDedup(dedup))
-	events.Handle(disp, func(ctx context.Context, e *usersv1.UserRegistered) error {
+	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		calls++
 		return nil
 	})

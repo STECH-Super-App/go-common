@@ -33,11 +33,13 @@ func TestHeaderConstants(t *testing.T) {
 	}
 }
 
+const testUserRegisteredFQN = "events.users.v1.UserRegistered"
+
 func TestHeaders_accessors(t *testing.T) {
 	occurred := "2026-04-22T10:00:00.123456Z"
 	h := envelope.Headers{
 		envelope.HeaderEventID:       "id-1",
-		envelope.HeaderEventType:     "events.users.v1.UserRegistered",
+		envelope.HeaderEventType:     testUserRegisteredFQN,
 		envelope.HeaderAggregateType: "user",
 		envelope.HeaderAggregateID:   "user-1",
 		envelope.HeaderOccurredAt:    occurred,
@@ -48,7 +50,7 @@ func TestHeaders_accessors(t *testing.T) {
 	if got := h.EventID(); got != "id-1" {
 		t.Errorf("EventID() = %q", got)
 	}
-	if got := h.EventType(); got != "events.users.v1.UserRegistered" {
+	if got := h.EventType(); got != testUserRegisteredFQN {
 		t.Errorf("EventType() = %q", got)
 	}
 	if got := h.AggregateType(); got != "user" {
@@ -138,8 +140,8 @@ func TestExtractOutboxID_stillWorks(t *testing.T) {
 }
 
 func TestExtractEventType(t *testing.T) {
-	h := []kafka.Header{{Key: envelope.HeaderEventType, Value: []byte("events.users.v1.UserRegistered")}}
-	if got := envelope.ExtractEventType(h); got != "events.users.v1.UserRegistered" {
+	h := []kafka.Header{{Key: envelope.HeaderEventType, Value: []byte(testUserRegisteredFQN)}}
+	if got := envelope.ExtractEventType(h); got != testUserRegisteredFQN {
 		t.Errorf("ExtractEventType = %q", got)
 	}
 }

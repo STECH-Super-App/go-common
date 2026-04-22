@@ -55,12 +55,23 @@ func FromKafka(headers []kafka.Header) Headers {
 	return out
 }
 
-func (h Headers) EventID() string       { return h[HeaderEventID] }
-func (h Headers) EventType() string     { return h[HeaderEventType] }
+// EventID returns the event_id header value (UUID of the event).
+func (h Headers) EventID() string { return h[HeaderEventID] }
+
+// EventType returns the event_type header value (proto fully-qualified name).
+func (h Headers) EventType() string { return h[HeaderEventType] }
+
+// AggregateType returns the aggregate_type header value (domain aggregate name).
 func (h Headers) AggregateType() string { return h[HeaderAggregateType] }
-func (h Headers) AggregateID() string   { return h[HeaderAggregateID] }
+
+// AggregateID returns the aggregate_id header value (the aggregate's unique id).
+func (h Headers) AggregateID() string { return h[HeaderAggregateID] }
+
+// SchemaVersion returns the schema_version header value (e.g. "v1").
 func (h Headers) SchemaVersion() string { return h[HeaderSchemaVersion] }
-func (h Headers) ContentType() string   { return h[HeaderContentType] }
+
+// ContentType returns the content_type header value (e.g. application/protobuf+json).
+func (h Headers) ContentType() string { return h[HeaderContentType] }
 
 // OccurredAt parses the occurred_at header as RFC3339Nano UTC.
 // Returns an error if the header is missing or malformed.

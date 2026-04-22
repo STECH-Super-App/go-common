@@ -103,7 +103,7 @@ func Handle[T proto.Message](d *Dispatcher, fn func(context.Context, T) error) {
 	if fqn == "" {
 		panic("events.Handle: proto.MessageName returned empty (nil T?)")
 	}
-	d.handlers[fqn] = func(ctx context.Context, raw []byte, h envelope.Headers) error {
+	d.handlers[fqn] = func(ctx context.Context, raw []byte, _ envelope.Headers) error {
 		msg := zero.ProtoReflect().New().Interface().(T)
 		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, msg); err != nil {
 			return fmt.Errorf("%w: %v", errUnmarshal, err)
