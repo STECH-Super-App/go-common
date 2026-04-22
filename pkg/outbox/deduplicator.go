@@ -9,15 +9,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Deduplicator tracks processed outbox message IDs to guarantee idempotent
-// consumption. The outbox pattern provides at-least-once delivery, which
-// means consumers may receive the same message more than once. This component
-// solves that by recording each processed outbox_id in a Postgres table.
+// Deduplicator tracks processed event IDs to guarantee idempotent consumption.
+// The outbox pattern provides at-least-once delivery, which means consumers
+// may receive the same message more than once. This component solves that by
+// recording each processed event_id in a Postgres table.
 //
 // Usage in a consumer handler:
 //
-//	func (h *Handler) Handle(ctx context.Context, outboxID string, payload []byte) error {
-//	    return h.dedup.Process(ctx, outboxID, func() error {
+//	func (h *Handler) Handle(ctx context.Context, eventID string, payload []byte) error {
+//	    return h.dedup.Process(ctx, eventID, func() error {
 //	        return h.doActualWork(ctx, payload)
 //	    })
 //	}
@@ -31,14 +31,14 @@ func NewDeduplicator(pool *pgxpool.Pool) *Deduplicator {
 	return &Deduplicator{pool: pool}
 }
 
-// Process executes fn only if outboxID has not been processed before.
+// Process executes fn only if eventID has not been processed before.
 // The check and the insert are done inside a transaction, so concurrent
 // deliveries of the same message are safely serialized.
 //
 // Returns nil without calling fn if the message was already processed.
-func (d *Deduplicator) Process(ctx context.Context, outboxID string, fn func() error) error {
-	if outboxID == "" {
-		// No outbox_id header — skip dedup, just process.
+func (d *Deduplicator) Process(ctx context.Context, eventID string, fn func() error) error {
+	if eventID == "" {
+		// No event_id header — skip dedup, just process.
 		return fn()
 	}
 
@@ -47,7 +47,7 @@ func (d *Deduplicator) Process(ctx context.Context, outboxID string, fn func() e
 		if !ok {
 			return fmt.Errorf("outbox dedup: expected pgx.Tx, got %T", tx)
 		}
-		alreadyProcessed, err := d.exists(ctx, pgxTx, outboxID)
+		alreadyProcessed, err := d.exists(ctx, pgxTx, eventID)
 		if err != nil {
 			return err
 		}
@@ -60,28 +60,28 @@ func (d *Deduplicator) Process(ctx context.Context, outboxID string, fn func() e
 			return err
 		}
 
-		return d.record(ctx, pgxTx, outboxID)
+		return d.record(ctx, pgxTx, eventID)
 	})
 }
 
-// exists checks whether an outbox_id has already been processed.
+// exists checks whether an event_id has already been processed.
 // Uses SELECT ... FOR UPDATE to serialize concurrent checks for the same ID.
-func (d *Deduplicator) exists(ctx context.Context, tx pgx.Tx, outboxID string) (bool, error) {
-	const query = `SELECT EXISTS(SELECT 1 FROM processed_outbox_messages WHERE outbox_id = $1 FOR UPDATE)`
+func (d *Deduplicator) exists(ctx context.Context, tx pgx.Tx, eventID string) (bool, error) {
+	const query = `SELECT EXISTS(SELECT 1 FROM processed_outbox_messages WHERE event_id = $1 FOR UPDATE)`
 
 	var found bool
-	if err := tx.QueryRow(ctx, query, outboxID).Scan(&found); err != nil {
+	if err := tx.QueryRow(ctx, query, eventID).Scan(&found); err != nil {
 		return false, fmt.Errorf("outbox dedup: check exists: %w", err)
 	}
 
 	return found, nil
 }
 
-// record inserts a processed outbox_id.
-func (d *Deduplicator) record(ctx context.Context, tx pgx.Tx, outboxID string) error {
-	const query = `INSERT INTO processed_outbox_messages (outbox_id, processed_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`
+// record inserts a processed event_id.
+func (d *Deduplicator) record(ctx context.Context, tx pgx.Tx, eventID string) error {
+	const query = `INSERT INTO processed_outbox_messages (event_id, processed_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`
 
-	_, err := tx.Exec(ctx, query, outboxID, time.Now().UTC())
+	_, err := tx.Exec(ctx, query, eventID, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("outbox dedup: record processed: %w", err)
 	}
