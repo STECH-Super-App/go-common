@@ -157,6 +157,12 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) {
 		return
 	}
 
+	// Attach envelope headers to the context so handlers can read fields that
+	// don't appear in the proto payload (occurred_at, retry-count, ...). The
+	// typed handler signature is func(ctx, T) error — handlers fish the
+	// headers out via envelope.HeadersFromContext when they need them.
+	ctx = envelope.WithHeaders(ctx, h)
+
 	// Invoke through the deduplicator when one is configured. The handler runs
 	// inside the same atomic unit that checks+records the event_id — so two
 	// concurrent deliveries of the same message across pods can't both run the
