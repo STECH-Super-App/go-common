@@ -34,7 +34,7 @@ type Outbox struct {
 
 // New creates the full outbox subsystem.
 // The kafkaWriter should have no fixed Topic — each message carries its own topic.
-// defaultTopic is the Kafka destination applied when PublishOptions.Topic is empty.
+// defaultTopic is the Kafka destination applied when PublishProtoOptions.Topic is empty.
 func New(pool *pgxpool.Pool, kafkaWriter *kafka.Writer, logger *zap.Logger, cfg *Config, defaultTopic string) *Outbox {
 	store := NewStore(pool)
 

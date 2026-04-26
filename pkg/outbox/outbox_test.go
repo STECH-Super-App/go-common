@@ -8,22 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPublishOptions_Validation(t *testing.T) {
-	opts := PublishOptions{
-		AggregateType: "user",
-		AggregateID:   "123",
-		EventType:     "user.created",
-		Topic:         "user-events",
-		Payload:       map[string]string{"name": "test"},
-		Headers:       map[string]string{"custom": "header"},
-	}
-
-	assert.Equal(t, "user", opts.AggregateType)
-	assert.Equal(t, "123", opts.AggregateID)
-	assert.Equal(t, "user.created", opts.EventType)
-	assert.Equal(t, "user-events", opts.Topic)
-}
-
 func TestMessage_StatusConstants(t *testing.T) {
 	assert.Equal(t, Status("pending"), StatusPending)
 	assert.Equal(t, Status("sent"), StatusSent)

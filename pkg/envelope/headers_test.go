@@ -14,7 +14,6 @@ func TestHeaderConstants(t *testing.T) {
 		got, want string
 	}{
 		{envelope.HeaderEventID, "event_id"},
-		{envelope.HeaderOutboxID, "outbox_id"},
 		{envelope.HeaderEventType, "event_type"},
 		{envelope.HeaderAggregateType, "aggregate_type"},
 		{envelope.HeaderAggregateID, "aggregate_id"},
@@ -23,7 +22,6 @@ func TestHeaderConstants(t *testing.T) {
 		{envelope.HeaderContentType, "content_type"},
 		{envelope.HeaderRetryCount, "x-retry-count"},
 		{envelope.ContentTypeProtoJSON, "application/protobuf+json"},
-		{envelope.ContentTypeJSON, "application/json"},
 		{envelope.SchemaVersionV1, "v1"},
 	}
 	for _, c := range cases {
@@ -115,27 +113,9 @@ func TestExtractEventID_newHeader(t *testing.T) {
 	}
 }
 
-func TestExtractEventID_legacyFallback(t *testing.T) {
-	h := []kafka.Header{{Key: "outbox_id", Value: []byte("legacy-id")}}
-	if got := envelope.ExtractEventID(h); got != "legacy-id" {
-		t.Errorf("ExtractEventID legacy fallback = %q, want %q", got, "legacy-id")
-	}
-}
-
-func TestExtractEventID_preferNewWhenBothPresent(t *testing.T) {
-	h := []kafka.Header{
-		{Key: envelope.HeaderEventID, Value: []byte("new-id")},
-		{Key: "outbox_id", Value: []byte("legacy-id")},
-	}
-	if got := envelope.ExtractEventID(h); got != "new-id" {
-		t.Errorf("ExtractEventID = %q, want %q (prefer new)", got, "new-id")
-	}
-}
-
-func TestExtractOutboxID_stillWorks(t *testing.T) {
-	h := []kafka.Header{{Key: envelope.HeaderEventID, Value: []byte("id-1")}}
-	if got := envelope.ExtractOutboxID(h); got != "id-1" {
-		t.Errorf("ExtractOutboxID = %q, want %q", got, "id-1")
+func TestExtractEventID_missing_returnsEmpty(t *testing.T) {
+	if got := envelope.ExtractEventID(nil); got != "" {
+		t.Errorf("ExtractEventID(nil) = %q, want empty", got)
 	}
 }
 

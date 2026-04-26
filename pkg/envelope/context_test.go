@@ -7,9 +7,11 @@ import (
 	"github.com/STECH-Super-App/go-common/pkg/envelope"
 )
 
+const testEventID = "id-1"
+
 func TestWithHeaders_roundTrip(t *testing.T) {
 	h := envelope.Headers{
-		envelope.HeaderEventID:   "id-1",
+		envelope.HeaderEventID:   testEventID,
 		envelope.HeaderEventType: "events.users.v1.UserUpdated",
 	}
 	ctx := envelope.WithHeaders(context.Background(), h)
@@ -18,7 +20,7 @@ func TestWithHeaders_roundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("HeadersFromContext returned ok=false on a ctx that was set")
 	}
-	if got.EventID() != "id-1" {
+	if got.EventID() != testEventID {
 		t.Errorf("EventID() = %q", got.EventID())
 	}
 	if got.EventType() != "events.users.v1.UserUpdated" {
@@ -40,14 +42,14 @@ func TestHeadersFromContext_nil(t *testing.T) {
 }
 
 func TestWithHeaders_nilCtx(t *testing.T) {
-	h := envelope.Headers{envelope.HeaderEventID: "id-1"}
+	h := envelope.Headers{envelope.HeaderEventID: testEventID}
 	//nolint:staticcheck // intentionally pass nil ctx
 	ctx := envelope.WithHeaders(nil, h)
 	if ctx == nil {
 		t.Fatal("WithHeaders(nil, ...) returned nil ctx")
 	}
 	got, ok := envelope.HeadersFromContext(ctx)
-	if !ok || got.EventID() != "id-1" {
+	if !ok || got.EventID() != testEventID {
 		t.Errorf("nil-ctx fallback failed: ok=%v eventID=%q", ok, got.EventID())
 	}
 }

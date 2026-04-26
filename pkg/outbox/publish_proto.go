@@ -13,10 +13,9 @@ import (
 	"github.com/STECH-Super-App/go-common/pkg/envelope"
 )
 
-// PublishProtoOptions is the typed counterpart of PublishOptions for proto
-// messages. Use this for all new call sites; PublishOptions with any-typed
-// Payload is retained only for transitional compat during the events-to-proto
-// rollout (removed in the cleanup PR).
+// PublishProtoOptions configures a single typed-proto outbox publish.
+// PublishProto is the only producer API — the legacy any-payload Publish was
+// removed in the events-to-proto cleanup.
 type PublishProtoOptions struct {
 	AggregateType string
 	AggregateID   string
@@ -36,10 +35,7 @@ type PublishProtoOptions struct {
 
 // PublishProto inserts an outbox row for a proto message, serializing via
 // protojson (UseProtoNames = snake_case fields) and auto-injecting the full
-// envelope header set per design §4.2.
-//
-// This is the new typed path. Legacy callers still using PublishOptions.Payload
-// with an any-typed value get JSON marshaling and the legacy outbox_id header.
+// envelope header set per design §4.2. This is the only producer API.
 func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOptions) error {
 	if opts.Message == nil {
 		return fmt.Errorf("outbox: PublishProto: Message is nil")
