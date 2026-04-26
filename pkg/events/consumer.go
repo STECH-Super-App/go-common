@@ -103,7 +103,7 @@ func Handle[T proto.Message](d *Dispatcher, fn func(context.Context, T) error) {
 	if fqn == "" {
 		panic("events.Handle: proto.MessageName returned empty (nil T?)")
 	}
-	d.handlers[fqn] = func(ctx context.Context, raw []byte, h envelope.Headers) error {
+	d.handlers[fqn] = func(ctx context.Context, raw []byte, _ envelope.Headers) error {
 		msg := zero.ProtoReflect().New().Interface().(T)
 		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, msg); err != nil {
 			return fmt.Errorf("%w: %v", errUnmarshal, err)
@@ -156,6 +156,12 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) {
 		_ = d.reader.CommitMessages(ctx, msg)
 		return
 	}
+
+	// Attach envelope headers to the context so handlers can read fields that
+	// don't appear in the proto payload (occurred_at, retry-count, ...). The
+	// typed handler signature is func(ctx, T) error — handlers fish the
+	// headers out via envelope.HeadersFromContext when they need them.
+	ctx = envelope.WithHeaders(ctx, h)
 
 	// Invoke through the deduplicator when one is configured. The handler runs
 	// inside the same atomic unit that checks+records the event_id — so two

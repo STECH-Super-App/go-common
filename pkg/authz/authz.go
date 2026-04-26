@@ -14,6 +14,7 @@ import (
 // OwnerType identifies the kind of entity that owns a resource.
 type OwnerType string
 
+// Owner kinds — the owning entity classifications authz understands.
 const (
 	OwnerUser   OwnerType = "USER"
 	OwnerTenant OwnerType = "TENANT"
@@ -22,6 +23,7 @@ const (
 // Role is a membership role inside a team.
 type Role string
 
+// Team roles — ordered by authority in roleRank below.
 const (
 	RoleAdmin    Role = "ADMIN"
 	RoleManager  Role = "MANAGER"

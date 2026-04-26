@@ -51,6 +51,10 @@ func TxAsPgx(tx Tx) (pgx.Tx, bool) {
 //
 // If fn returns nil the transaction is committed; otherwise it is rolled
 // back. When pool is nil (test scenarios) fn is called once with a nil Tx.
+//
+// Prefer the TxRunner interface + NewTxRunner for new application-layer code:
+// holding a TxRunner lets the application package avoid importing pgxpool at
+// all, keeping database concerns in the infrastructure layer.
 func RunInTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx Tx) error) error {
 	if pool == nil {
 		return fn(nil)
@@ -73,4 +77,33 @@ func RunInTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx Tx) error) erro
 	}
 
 	return nil
+}
+
+// TxRunner runs a callback inside a transaction, hiding the concrete pool type
+// from application code. Application-layer services should hold a TxRunner
+// (not a *pgxpool.Pool) so they don't need to import pgx at all — infrastructure
+// owns the pool and hands this capability down.
+//
+// Satisfied by the pgxpool-backed type returned by NewTxRunner; trivially
+// mockable in tests by NewTxRunner(nil) which short-circuits to fn(nil).
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(tx Tx) error) error
+}
+
+// pgxTxRunner is the default TxRunner, backed by a *pgxpool.Pool.
+type pgxTxRunner struct {
+	pool *pgxpool.Pool
+}
+
+// NewTxRunner returns a TxRunner backed by the given pgxpool.Pool. A nil pool
+// produces a runner that calls fn once with a nil Tx — the same behaviour as
+// RunInTx(ctx, nil, fn), convenient for tests that construct a Service without
+// a database.
+func NewTxRunner(pool *pgxpool.Pool) TxRunner {
+	return &pgxTxRunner{pool: pool}
+}
+
+// RunInTx delegates to the package-level RunInTx with the wrapped pool.
+func (r *pgxTxRunner) RunInTx(ctx context.Context, fn func(tx Tx) error) error {
+	return RunInTx(ctx, r.pool, fn)
 }

@@ -20,12 +20,6 @@ const (
 	// field carried in the proto payload.
 	HeaderEventID = "event_id"
 
-	// HeaderOutboxID is the legacy header key written by pre-refactor
-	// producers. Kept as a constant so consumers can reference it while the
-	// rolling migration is in progress. Removed in the cleanup PR.
-	// For reads, use ExtractEventID — it handles both keys.
-	HeaderOutboxID = "outbox_id"
-
 	HeaderEventType     = "event_type"
 	HeaderAggregateType = "aggregate_type"
 	HeaderAggregateID   = "aggregate_id"
@@ -38,7 +32,6 @@ const (
 // Values for well-known header keys.
 const (
 	ContentTypeProtoJSON = "application/protobuf+json"
-	ContentTypeJSON      = "application/json" // legacy; emitted during transitional compat
 	SchemaVersionV1      = "v1"
 )
 
@@ -55,12 +48,23 @@ func FromKafka(headers []kafka.Header) Headers {
 	return out
 }
 
-func (h Headers) EventID() string       { return h[HeaderEventID] }
-func (h Headers) EventType() string     { return h[HeaderEventType] }
+// EventID returns the event_id header value (UUID of the event).
+func (h Headers) EventID() string { return h[HeaderEventID] }
+
+// EventType returns the event_type header value (proto fully-qualified name).
+func (h Headers) EventType() string { return h[HeaderEventType] }
+
+// AggregateType returns the aggregate_type header value (domain aggregate name).
 func (h Headers) AggregateType() string { return h[HeaderAggregateType] }
-func (h Headers) AggregateID() string   { return h[HeaderAggregateID] }
+
+// AggregateID returns the aggregate_id header value (the aggregate's unique id).
+func (h Headers) AggregateID() string { return h[HeaderAggregateID] }
+
+// SchemaVersion returns the schema_version header value (e.g. "v1").
 func (h Headers) SchemaVersion() string { return h[HeaderSchemaVersion] }
-func (h Headers) ContentType() string   { return h[HeaderContentType] }
+
+// ContentType returns the content_type header value (e.g. application/protobuf+json).
+func (h Headers) ContentType() string { return h[HeaderContentType] }
 
 // OccurredAt parses the occurred_at header as RFC3339Nano UTC.
 // Returns an error if the header is missing or malformed.
@@ -77,29 +81,15 @@ func (h Headers) RetryCount() int {
 	return n
 }
 
-// ExtractEventID reads the event identifier from a raw Kafka header slice.
-// Prefers HeaderEventID ("event_id"); falls back to the legacy literal
-// "outbox_id" for messages produced before the events-to-proto refactor.
-// Transitional compat — the fallback is removed in the cleanup PR.
+// ExtractEventID reads the event_id header from a raw Kafka header slice.
+// Returns empty string if not present.
 func ExtractEventID(headers []kafka.Header) string {
 	for _, h := range headers {
 		if h.Key == HeaderEventID {
 			return string(h.Value)
 		}
 	}
-	for _, h := range headers {
-		if h.Key == HeaderOutboxID {
-			return string(h.Value)
-		}
-	}
 	return ""
-}
-
-// ExtractOutboxID is a DEPRECATED alias of ExtractEventID kept for transitional
-// compatibility during the events-to-proto refactor rollout. New callers should
-// use ExtractEventID. Removed in the cleanup PR.
-func ExtractOutboxID(headers []kafka.Header) string {
-	return ExtractEventID(headers)
 }
 
 // ExtractEventType reads the event_type header from a raw Kafka header slice.
