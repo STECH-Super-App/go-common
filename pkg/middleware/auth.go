@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"log"
+	"net/http"
 	"strings"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
@@ -17,12 +18,18 @@ import (
 func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		if c.Request().Header.Get(auth.HeaderTokenRevoked) == "true" {
-			return response.JSONError(c, commonErrors.Unauthorized("token has been revoked, please refresh your session", nil))
+			return response.JSONError(c, commonErrors.New(http.StatusUnauthorized).
+				Reason("COMMON_TOKEN_REVOKED").
+				Message("token has been revoked, please refresh your session").
+				Build())
 		}
 
 		userID := c.Request().Header.Get(auth.HeaderUserID)
 		if userID == "" {
-			return response.JSONError(c, commonErrors.Unauthorized("Unauthorized", nil))
+			return response.JSONError(c, commonErrors.New(http.StatusUnauthorized).
+				Reason("COMMON_AUTH_REQUIRED").
+				Message("Unauthorized").
+				Build())
 		}
 
 		setContextValues(c)
@@ -52,7 +59,10 @@ func RegistrationAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		log.Printf("RegistrationAuthMiddleware - Phone: %q, Scope: %q", phone, scope)
 
 		if phone == "" || scope != "registration" {
-			return response.JSONError(c, commonErrors.Unauthorized("valid registration token required", nil))
+			return response.JSONError(c, commonErrors.New(http.StatusUnauthorized).
+				Reason("COMMON_REGISTRATION_TOKEN_REQUIRED").
+				Message("valid registration token required").
+				Build())
 		}
 
 		setContextValues(c)
@@ -113,7 +123,10 @@ func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		rolesStr, ok := UserRolesFromContext(c)
 		if !ok {
-			return response.JSONError(c, commonErrors.Forbidden("admin role required", nil))
+			return response.JSONError(c, commonErrors.New(http.StatusForbidden).
+				Reason("COMMON_ADMIN_REQUIRED").
+				Message("admin role required").
+				Build())
 		}
 
 		for _, role := range strings.Split(rolesStr, ",") {
@@ -122,6 +135,9 @@ func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 			}
 		}
 
-		return response.JSONError(c, commonErrors.Forbidden("admin role required", nil))
+		return response.JSONError(c, commonErrors.New(http.StatusForbidden).
+			Reason("COMMON_ADMIN_REQUIRED").
+			Message("admin role required").
+			Build())
 	}
 }

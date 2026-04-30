@@ -10,11 +10,13 @@ require (
 )
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/STECH-Super-App/gen-go-lib v0.0.0-20260422085406-463728b296de
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/labstack/echo/v4 v4.15.1
 	github.com/mssola/user_agent v0.6.0
+	github.com/nicksnyder/go-i18n/v2 v2.6.1
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/segmentio/kafka-go v0.4.50
 	github.com/stretchr/testify v1.11.1
@@ -53,8 +55,8 @@ require (
 	github.com/prometheus/procfs v0.19.2 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/text v0.36.0
 	google.golang.org/protobuf v1.36.11
 )
