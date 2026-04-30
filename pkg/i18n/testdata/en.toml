@@ -1,0 +1,5 @@
+[hello]
+other = "Hello, {{.Name}}"
+
+[transfer.expired]
+other = "Transfer {{.ID}} expired at {{.Time}}"

@@ -17,18 +17,116 @@ Database connection factories.
 - **Redis**: `NewRedis` creates a `*redis.Client` (using `redis/go-redis/v9`).
 
 ### `pkg/errors`
-Standardized error handling types.
-- `AppError`: Custom error struct with HTTP status code and JSON-friendly message.
-- Helpers: `BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`, `InternalServerError`.
+Typed application-error envelope returned to HTTP clients.
+
+`AppError` carries a stable machine-readable `Reason`, optional `Params` for variable data the frontend interpolates into a localized string, and optional `Details []FieldError` for field-level validation. `Message` is an English-only log/dev fallback — clients localize from `Reason` + `Params`.
+
+```go
+import (
+    "net/http"
+
+    commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
+)
+
+return commonErrors.New(http.StatusGone).
+    Reason("TENANT_ADMIN_TRANSFER_EXPIRED").
+    Message("admin transfer expired").
+    Params(map[string]any{
+        "expiry_time":  t.ExpiryTime.Format(time.RFC3339),
+        "transfer_id":  t.ID,
+    }).
+    Cause(err).
+    Build()
+```
+
+For multi-field validation use `Details`:
+
+```go
+return commonErrors.New(http.StatusBadRequest).
+    Reason("TENANT_VALIDATION_FAILED").
+    Message("validation failed").
+    Details([]commonErrors.FieldError{
+        {Field: "inn", Reason: "TENANT_INN_INVALID_LENGTH", Message: "invalid INN length", Params: map[string]any{"expected": 12}},
+        {Field: "name", Reason: "TENANT_NAME_REQUIRED", Message: "name required"},
+    }).
+    Build()
+```
+
+`Reason` codes follow `<SERVICE>_<DOMAIN>_<CONDITION>` screaming snake. Reasons emitted by go-common's own middleware use the `COMMON_*` prefix (`COMMON_TOKEN_REVOKED`, `COMMON_AUTH_REQUIRED`, `COMMON_REGISTRATION_TOKEN_REQUIRED`, `COMMON_ADMIN_REQUIRED`, `COMMON_CLIENT_INFO_INVALID`).
+
+`Cause(err)` wraps the underlying Go error so `errors.Is` / `errors.As` work; the cause is never serialized into the wire response.
+
+### `pkg/response`
+Standard HTTP response envelope and helpers built on top of `pkg/errors`.
+
+- `response.Success(c, data)` — 200 with `{success: true, data}`.
+- `response.Created(c, data)` — 201 with `{success: true, data}`.
+- `response.JSONError(c, err)` — 4xx/5xx with `{success: false, error: {code, reason, message, params, details}}`. If `err` is an `*AppError`, all of `Reason`, `Params`, and `Details` are forwarded; otherwise the response is a generic 500 envelope and the error is logged.
+
+Wire format for errors:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": 410,
+    "reason": "TENANT_ADMIN_TRANSFER_EXPIRED",
+    "message": "admin transfer expired",
+    "params": {"expiry_time": "2026-04-28T14:00:00Z", "transfer_id": "abc"},
+    "details": [
+      {"field": "inn", "reason": "TENANT_INN_INVALID_LENGTH", "message": "invalid INN length", "params": {"expected": 12}}
+    ]
+  }
+}
+```
+
+Setting `LOG_EMPTY_REASON_WARN=true` makes `JSONError` warn-log every `*AppError` it serializes with an empty `Reason` — useful for catching throw sites that haven't been migrated to the reason-tagged builder.
+
+### `pkg/i18n`
+Server-side translation wrapper around `nicksnyder/go-i18n/v2`. Loads TOML translation files from an `fs.FS`, resolves keys with locale-fallback semantics, and emits warn logs when a target-locale translation is missing but the default-locale one exists.
+
+Translation files are named `<locale>.toml` (e.g., `en.toml`, `ru.toml`, `kk.toml`). Locale matching uses `golang.org/x/text/language`: `kk-KZ` resolves to `kk` if `kk` is loaded.
+
+```go
+import (
+    "embed"
+    "io/fs"
+
+    "golang.org/x/text/language"
+    commoni18n "github.com/STECH-Super-App/go-common/pkg/i18n"
+)
+
+//go:embed translations
+var translationsFS embed.FS
+
+func newBundle() (*commoni18n.Bundle, error) {
+    sub, _ := fs.Sub(translationsFS, "translations")
+    return commoni18n.LoadBundle(sub, language.English)
+}
+
+str, err := bundle.Resolve("kk", "tenant.transfer.expired_sms", map[string]any{
+    "ExpiryTime": t.ExpiryTime.Format(time.RFC3339),
+})
+```
+
+`Bundle.Resolve(locale, key, params)` returns the localized string. Missing key returns `ErrKeyNotFound`. Engine/template failure returns `ErrTranslationFailed`.
+
+`SharedBundle()` exposes go-common's embedded shared `error.*` translations (en, ru, kk) — `error.unauthorized`, `error.internal`, `error.validation_failed`, `error.not_found`, `error.forbidden`. Services compose this with their own service bundle as a layered fallback.
 
 ### `pkg/logger`
 Structured logging using `uber-go/zap`.
-- `New(level)`: Returns a configured `*zap.Logger`.
+
+- `New(level)` — returns a configured `*zap.Logger` for application code that owns a logger instance.
+- Package-level `Warn(msg, fields...)`, `Info(msg, fields...)`, `Error(msg, fields...)` — for cross-cutting library code in go-common that emits diagnostics without holding a logger of its own. Backed by a lazily-initialized package logger driven by `LOG_LEVEL`.
+- `String(key, value)`, `Int(key, value)` — field constructors re-exported from zap so callers don't need to import zap directly.
+
+Application code: prefer `New(level)` for an injected logger. Library code in go-common: use the package-level helpers.
 
 ### `pkg/middleware`
 Common HTTP middleware.
 - `Logger`: Logs HTTP requests (status, latency, path, etc.).
 - `CORS`: Handles Cross-Origin Resource Sharing.
+- `AuthMiddleware`, `OptionalAuthMiddleware`, `RegistrationAuthMiddleware`, `AdminMiddleware`, `ClientMiddleware`: emit `COMMON_*` reasons via `pkg/errors` + `pkg/response` on rejection.
 
 ### `pkg/metrics`
 Prometheus metrics helpers.

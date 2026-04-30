@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net"
+	"net/http"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
 	"github.com/STECH-Super-App/go-common/pkg/client"
@@ -31,11 +32,11 @@ func ClientMiddleware() echo.MiddlewareFunc {
 
 			cl, err := client.NewClient(deviceID, userAgent, ip)
 			if err != nil {
-				return response.JSONError(c, commonErrors.BadRequestWithReason(
-					"missing or invalid client info: "+err.Error(),
-					"CLIENT_INFO_INVALID",
-					err,
-				))
+				return response.JSONError(c, commonErrors.New(http.StatusBadRequest).
+					Reason("COMMON_CLIENT_INFO_INVALID").
+					Message("missing or invalid client info: "+err.Error()).
+					Cause(err).
+					Build())
 			}
 
 			c.Set(string(auth.ContextKeyClient), cl)
