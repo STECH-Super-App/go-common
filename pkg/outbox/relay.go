@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -71,53 +72,90 @@ func (r *Relay) Run(ctx context.Context) error {
 	}
 }
 
-// pollAndForward fetches pending messages, writes them to Kafka, and marks them as sent.
+// pollAndForward fetches pending messages, writes them to Kafka in a single
+// batched call, and marks them all sent in a single UPDATE.
+//
+// Calling kafka.Writer.WriteMessages once per message blocks each call by the
+// writer's BatchTimeout (1s default), which caps throughput at ~1 msg/s
+// regardless of the configured BatchSize. Sending the whole slice in one call
+// lets kafka-go batch them naturally and returns sub-second per poll for any
+// realistic batch.
+//
 // Returns the number of messages successfully processed.
 func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
 	messages, err := r.store.FetchPending(ctx, r.cfg.BatchSize)
 	if err != nil {
 		return 0, err
 	}
-
 	if len(messages) == 0 {
 		return 0, nil
 	}
 
-	processed := 0
-
-	for _, msg := range messages {
-		kafkaMsg := toKafkaMessage(msg)
-
-		if err := r.writer.WriteMessages(ctx, kafkaMsg); err != nil {
-			r.logger.Error("outbox relay: kafka write failed",
-				zap.String("message_id", msg.ID),
-				zap.String("event_type", msg.EventType),
-				zap.String("topic", msg.Topic),
-				zap.Error(err),
-			)
-			// Continue to next message — failed ones stay pending for retry.
-			continue
-		}
-
-		if err := r.store.MarkSent(ctx, msg.ID); err != nil {
-			r.logger.Error("outbox relay: mark sent failed",
-				zap.String("message_id", msg.ID),
-				zap.Error(err),
-			)
-			continue
-		}
-
-		processed++
+	kafkaMsgs := make([]kafka.Message, len(messages))
+	ids := make([]string, len(messages))
+	for i, msg := range messages {
+		kafkaMsgs[i] = toKafkaMessage(msg)
+		ids[i] = msg.ID
 	}
 
-	if processed > 0 {
-		r.logger.Debug("outbox relay: forwarded messages",
-			zap.Int("count", processed),
-			zap.Int("total_fetched", len(messages)),
+	if err := r.writer.WriteMessages(ctx, kafkaMsgs...); err != nil {
+		// kafka-go returns either a single error (whole batch failed,
+		// e.g., broker down) or kafka.WriteErrors with one entry per
+		// message (partial failure). Mark only the entries that
+		// succeeded; the rest stay pending and retry on the next poll.
+		var werrs kafka.WriteErrors
+		if errors.As(err, &werrs) {
+			succeededIDs := make([]string, 0, len(messages))
+			failed := 0
+			for i, werr := range werrs {
+				if werr == nil {
+					succeededIDs = append(succeededIDs, ids[i])
+					continue
+				}
+				failed++
+				r.logger.Error("outbox relay: kafka write failed",
+					zap.String("message_id", messages[i].ID),
+					zap.String("event_type", messages[i].EventType),
+					zap.String("topic", messages[i].Topic),
+					zap.Error(werr),
+				)
+			}
+			if len(succeededIDs) == 0 {
+				return 0, nil
+			}
+			if err := r.store.MarkSentBatch(ctx, succeededIDs); err != nil {
+				r.logger.Error("outbox relay: mark sent batch failed",
+					zap.Int("count", len(succeededIDs)),
+					zap.Error(err),
+				)
+				return 0, err
+			}
+			r.logger.Debug("outbox relay: partial forward",
+				zap.Int("succeeded", len(succeededIDs)),
+				zap.Int("failed", failed),
+			)
+			return len(succeededIDs), nil
+		}
+
+		r.logger.Error("outbox relay: kafka batch write failed",
+			zap.Int("batch_size", len(messages)),
+			zap.Error(err),
 		)
+		return 0, err
 	}
 
-	return processed, nil
+	if err := r.store.MarkSentBatch(ctx, ids); err != nil {
+		r.logger.Error("outbox relay: mark sent batch failed",
+			zap.Int("count", len(ids)),
+			zap.Error(err),
+		)
+		return 0, err
+	}
+
+	r.logger.Debug("outbox relay: forwarded messages",
+		zap.Int("count", len(messages)),
+	)
+	return len(messages), nil
 }
 
 // toKafkaMessage converts an outbox Message to a kafka-go Message.
