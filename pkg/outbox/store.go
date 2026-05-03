@@ -115,6 +115,25 @@ func (s *Store) MarkSent(ctx context.Context, id string) error {
 	return nil
 }
 
+// MarkSentBatch updates many messages to 'sent' in a single UPDATE.
+// Used by the relay after a successful batched Kafka write to avoid
+// N round-trips. The same sent_at timestamp is applied to every row.
+func (s *Store) MarkSentBatch(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	const query = `
+		UPDATE outbox_messages
+		SET status = 'sent', sent_at = $2
+		WHERE id = ANY($1::uuid[])`
+
+	if _, err := s.pool.Exec(ctx, query, ids, time.Now().UTC()); err != nil {
+		return fmt.Errorf("outbox: mark sent batch (%d ids): %w", len(ids), err)
+	}
+	return nil
+}
+
 // DeleteSent removes messages older than retention that have been successfully sent.
 // Returns the count of deleted rows for observability logging.
 //
