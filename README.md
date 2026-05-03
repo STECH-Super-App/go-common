@@ -127,6 +127,7 @@ Common HTTP middleware.
 - `Logger`: Logs HTTP requests (status, latency, path, etc.).
 - `CORS`: Handles Cross-Origin Resource Sharing.
 - `AuthMiddleware`, `OptionalAuthMiddleware`, `RegistrationAuthMiddleware`, `AdminMiddleware`, `ClientMiddleware`: emit `COMMON_*` reasons via `pkg/errors` + `pkg/response` on rejection.
+- `ParseUUIDParam(c, paramName, reason)`: validates an Echo path parameter as a UUID. On parse failure returns a 400 `*AppError` with the supplied reason and a message derived from `paramName`. Stops malformed UUIDs at the handler boundary so they never reach the repository layer (where Postgres would reject them with SQLSTATE 22P02 and leak as a 500).
 
 ### `pkg/metrics`
 Prometheus metrics helpers.
