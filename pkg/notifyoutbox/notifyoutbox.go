@@ -81,7 +81,7 @@ func validate(env *notificationv1.NotificationEnvelope) error {
 	if len(m.GetChannels()) == 0 {
 		return errEmptyChannels()
 	}
-	if m.GetRecipientUserId() == "" && !isSmsOnly(m.GetChannels()) {
+	if m.GetRecipientUserId() == "" && requiresRecipient(m.GetChannels()) {
 		return errEmptyRecipient()
 	}
 	if containsInApp(m.GetChannels()) {
@@ -127,6 +127,17 @@ func containsInApp(channels []notificationv1.Channel) bool {
 	return false
 }
 
-func isSmsOnly(channels []notificationv1.Channel) bool {
-	return len(channels) == 1 && channels[0] == notificationv1.Channel_CHANNEL_SMS
+// requiresRecipient reports whether the channels list contains a channel
+// that needs metadata.recipient_user_id. IN_APP needs it to write the
+// inbox row; PUSH needs it to look up the user's registered push tokens.
+// SMS and EMAIL alone carry their address in the payload — no recipient
+// required.
+func requiresRecipient(channels []notificationv1.Channel) bool {
+	for _, c := range channels {
+		if c == notificationv1.Channel_CHANNEL_IN_APP ||
+			c == notificationv1.Channel_CHANNEL_PUSH {
+			return true
+		}
+	}
+	return false
 }
