@@ -167,8 +167,12 @@ func TestPublishDirective_HappyWritesRow(t *testing.T) {
 		t.Fatalf("expected 1 outbox row, got %d", got)
 	}
 	row := store.Messages[0]
-	if row.Topic != topicName {
-		t.Errorf("Topic = %q, want %q", row.Topic, topicName)
+	// Pin to the literal kebab-case wire name (not enum.String() which
+	// returns "TOPIC_NOTIFICATION_EVENTS"). The outbox relay uses this
+	// field directly as the Kafka topic; consumers subscribe to the
+	// kebab-case name.
+	if row.Topic != "notification-events" {
+		t.Errorf("Topic = %q, want %q", row.Topic, "notification-events")
 	}
 	if row.AggregateType != AggregateType {
 		t.Errorf("AggregateType = %q, want %q", row.AggregateType, AggregateType)

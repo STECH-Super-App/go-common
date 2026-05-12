@@ -6,6 +6,7 @@ import (
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
 	eventsv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/v1"
 
+	"github.com/STECH-Super-App/go-common/pkg/events"
 	"github.com/STECH-Super-App/go-common/pkg/notifyrender"
 	"github.com/STECH-Super-App/go-common/pkg/outbox"
 )
@@ -16,8 +17,10 @@ import (
 const AggregateType = "notification"
 
 // topicName is the canonical Kafka topic for notification directives.
-// Held as a string for outbox.PublishProtoOptions.Topic.
-var topicName = eventsv1.Topic_TOPIC_NOTIFICATION_EVENTS.String()
+// Held as a string for outbox.PublishProtoOptions.Topic. Uses
+// events.TopicName to derive the kebab-case wire name ("notification-events")
+// rather than enum.String() which returns "TOPIC_NOTIFICATION_EVENTS".
+var topicName = events.TopicName(eventsv1.Topic_TOPIC_NOTIFICATION_EVENTS)
 
 // PublishDirective validates the envelope and writes it to the outbox
 // via pub, addressed to TOPIC_NOTIFICATION_EVENTS. Producers must use
