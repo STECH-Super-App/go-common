@@ -20,7 +20,12 @@ const (
 	HeaderTokenStatus  = "X-Token-Status"  //nolint:gosec // Response header: gateway → client, value "revoked" signals refresh needed.
 	HeaderAuthChecked  = "X-Auth-Checked"
 	HeaderDeviceID     = "X-Device-Id"
-	HeaderUserAgent    = "User-Agent"
-	HeaderRealIP       = "X-Real-IP"
-	HeaderForwardedFor = "X-Forwarded-For"
+	// HeaderDeviceFingerprint is a server-asserted sha256(UA + IP) fingerprint
+	// injected by api-gateway on every forwarded request. It is always overwritten
+	// at the gateway boundary — never trust a value of this header that arrives
+	// from outside the gateway.
+	HeaderDeviceFingerprint = "X-Device-Fingerprint"
+	HeaderUserAgent         = "User-Agent"
+	HeaderRealIP            = "X-Real-IP"
+	HeaderForwardedFor      = "X-Forwarded-For"
 )

@@ -101,14 +101,44 @@ func TestValidate_EmptyRecipient(t *testing.T) {
 	assertReason(t, validate(e), ReasonEmptyRecipient)
 }
 
-func TestValidate_SmsOnlyAllowsEmptyRecipient(t *testing.T) {
+func TestValidate_NonInAppAllowsEmptyRecipient(t *testing.T) {
+	cases := []struct {
+		name     string
+		channels []notificationv1.Channel
+	}{
+		{"SMS only", []notificationv1.Channel{notificationv1.Channel_CHANNEL_SMS}},
+		{"EMAIL only", []notificationv1.Channel{notificationv1.Channel_CHANNEL_EMAIL}},
+		{"SMS + EMAIL", []notificationv1.Channel{notificationv1.Channel_CHANNEL_SMS, notificationv1.Channel_CHANNEL_EMAIL}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			e := validEnvelope(t)
+			e.Metadata.RecipientUserId = ""
+			e.Metadata.Channels = tc.channels
+			e.Metadata.DeepLink = nil // not required when IN_APP not in channels
+			if err := validate(e); err != nil {
+				t.Errorf("non-in-app with empty recipient should pass, got %v", err)
+			}
+		})
+	}
+}
+
+// TestValidate_InAppRequiresRecipient confirms IN_APP still demands recipient_user_id.
+func TestValidate_InAppRequiresRecipient(t *testing.T) {
 	e := validEnvelope(t)
 	e.Metadata.RecipientUserId = ""
-	e.Metadata.Channels = []notificationv1.Channel{notificationv1.Channel_CHANNEL_SMS}
-	e.Metadata.DeepLink = nil // not required for SMS-only
-	if err := validate(e); err != nil {
-		t.Errorf("SMS-only with empty recipient should pass, got %v", err)
-	}
+	// channels already includes IN_APP in the default validEnvelope
+	assertReason(t, validate(e), ReasonEmptyRecipient)
+}
+
+// TestValidate_PushRequiresRecipient confirms PUSH demands recipient_user_id.
+func TestValidate_PushRequiresRecipient(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = ""
+	e.Metadata.Channels = []notificationv1.Channel{notificationv1.Channel_CHANNEL_PUSH}
+	e.Metadata.DeepLink = nil
+	assertReason(t, validate(e), ReasonEmptyRecipient)
 }
 
 func TestValidate_MissingDeepLinkForInApp(t *testing.T) {

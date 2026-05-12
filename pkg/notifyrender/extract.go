@@ -160,6 +160,23 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"currency": p.SendWalletOperationDecided.GetCurrency(),
 			"decision": p.SendWalletOperationDecided.GetDecision(),
 		}, nil
+
+	// ─── auth-service payloads ───
+	case *notificationv1.NotificationEnvelope_SendLoginOtpSms:
+		return map[string]string{
+			"phone": p.SendLoginOtpSms.GetPhone(),
+			"code":  p.SendLoginOtpSms.GetCode(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendLoginOtpEmail:
+		return map[string]string{
+			"email": p.SendLoginOtpEmail.GetEmail(),
+			"code":  p.SendLoginOtpEmail.GetCode(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendNewDeviceLogin:
+		return map[string]string{
+			"device_name": p.SendNewDeviceLogin.GetDeviceName(),
+			"ip":          p.SendNewDeviceLogin.GetIp(),
+		}, nil
 	default:
 		return nil, ErrEmptyPayload()
 	}
