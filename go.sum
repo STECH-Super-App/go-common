@@ -1,7 +1,7 @@
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/STECH-Super-App/gen-go-lib v0.0.0-20260422085406-463728b296de h1:j6BJFahaqlwHa6tm3qAWIJbwLHEOoeQ6/MFKa9yRL8g=
-github.com/STECH-Super-App/gen-go-lib v0.0.0-20260422085406-463728b296de/go.mod h1:vB70yPRKzJrwNtOW+/DVmJoDImtqhdgb7uSSvAPYd3Y=
+github.com/STECH-Super-App/gen-go-lib v0.0.0-20260512121229-1344de2944ae h1:z8/EbupaxYtIXko8L2jIu3rXFSRdShfQcL0ZoSdLRzs=
+github.com/STECH-Super-App/gen-go-lib v0.0.0-20260512121229-1344de2944ae/go.mod h1:vB70yPRKzJrwNtOW+/DVmJoDImtqhdgb7uSSvAPYd3Y=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/tolgeerc",
+  "projectId": 0,
+  "apiUrl": "${TOLGEE_API_URL}",
+  "apiKey": "${TOLGEE_API_KEY_NOTIFICATIONS}",
+  "format": "TOML",
+  "filesTemplate": "pkg/notifyrender/translations/{languageTag}.toml",
+  "namespaces": [""],
+  "languageMapping": {
+    "en": "en",
+    "ru": "ru",
+    "kk": "kk"
+  }
+}

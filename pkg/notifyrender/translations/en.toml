@@ -1,0 +1,58 @@
+# pkg/notifyrender/translations/en.toml
+# Source-of-truth English translations. Pushed to Tolgee on merge to main.
+
+[chat_message]
+title = "New message from {{.sender_name}}"
+body  = "{{.preview}}"
+
+[listing_approved]
+title = "Listing approved"
+body  = "Your listing '{{.listing_title}}' is now live."
+
+[listing_rejected]
+title = "Listing rejected"
+body  = "Your listing '{{.listing_title}}' was rejected: {{.reason}}"
+
+[favorite_price_changed]
+title = "Price changed"
+body  = "The price of '{{.listing_title}}' changed from {{.old_price}} to {{.new_price}} {{.currency}}."
+
+[favorite_listing_removed]
+title = "Favorite listing removed"
+body  = "'{{.listing_title}}' is no longer available."
+
+[team_invite_tenant_manager]
+title = "Invitation to join {{.tenant_name}}"
+body  = "{{.inviter_name}} invited you to join {{.team_name}} as a manager."
+
+[team_invite_tenant_operator]
+title = "Invitation to join {{.tenant_name}}"
+body  = "{{.inviter_name}} invited you to join {{.team_name}} as an operator."
+
+[team_invite_user_manager]
+title = "Team invitation"
+body  = "{{.inviter_name}} invited you to {{.team_name}} as a manager."
+
+[team_invite_user_operator]
+title = "Team invitation"
+body  = "{{.inviter_name}} invited you to {{.team_name}} as an operator."
+
+[tenant_verified]
+title = "Organization verified"
+body  = "{{.organization_name}} has been verified."
+
+[operator_assigned]
+title = "Operator assigned"
+body  = "{{.operator_name}} has been assigned."
+
+[operator_released]
+title = "Operator released"
+body  = "{{.operator_name}} has been released."
+
+[wallet_operation_requested]
+title = "Wallet operation requested"
+body  = "A {{.operation_kind}} of {{.amount}} {{.currency}} has been requested."
+
+[wallet_operation_decided]
+title = "Wallet operation {{.decision}}"
+body  = "Your wallet operation for {{.amount}} {{.currency}} was {{.decision}}."
