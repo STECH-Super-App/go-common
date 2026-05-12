@@ -1,0 +1,19 @@
+name: i18n-push
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pkg/notifyrender/translations/en.toml'
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tolgee CLI
+        run: npm install -g @tolgee/cli
+      - name: Push en source to Tolgee
+        env:
+          TOLGEE_API_URL: ${{ secrets.TOLGEE_API_URL }}
+          TOLGEE_API_KEY_NOTIFICATIONS: ${{ secrets.TOLGEE_API_KEY_NOTIFICATIONS }}
+        run: tolgee push --force-mode KEEP
