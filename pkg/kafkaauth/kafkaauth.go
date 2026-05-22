@@ -3,8 +3,9 @@
 // or Yandex Managed Kafka (SASL/SCRAM-SHA-512 over TLS).
 //
 // Backward compatible: when KAFKA_USER is empty (local dev), Transport returns
-// nil and Dialer returns kafka.DefaultDialer — i.e. the previous plaintext
-// behaviour. When KAFKA_USER is set (cluster), both return SASL+TLS configs.
+// kafka.DefaultTransport and Dialer returns kafka.DefaultDialer — i.e. the
+// previous plaintext behaviour. When KAFKA_USER is set (cluster), both return
+// SASL+TLS configs.
 //
 // TLS uses InsecureSkipVerify because the Yandex Managed Kafka CA is not
 // bundled in service images; the wire is still encrypted (parity with the
@@ -30,15 +31,18 @@ func tlsConfig() *tls.Config {
 	return &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 }
 
-// Transport returns a *kafka.Transport for SASL/SCRAM-SHA-512 over TLS when
-// KAFKA_USER is set, else nil (so a *kafka.Writer keeps its default plaintext
-// transport). Assign unconditionally:
+// Transport returns a kafka.RoundTripper for SASL/SCRAM-SHA-512 over TLS when
+// KAFKA_USER is set, else kafka.DefaultTransport. It must hand back the library
+// default (never a nil *kafka.Transport) because kafka.Writer.Transport is an
+// interface field: a typed-nil pointer stored in an interface is itself non-nil,
+// so kafka-go would skip its DefaultTransport fallback and dereference the nil
+// transport on the first write. Assign unconditionally:
 //
 //	w := &kafka.Writer{Addr: kafka.TCP(brokers...), Transport: kafkaauth.Transport()}
-func Transport() *kafka.Transport {
+func Transport() kafka.RoundTripper {
 	user, pass := credentials()
 	if user == "" {
-		return nil
+		return kafka.DefaultTransport
 	}
 	mech, err := scram.Mechanism(scram.SHA512, user, pass)
 	if err != nil {
