@@ -21,3 +21,11 @@ linters:
         - pattern: ^c\.JSON$
           pkg: ^github\.com/labstack/echo/v4\.Context$
           msg: "Use github.com/STECH-Super-App/go-common/pkg/response instead of direct c.JSON"
+  exclusions:
+    rules:
+      # pkg/errors is the canonical platform error envelope — the package name
+      # `errors` is intentional. Renaming would break every importing service.
+      - path: pkg/errors/
+        linters:
+          - revive
+        text: "var-naming: avoid package names that conflict"
