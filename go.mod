@@ -11,7 +11,7 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/STECH-Super-App/gen-go-lib v0.0.0-20260515173030-817b9b61ea14
+	github.com/STECH-Super-App/gen-go-lib v0.0.0-20260520141631-2134fdfd4fbc
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/labstack/echo/v4 v4.15.1
