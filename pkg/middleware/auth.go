@@ -12,23 +12,32 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// AuthMiddleware checks for the presence of the X-User-ID header.
-// If present, it populates the context with user information.
-// If missing, it returns 401 Unauthorized.
+// AuthMiddleware enforces authentication for protected routes. It reads the
+// gateway-set X-Auth-Outcome header: a recognized outcome yields a 401 carrying
+// the X-Auth-Action the client must take (refresh / reauth) and the matching
+// COMMON_* reason. With no failing outcome, a present X-User-ID means
+// authenticated; an absent one means no credential (COMMON_AUTH_REQUIRED).
 func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		if c.Request().Header.Get(auth.HeaderTokenRevoked) == "true" {
+		if outcome := c.Request().Header.Get(auth.HeaderAuthOutcome); outcome != "" {
+			failure, ok := auth.ResponseForOutcome(outcome)
+			if !ok {
+				// Unrecognized outcome → fail safe to reauth rather than fall through.
+				failure = auth.Failure{Action: auth.ActionReauth, Reason: auth.ReasonAuthRequired, Message: "authentication required"}
+			}
+			c.Response().Header().Set(auth.HeaderAuthAction, failure.Action)
 			return response.JSONError(c, commonErrors.New(http.StatusUnauthorized).
-				Reason("COMMON_TOKEN_REVOKED").
-				Message("token has been revoked, please refresh your session").
+				Reason(failure.Reason).
+				Message(failure.Message).
 				Build())
 		}
 
 		userID := c.Request().Header.Get(auth.HeaderUserID)
 		if userID == "" {
+			c.Response().Header().Set(auth.HeaderAuthAction, auth.ActionReauth)
 			return response.JSONError(c, commonErrors.New(http.StatusUnauthorized).
-				Reason("COMMON_AUTH_REQUIRED").
-				Message("Unauthorized").
+				Reason(auth.ReasonAuthRequired).
+				Message("authentication required").
 				Build())
 		}
 

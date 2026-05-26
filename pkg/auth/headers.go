@@ -13,13 +13,19 @@ const (
 	// the go-common/pkg/authz package.
 	HeaderTeamMemberships = "X-Team-Memberships"
 
-	HeaderScope        = "X-Scope"
-	HeaderPhone        = "X-Phone"
-	HeaderTokenJTI     = "X-Token-JTI"     //nolint:gosec // Not credentials — HTTP header names for token revocation signaling.
-	HeaderTokenRevoked = "X-Token-Revoked" //nolint:gosec // Request header: gateway → service, set when JTI is in blacklist.
-	HeaderTokenStatus  = "X-Token-Status"  //nolint:gosec // Response header: gateway → client, value "revoked" signals refresh needed.
-	HeaderAuthChecked  = "X-Auth-Checked"
-	HeaderDeviceID     = "X-Device-Id"
+	HeaderScope    = "X-Scope"
+	HeaderPhone    = "X-Phone"
+	HeaderTokenJTI = "X-Token-JTI" //nolint:gosec // Request header: gateway → service, the verified token's JTI.
+
+	// HeaderAuthOutcome is the internal request header the gateway sets to the
+	// classified token state (see signal.go Outcome* values). Trusted: stripped
+	// from inbound client requests at the gateway boundary.
+	HeaderAuthOutcome = "X-Auth-Outcome" //nolint:gosec // Request header: gateway → service.
+	// HeaderAuthAction is the response header telling the client what to do on an
+	// auth failure: "refresh" or "reauth" (see signal.go Action* values).
+	HeaderAuthAction  = "X-Auth-Action" //nolint:gosec // Response header: service → client.
+	HeaderAuthChecked = "X-Auth-Checked"
+	HeaderDeviceID    = "X-Device-Id"
 	// HeaderDeviceFingerprint is a server-asserted sha256(UA + IP) fingerprint
 	// injected by api-gateway on every forwarded request. It is always overwritten
 	// at the gateway boundary — never trust a value of this header that arrives
