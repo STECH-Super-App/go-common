@@ -52,30 +52,49 @@ func TestAuthMiddleware_MissingUserID(t *testing.T) {
 	var body map[string]interface{}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	errObj := body["error"].(map[string]interface{})
-	assert.Equal(t, "Unauthorized", errObj["message"])
+	assert.Equal(t, "authentication required", errObj["message"])
+	assert.Equal(t, "COMMON_AUTH_REQUIRED", errObj["reason"])
+	assert.Equal(t, auth.ActionReauth, rec.Header().Get(auth.HeaderAuthAction))
 }
 
-func TestAuthMiddleware_RevokedToken(t *testing.T) {
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Token-Revoked", "true")
-	req.Header.Set(auth.HeaderUserID, "user-123") // Even with user ID, revoked takes priority
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
+func TestAuthMiddleware_OutcomeMapsToActionAndReason(t *testing.T) {
+	cases := []struct {
+		outcome string
+		action  string
+		reason  string
+	}{
+		{auth.OutcomeExpired, auth.ActionRefresh, "COMMON_TOKEN_EXPIRED"},
+		{auth.OutcomeStale, auth.ActionRefresh, "COMMON_TOKEN_STALE"},
+		{auth.OutcomeLoggedOut, auth.ActionReauth, "COMMON_SESSION_LOGGED_OUT"},
+		{auth.OutcomeRevoked, auth.ActionReauth, "COMMON_SESSION_REVOKED"},
+		{auth.OutcomeSuspended, auth.ActionReauth, "COMMON_ACCOUNT_SUSPENDED"},
+		{auth.OutcomeUntrusted, auth.ActionReauth, "COMMON_AUTH_REQUIRED"},
+		{auth.OutcomeNotYetValid, auth.ActionReauth, "COMMON_AUTH_REQUIRED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.outcome, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set(auth.HeaderAuthOutcome, tc.outcome)
+			req.Header.Set(auth.HeaderUserID, "user-123") // outcome takes priority over identity
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
 
-	handler := AuthMiddleware(func(_ echo.Context) error {
-		t.Fatal("handler should not be called for revoked token")
-		return nil
-	})
+			handler := AuthMiddleware(func(_ echo.Context) error {
+				t.Fatal("handler must not be called for a failed outcome")
+				return nil
+			})
 
-	err := handler(c)
-	assert.NoError(t, err)
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			require.NoError(t, handler(c))
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			assert.Equal(t, tc.action, rec.Header().Get(auth.HeaderAuthAction))
 
-	var body map[string]interface{}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	errObj := body["error"].(map[string]interface{})
-	assert.Contains(t, errObj["message"], "revoked")
+			var body map[string]interface{}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			errObj := body["error"].(map[string]interface{})
+			assert.Equal(t, tc.reason, errObj["reason"])
+		})
+	}
 }
 
 func TestOptionalAuthMiddleware_WithUser(t *testing.T) {
@@ -120,8 +139,8 @@ func TestOptionalAuthMiddleware_NoUser(t *testing.T) {
 func TestOptionalAuthMiddleware_RevokedToken(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	// Gateway sets X-Token-Revoked but does NOT set X-User-ID for revoked tokens.
-	req.Header.Set("X-Token-Revoked", "true")
+	// Gateway sets X-Auth-Outcome but does NOT set X-User-ID for bad tokens.
+	req.Header.Set(auth.HeaderAuthOutcome, auth.OutcomeLoggedOut)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
