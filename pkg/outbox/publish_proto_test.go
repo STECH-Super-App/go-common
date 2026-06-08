@@ -16,7 +16,7 @@ import (
 
 func TestPublishProto_injectsAllEnvelopeHeaders(t *testing.T) {
 	store := outbox.NewTestStore()
-	pub := outbox.NewPublisher(store, "user-events")
+	pub := outbox.NewPublisher(store, "user.events")
 
 	evt := &usersv1.UserRegistered{UserId: "u1", Name: "Alice"}
 	err := pub.PublishProto(context.Background(), nil, outbox.PublishProtoOptions{
@@ -83,7 +83,7 @@ func TestPublishProto_injectsAllEnvelopeHeaders(t *testing.T) {
 	if row.EventType != "events.users.v1.UserRegistered" {
 		t.Errorf("row.EventType = %q", row.EventType)
 	}
-	if row.Topic != "user-events" {
+	if row.Topic != "user.events" {
 		t.Errorf("row.Topic = %q, want default", row.Topic)
 	}
 	_ = proto.Marshal // keep proto import
@@ -91,7 +91,7 @@ func TestPublishProto_injectsAllEnvelopeHeaders(t *testing.T) {
 
 func TestPublishProto_explicitEventIDUsed(t *testing.T) {
 	store := outbox.NewTestStore()
-	pub := outbox.NewPublisher(store, "user-events")
+	pub := outbox.NewPublisher(store, "user.events")
 
 	explicit := uuid.NewString()
 	err := pub.PublishProto(context.Background(), nil, outbox.PublishProtoOptions{
@@ -116,7 +116,7 @@ func TestPublishProto_explicitEventIDUsed(t *testing.T) {
 
 func TestPublishProto_customTopicOverride(t *testing.T) {
 	store := outbox.NewTestStore()
-	pub := outbox.NewPublisher(store, "user-events")
+	pub := outbox.NewPublisher(store, "user.events")
 	err := pub.PublishProto(context.Background(), nil, outbox.PublishProtoOptions{
 		AggregateType: "user",
 		AggregateID:   "u1",
@@ -133,7 +133,7 @@ func TestPublishProto_customTopicOverride(t *testing.T) {
 
 func TestPublishProto_nilMessageReturnsError(t *testing.T) {
 	store := outbox.NewTestStore()
-	pub := outbox.NewPublisher(store, "user-events")
+	pub := outbox.NewPublisher(store, "user.events")
 	err := pub.PublishProto(context.Background(), nil, outbox.PublishProtoOptions{
 		AggregateType: "user",
 		AggregateID:   "u1",

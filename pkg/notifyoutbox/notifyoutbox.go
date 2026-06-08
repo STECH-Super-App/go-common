@@ -18,7 +18,7 @@ const AggregateType = "notification"
 
 // topicName is the canonical Kafka topic for notification directives.
 // Held as a string for outbox.PublishProtoOptions.Topic. Uses
-// events.TopicName to derive the kebab-case wire name ("notification-events")
+// events.TopicName to derive the dotted wire name ("notification.events")
 // rather than enum.String() which returns "TOPIC_NOTIFICATION_EVENTS".
 var topicName = events.TopicName(eventsv1.Topic_TOPIC_NOTIFICATION_EVENTS)
 
