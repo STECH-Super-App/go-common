@@ -26,7 +26,7 @@ type Message struct {
 	AggregateType string            // Domain aggregate name, e.g. "user", "tenant"
 	AggregateID   string            // Unique ID within the aggregate, e.g. user UUID
 	EventType     string            // Dot-delimited event name, e.g. "user.created"
-	Topic         string            // Kafka destination topic, e.g. "user-events"
+	Topic         string            // Kafka destination topic, e.g. "user.events"
 	Key           string            // Kafka partition key (typically aggregate_id)
 	Payload       []byte            // JSON-serialized event body
 	Headers       map[string]string // Additional Kafka headers
