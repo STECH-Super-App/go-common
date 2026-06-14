@@ -29,12 +29,13 @@ type Writer interface {
 // Deduplicator is the subset of outbox.Deduplicator the dispatcher uses.
 // Kept as an interface here to avoid a circular import between events and outbox.
 //
-// Process must run fn inside the same atomic check-and-record unit so that
+// Process must run fn inside the same atomic claim-and-record unit so that
 // concurrent deliveries of the same eventID across consumer pods see
 // exactly-once semantics: one pod's fn runs and commits, the others see
 // the ID as already-processed and return nil without running fn.
-// *outbox.Deduplicator satisfies this via SELECT ... FOR UPDATE within a
-// DB transaction.
+// *outbox.Deduplicator satisfies this by inserting the event_id FIRST
+// (INSERT ... ON CONFLICT DO NOTHING) inside a DB transaction and running fn
+// only for the deliverer that actually took the row.
 type Deduplicator interface {
 	Process(ctx context.Context, eventID string, fn func() error) error
 }
