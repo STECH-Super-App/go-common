@@ -9,6 +9,7 @@ import (
 	"github.com/STECH-Super-App/go-common/pkg/authz"
 	commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
 	"github.com/STECH-Super-App/go-common/pkg/response"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 )
 
@@ -94,6 +95,46 @@ func setContextValues(c echo.Context) {
 func UserIDFromContext(c echo.Context) (string, bool) {
 	val, ok := c.Get(string(auth.ContextKeyUserID)).(string)
 	return val, ok
+}
+
+// RequireUserUUID returns the authenticated caller's user-id parsed as a
+// uuid.UUID, or a ready-to-return typed 401 AppError when no valid id is
+// present. It builds on UserIDFromContext (which AuthMiddleware populates from
+// the X-User-ID header), so AuthMiddleware must run on the route first.
+//
+// Returning the typed error — rather than a bool — is the point: services that
+// model the caller as a uuid.UUID otherwise each re-implement the identical
+// "read context id, parse it, build a 401 on failure" sequence (previously
+// duplicated as inbox-service's recipientFromHeader and chat-service's
+// callerUUIDFromContext, which had even drifted to different Reason codes). The
+// returned AppError carries the canonical COMMON_AUTH_REQUIRED reason so every
+// caller collapses to:
+//
+//	id, appErr := middleware.RequireUserUUID(c)
+//	if appErr != nil {
+//	    return response.JSONError(c, appErr)
+//	}
+//
+// A non-nil error is returned when the id is missing from the context (the
+// route lacked AuthMiddleware, or the gateway sent no identity) or is present
+// but not a valid UUID; the two cases differ only in the English message.
+func RequireUserUUID(c echo.Context) (uuid.UUID, *commonErrors.AppError) {
+	raw, ok := UserIDFromContext(c)
+	if !ok || raw == "" {
+		return uuid.Nil, commonErrors.New(http.StatusUnauthorized).
+			Reason(auth.ReasonAuthRequired).
+			Message("user id missing from request context").
+			Build()
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, commonErrors.New(http.StatusUnauthorized).
+			Reason(auth.ReasonAuthRequired).
+			Message("user id is not a valid UUID").
+			Cause(err).
+			Build()
+	}
+	return id, nil
 }
 
 // UserRolesFromContext retrieves the user roles from Echo context.

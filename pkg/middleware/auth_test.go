@@ -8,6 +8,7 @@ import (
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
 	"github.com/STECH-Super-App/go-common/pkg/authz"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -178,6 +179,74 @@ func TestAuthMiddleware_ParsesTeamMemberships(t *testing.T) {
 
 	require.NoError(t, handler(c))
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestRequireUserUUID(t *testing.T) {
+	validID := "550e8400-e29b-41d4-a716-446655440000"
+
+	cases := []struct {
+		name     string
+		setID    bool // whether to set the X-User-ID header at all
+		rawID    string
+		wantUUID uuid.UUID
+		wantErr  bool
+	}{
+		{
+			name:     "valid uuid",
+			setID:    true,
+			rawID:    validID,
+			wantUUID: uuid.MustParse(validID),
+			wantErr:  false,
+		},
+		{
+			name:     "missing id (no AuthMiddleware / no header)",
+			setID:    false,
+			wantUUID: uuid.Nil,
+			wantErr:  true,
+		},
+		{
+			name:     "empty id",
+			setID:    true,
+			rawID:    "",
+			wantUUID: uuid.Nil,
+			wantErr:  true,
+		},
+		{
+			name:     "malformed uuid",
+			setID:    true,
+			rawID:    "not-a-uuid",
+			wantUUID: uuid.Nil,
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			if tc.setID {
+				// Populate the context key the same way AuthMiddleware does,
+				// via setContextValues reading the X-User-ID header.
+				req.Header.Set(auth.HeaderUserID, tc.rawID)
+				setContextValues(c)
+			}
+
+			gotUUID, gotErr := RequireUserUUID(c)
+			assert.Equal(t, tc.wantUUID, gotUUID)
+			if tc.wantErr {
+				require.NotNil(t, gotErr)
+				// The typed 401 carries the canonical reason so every caller
+				// surfaces the same i18n key.
+				assert.Equal(t, http.StatusUnauthorized, gotErr.Code)
+				assert.Equal(t, auth.ReasonAuthRequired, gotErr.Reason)
+			} else {
+				assert.Nil(t, gotErr)
+			}
+		})
+	}
 }
 
 func TestAuthMiddleware_NoTeamMembershipsHeaderYieldsNil(t *testing.T) {
