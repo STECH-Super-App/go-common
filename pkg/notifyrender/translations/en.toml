@@ -13,6 +13,10 @@ body  = "Your listing '{{.listing_title}}' is now live."
 title = "Listing rejected"
 body  = "Your listing '{{.listing_title}}' was rejected: {{.reason}}"
 
+[listing_unpublished]
+title = "Listing unpublished"
+body  = "Your listing '{{.listing_title}}' was unpublished: {{.reason}}"
+
 [favorite_price_changed]
 title = "Price changed"
 body  = "The price of '{{.listing_title}}' changed from {{.old_price}} to {{.new_price}} {{.currency}}."
@@ -56,3 +60,43 @@ body  = "A {{.operation_kind}} of {{.amount}} {{.currency}} has been requested."
 [wallet_operation_decided]
 title = "Wallet operation {{.decision}}"
 body  = "Your wallet operation for {{.amount}} {{.currency}} was {{.decision}}."
+
+# ─── tenant + team lifecycle (slice 2): EMAIL flows now also render IN_APP ───
+
+[tenant_rejected]
+title = "Organization rejected"
+body  = "Your organization was rejected: {{.reason}}"
+
+[invite_accepted]
+title = "Invitation accepted"
+body  = "{{.phone}} accepted your invitation to join as {{.role}}."
+
+[invite_declined]
+title = "Invitation declined"
+body  = "{{.phone}} declined your invitation."
+
+[admin_transferred_new]
+title = "You are now the team admin"
+body  = "You have been made the admin of {{.team_name}}."
+
+[admin_transferred_old]
+title = "Team admin transferred"
+body  = "You transferred admin rights for {{.team_name}}."
+
+# ─── team membership lifecycle (slice 4): block / unblock / remove ───
+
+[member_blocked]
+title = "Access temporarily restricted"
+body  = "Your access to the team {{.team_name}} has been temporarily restricted."
+
+[member_unblocked]
+title = "Access restored"
+body  = "Your access to the team {{.team_name}} has been restored."
+
+[member_removed]
+title = "Removed from team"
+body  = "You have been removed from the team {{.team_name}}."
+
+[team_member_removed_admin]
+title = "{{.removed_member_name}} left the team"
+body  = "{{.removed_member_name}} is no longer a member of the team {{.team_name}}."

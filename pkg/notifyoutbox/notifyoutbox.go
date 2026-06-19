@@ -97,6 +97,16 @@ func validate(env *notificationv1.NotificationEnvelope) error {
 }
 
 func validateParams(env *notificationv1.NotificationEnvelope) error {
+	// Verbatim free-text types (PLATFORM_MESSAGE) carry their literal title/body
+	// on the wire and have no catalog template / required-param contract. Skip
+	// the catalog branch entirely; instead assert the text is non-empty so an
+	// empty admin message never reaches the inbox.
+	if notifyrender.IsVerbatim(env.GetMetadata().GetType()) {
+		if pm := env.GetSendPlatformMessage(); pm.GetTitle() == "" && pm.GetBody() == "" {
+			return errEmptyVerbatimText()
+		}
+		return nil
+	}
 	// Only validate required-param coverage when IN_APP is in channels;
 	// EMAIL/SMS-only directives use their own producer-side fields and
 	// notification-service tolerates absent ExtractParams (the existing

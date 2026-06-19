@@ -169,6 +169,65 @@ func TestValidateParams_MissingRequired(t *testing.T) {
 	}
 }
 
+// platformMessageEnvelope returns a valid verbatim PLATFORM_MESSAGE IN_APP
+// envelope. Tests mutate the payload to drive the verbatim validation branch.
+func platformMessageEnvelope(t *testing.T) *notificationv1.NotificationEnvelope {
+	t.Helper()
+	e := validEnvelope(t)
+	e.Metadata.Type = notificationv1.NotificationType_NOTIFICATION_TYPE_PLATFORM_MESSAGE
+	e.Metadata.DeepLink = &notificationv1.DeepLinkTarget{
+		Screen: notificationv1.DeepLinkScreen_DEEP_LINK_SCREEN_TEAM,
+	}
+	e.Payload = &notificationv1.NotificationEnvelope_SendPlatformMessage{
+		SendPlatformMessage: &notificationv1.SendPlatformMessage{
+			Title: "Maintenance", Body: "Down at 02:00",
+		},
+	}
+	return e
+}
+
+// TestValidateParams_VerbatimAccepted: a PLATFORM_MESSAGE with non-empty text
+// passes validateParams even though it has no catalog/required-param contract.
+func TestValidateParams_VerbatimAccepted(t *testing.T) {
+	if err := validateParams(platformMessageEnvelope(t)); err != nil {
+		t.Fatalf("expected verbatim PLATFORM_MESSAGE to pass, got %v", err)
+	}
+}
+
+// TestValidateParams_VerbatimTitleOnly: a title with empty body is still valid.
+func TestValidateParams_VerbatimTitleOnly(t *testing.T) {
+	e := platformMessageEnvelope(t)
+	e.Payload = &notificationv1.NotificationEnvelope_SendPlatformMessage{
+		SendPlatformMessage: &notificationv1.SendPlatformMessage{Title: "Hi"},
+	}
+	if err := validateParams(e); err != nil {
+		t.Errorf("title-only verbatim should pass, got %v", err)
+	}
+}
+
+// TestValidateParams_VerbatimEmptyRejected: both title+body empty is rejected
+// with the verbatim Reason, NOT the catalog missing-param Reason.
+func TestValidateParams_VerbatimEmptyRejected(t *testing.T) {
+	e := platformMessageEnvelope(t)
+	e.Payload = &notificationv1.NotificationEnvelope_SendPlatformMessage{
+		SendPlatformMessage: &notificationv1.SendPlatformMessage{},
+	}
+	assertReason(t, validateParams(e), ReasonEmptyVerbatim)
+}
+
+// TestPublishDirective_VerbatimWritesRow: full publish path for a valid
+// PLATFORM_MESSAGE writes exactly one outbox row.
+func TestPublishDirective_VerbatimWritesRow(t *testing.T) {
+	store := outbox.NewTestStore()
+	pub := outbox.NewPublisher(store, "default-topic")
+	if err := PublishDirective(context.Background(), pub, nil, platformMessageEnvelope(t)); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if got := len(store.Messages); got != 1 {
+		t.Fatalf("expected 1 outbox row, got %d", got)
+	}
+}
+
 func TestPublishDirective_NilPublisher(t *testing.T) {
 	err := PublishDirective(context.Background(), nil, nil, validEnvelope(t))
 	assertReason(t, err, ReasonNilPublisher)

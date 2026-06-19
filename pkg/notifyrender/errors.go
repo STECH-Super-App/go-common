@@ -30,6 +30,12 @@ const (
 	// did not supply in the params map. The Params map on the AppError
 	// carries the type name and the missing param name.
 	ReasonMissingParam = "NOTIFYRENDER_MISSING_PARAM"
+
+	// ReasonEmptyVerbatim signals a verbatim (free-text) directive whose
+	// title AND body are both empty. Verbatim types (PLATFORM_MESSAGE) carry
+	// their literal content on the wire; an empty pair has nothing to render.
+	// This is defensive — the producer-side validator should reject it first.
+	ReasonEmptyVerbatim = "NOTIFYRENDER_EMPTY_VERBATIM"
 )
 
 // ErrUnknownType returns the AppError for a NotificationType not in the catalog.
@@ -58,5 +64,14 @@ func ErrMissingParam(t notificationv1.NotificationType, param string) *commonerr
 		Reason(ReasonMissingParam).
 		Message(fmt.Sprintf("missing required param %q for type %s", param, t.String())).
 		Params(map[string]any{"type": t.String(), "param": param}).
+		Build()
+}
+
+// ErrEmptyVerbatimText returns the AppError for a verbatim directive whose
+// title and body are both empty.
+func ErrEmptyVerbatimText() *commonerr.AppError {
+	return commonerr.New(http.StatusInternalServerError).
+		Reason(ReasonEmptyVerbatim).
+		Message("verbatim directive has empty title and body").
 		Build()
 }
