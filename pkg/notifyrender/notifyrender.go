@@ -62,6 +62,32 @@ func Render(
 	return title, body, nil
 }
 
+// IsVerbatim reports whether type t carries its own literal title/body in the
+// payload and must skip the catalog template lookup. Verbatim types have no
+// typeKey/requiredParams entry; consumers branch on this before calling Render
+// and use RenderVerbatim instead.
+//
+// Today only NOTIFICATION_TYPE_PLATFORM_MESSAGE (admin free-text) is verbatim.
+func IsVerbatim(t notificationv1.NotificationType) bool {
+	return t == notificationv1.NotificationType_NOTIFICATION_TYPE_PLATFORM_MESSAGE
+}
+
+// RenderVerbatim returns the literal title/body for a verbatim type, pulled
+// straight from the params map produced by ExtractParams. There is no template
+// and no locale: the text on the wire is already the recipient-facing content.
+//
+// Returns ErrEmptyVerbatimText when both title and body are empty (a producer
+// bug — the notifyoutbox validator rejects this at publish time, so this is a
+// defensive guard for the consumer render path).
+func RenderVerbatim(params map[string]string) (title string, body string, err error) {
+	title = params["title"]
+	body = params["body"]
+	if title == "" && body == "" {
+		return "", "", ErrEmptyVerbatimText()
+	}
+	return title, body, nil
+}
+
 func toAny(in map[string]string) map[string]any {
 	out := make(map[string]any, len(in))
 	for k, v := range in {

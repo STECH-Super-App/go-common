@@ -65,9 +65,15 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"phone":     p.SendInviteUserRegistered.GetPhone(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendAdminTransferredOld:
-		return map[string]string{}, nil
+		// team_name was added to the payload (slice 2) so the in-app body can
+		// name the team instead of rendering a static "you transferred the team".
+		return map[string]string{
+			"team_name": p.SendAdminTransferredOld.GetTeamName(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendAdminTransferredNew:
-		return map[string]string{}, nil
+		return map[string]string{
+			"team_name": p.SendAdminTransferredNew.GetTeamName(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendTenantCreated:
 		return map[string]string{
 			"organization_name": p.SendTenantCreated.GetOrganizationName(),
@@ -136,6 +142,11 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"listing_title": p.SendFavoriteListingRemoved.GetListingTitle(),
 		}, nil
+	case *notificationv1.NotificationEnvelope_SendListingUnpublished:
+		return map[string]string{
+			"listing_title": p.SendListingUnpublished.GetListingTitle(),
+			"reason":        p.SendListingUnpublished.GetReason(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendTenantVerified:
 		return map[string]string{
 			"organization_name": p.SendTenantVerified.GetOrganizationName(),
@@ -159,6 +170,37 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"amount":   p.SendWalletOperationDecided.GetAmount(),
 			"currency": p.SendWalletOperationDecided.GetCurrency(),
 			"decision": p.SendWalletOperationDecided.GetDecision(),
+		}, nil
+
+	// ─── team membership lifecycle payloads (slice 4) ───
+	case *notificationv1.NotificationEnvelope_SendMemberBlocked:
+		return map[string]string{
+			"team_name": p.SendMemberBlocked.GetTeamName(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendMemberUnblocked:
+		return map[string]string{
+			"team_name": p.SendMemberUnblocked.GetTeamName(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendMemberRemoved:
+		return map[string]string{
+			"team_name": p.SendMemberRemoved.GetTeamName(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendTeamMemberRemovedAdmin:
+		return map[string]string{
+			"team_name":           p.SendTeamMemberRemovedAdmin.GetTeamName(),
+			"removed_member_name": p.SendTeamMemberRemovedAdmin.GetRemovedMemberName(),
+		}, nil
+
+	// ─── free-text platform message (slice 5, verbatim) ───
+	// Unlike every other payload this carries the literal title/body that the
+	// consumer stores verbatim. ExtractParams surfaces them so the producer-side
+	// validator (notifyoutbox) sees a non-empty payload; the inbox consumer
+	// branches on IsVerbatim and copies them straight into the row, bypassing the
+	// catalog template lookup (PLATFORM_MESSAGE is deliberately not in typeKey).
+	case *notificationv1.NotificationEnvelope_SendPlatformMessage:
+		return map[string]string{
+			"title": p.SendPlatformMessage.GetTitle(),
+			"body":  p.SendPlatformMessage.GetBody(),
 		}, nil
 
 	// ─── auth-service payloads ───

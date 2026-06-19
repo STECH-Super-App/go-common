@@ -28,6 +28,7 @@ const (
 	ReasonEmptyPayload     = "NOTIFYOUTBOX_EMPTY_PAYLOAD"
 	ReasonMissingParam     = "NOTIFYOUTBOX_MISSING_PARAM"
 	ReasonNilPublisher     = "NOTIFYOUTBOX_NIL_PUBLISHER"
+	ReasonEmptyVerbatim    = "NOTIFYOUTBOX_EMPTY_VERBATIM"
 )
 
 func errEmptyEventID() *commonerr.AppError {
@@ -105,5 +106,12 @@ func errNilPublisher() *commonerr.AppError {
 	return commonerr.New(http.StatusInternalServerError).
 		Reason(ReasonNilPublisher).
 		Message("publisher is nil").
+		Build()
+}
+
+func errEmptyVerbatimText() *commonerr.AppError {
+	return commonerr.New(http.StatusInternalServerError).
+		Reason(ReasonEmptyVerbatim).
+		Message("verbatim directive (PLATFORM_MESSAGE) has empty title and body").
 		Build()
 }
