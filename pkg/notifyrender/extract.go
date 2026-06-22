@@ -219,6 +219,13 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"device_name": p.SendNewDeviceLogin.GetDeviceName(),
 			"ip":          p.SendNewDeviceLogin.GetIp(),
 		}, nil
+
+	// ─── sale-service payloads ───
+	case *notificationv1.NotificationEnvelope_SendContactPhoneOtpSms:
+		return map[string]string{
+			"phone": p.SendContactPhoneOtpSms.GetPhone(),
+			"code":  p.SendContactPhoneOtpSms.GetCode(),
+		}, nil
 	default:
 		return nil, ErrEmptyPayload()
 	}
