@@ -31,9 +31,24 @@ func NewDeduplicator(pool *pgxpool.Pool) *Deduplicator {
 	return &Deduplicator{pool: pool}
 }
 
-// Process executes fn only if eventID has not been processed before.
-// The check and the insert are done inside a transaction, so concurrent
-// deliveries of the same message are safely serialized.
+// Process executes fn at most once per eventID, even across concurrent
+// deliveries on different pods.
+//
+// The claim is taken by inserting the event_id FIRST (INSERT ... ON CONFLICT
+// DO NOTHING) and branching on whether the row was actually taken:
+//
+//   - row taken (RowsAffected == 1) → this delivery owns the event; fn runs
+//     inside the same transaction and is committed atomically with the claim.
+//   - conflict (RowsAffected == 0) → the event was already processed (or is
+//     being processed by the deliverer that holds the row lock); fn is skipped
+//     and nil is returned.
+//
+// Inserting first is what makes the claim atomic. The previous implementation
+// did SELECT ... FOR UPDATE on a not-yet-existing row, which locks nothing at
+// READ COMMITTED — two concurrent first-time deliveries both passed the check
+// and both ran fn (double side effects). With the insert taken under the
+// primary-key constraint, only one concurrent deliverer can win the row, so fn
+// runs exactly once.
 //
 // Returns nil without calling fn if the message was already processed.
 func (d *Deduplicator) Process(ctx context.Context, eventID string, fn func() error) error {
@@ -47,46 +62,48 @@ func (d *Deduplicator) Process(ctx context.Context, eventID string, fn func() er
 		if !ok {
 			return fmt.Errorf("outbox dedup: expected pgx.Tx, got %T", tx)
 		}
-		alreadyProcessed, err := d.exists(ctx, pgxTx, eventID)
-		if err != nil {
-			return err
-		}
-
-		if alreadyProcessed {
-			return nil
-		}
-
-		if err := fn(); err != nil {
-			return err
-		}
-
-		return d.record(ctx, pgxTx, eventID)
+		return d.processInTx(ctx, pgxTx, eventID, fn)
 	})
 }
 
-// exists checks whether an event_id has already been processed.
-// Uses SELECT ... FOR UPDATE to serialize concurrent checks for the same ID.
-func (d *Deduplicator) exists(ctx context.Context, tx pgx.Tx, eventID string) (bool, error) {
-	const query = `SELECT EXISTS(SELECT 1 FROM processed_outbox_messages WHERE event_id = $1 FOR UPDATE)`
-
-	var found bool
-	if err := tx.QueryRow(ctx, query, eventID).Scan(&found); err != nil {
-		return false, fmt.Errorf("outbox dedup: check exists: %w", err)
+// processInTx is the claim-and-run logic for a single transaction, split out
+// from Process so the exactly-once branch can be unit-tested with a fake
+// pgx.Tx (no pool / database required).
+func (d *Deduplicator) processInTx(ctx context.Context, tx pgx.Tx, eventID string, fn func() error) error {
+	claimed, err := d.claim(ctx, tx, eventID)
+	if err != nil {
+		return err
 	}
 
-	return found, nil
+	// Lost the claim: another deliverer already owns this event_id.
+	// Skip the handler — this is the already-processed path.
+	if !claimed {
+		return nil
+	}
+
+	// Won the claim: run the handler in the same tx so the side effects
+	// and the recorded event_id commit (or roll back) together.
+	return fn()
 }
 
-// record inserts a processed event_id.
-func (d *Deduplicator) record(ctx context.Context, tx pgx.Tx, eventID string) error {
+// claim attempts to take ownership of an event_id by inserting it. It returns
+// true if this transaction took the row (first-time delivery, fn should run)
+// and false if the row already existed (already processed, fn should be
+// skipped).
+//
+// The INSERT ... ON CONFLICT DO NOTHING is the atomic compare-and-set: the
+// primary-key constraint on event_id lets exactly one concurrent deliverer
+// take the row. RowsAffected reports whether this statement is the one that
+// took it.
+func (d *Deduplicator) claim(ctx context.Context, tx pgx.Tx, eventID string) (bool, error) {
 	const query = `INSERT INTO processed_outbox_messages (event_id, processed_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`
 
-	_, err := tx.Exec(ctx, query, eventID, time.Now().UTC())
+	tag, err := tx.Exec(ctx, query, eventID, time.Now().UTC())
 	if err != nil {
-		return fmt.Errorf("outbox dedup: record processed: %w", err)
+		return false, fmt.Errorf("outbox dedup: claim event: %w", err)
 	}
 
-	return nil
+	return tag.RowsAffected() == 1, nil
 }
 
 // CleanupProcessed deletes records older than retention to prevent table bloat.
