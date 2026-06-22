@@ -49,8 +49,6 @@ type Membership struct {
 // Memberships is the parsed list extracted from the gateway header.
 type Memberships []Membership
 
-const globalAdminRole = "admin"
-
 // Parse decodes the gateway's X-Team-Memberships header.
 // Format: "TENANT:<uuid>=MANAGER,USER:<uuid>=ADMIN".
 // Malformed entries are silently skipped.
@@ -119,9 +117,10 @@ func MembershipsFromContext(c echo.Context) (Memberships, bool) {
 }
 
 // CanAccess returns true when either
-//   (a) the caller carries the global "admin" role in X-User-Roles, or
-//   (b) the caller has a Membership matching (ownerType, ownerID) with Role
-//       rank >= minRole rank.
+//
+//	(a) the caller carries the global "admin" role in X-User-Roles, or
+//	(b) the caller has a Membership matching (ownerType, ownerID) with Role
+//	    rank >= minRole rank.
 //
 // Role rank is ADMIN(3) > MANAGER(2) > OPERATOR(1).
 func CanAccess(c echo.Context, ownerType OwnerType, ownerID string, minRole Role) bool {
@@ -153,14 +152,5 @@ func OwnerTypeFromBool(isTenant bool) OwnerType {
 }
 
 func hasGlobalAdmin(c echo.Context) bool {
-	raw, _ := c.Get(string(auth.ContextKeyUserRoles)).(string)
-	if raw == "" {
-		return false
-	}
-	for _, r := range strings.Split(raw, ",") {
-		if strings.TrimSpace(r) == globalAdminRole {
-			return true
-		}
-	}
-	return false
+	return CallerHasMinGlobalRole(c, GlobalRoleAdmin)
 }

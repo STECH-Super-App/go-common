@@ -3,7 +3,6 @@ package middleware
 import (
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
 	"github.com/STECH-Super-App/go-common/pkg/authz"
@@ -167,27 +166,45 @@ func PhoneFromContext(c echo.Context) (string, bool) {
 	return val, ok
 }
 
-// AdminMiddleware rejects requests that do not carry the "admin" role.
-// Must be applied after AuthMiddleware so that context values are populated.
-func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		rolesStr, ok := UserRolesFromContext(c)
-		if !ok {
-			return response.JSONError(c, commonErrors.New(http.StatusForbidden).
-				Reason("COMMON_ADMIN_REQUIRED").
-				Message("admin role required").
-				Build())
-		}
+// globalRoleDenial maps a required global role to the typed 403 it raises when
+// the caller falls short. Kept beside RequireGlobalRole so the reason codes —
+// canonical i18n keys the frontend renders — live in one place.
+var globalRoleDenial = map[authz.GlobalRole]struct {
+	Reason  string
+	Message string
+}{
+	authz.GlobalRoleAdmin:        {"COMMON_ADMIN_REQUIRED", "admin role required"},
+	authz.GlobalRoleSupportAgent: {"COMMON_SUPPORT_AGENT_REQUIRED", "support agent role required"},
+}
 
-		for _, role := range strings.Split(rolesStr, ",") {
-			if strings.TrimSpace(role) == "admin" {
+// RequireGlobalRole returns middleware that admits callers whose global roles
+// meet min in the hierarchy admin > support_agent > user — a higher role
+// satisfies a lower requirement (admin satisfies a support_agent gate). It must
+// run after AuthMiddleware so the roles are in context. On failure it returns
+// the typed 403 registered for min (default COMMON_ADMIN_REQUIRED, fail-closed).
+func RequireGlobalRole(min authz.GlobalRole) echo.MiddlewareFunc {
+	denial, ok := globalRoleDenial[min]
+	if !ok {
+		denial = globalRoleDenial[authz.GlobalRoleAdmin]
+	}
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			rolesStr, _ := UserRolesFromContext(c)
+			if authz.HasMinGlobalRole(rolesStr, min) {
 				return next(c)
 			}
+			return response.JSONError(c, commonErrors.New(http.StatusForbidden).
+				Reason(denial.Reason).
+				Message(denial.Message).
+				Build())
 		}
-
-		return response.JSONError(c, commonErrors.New(http.StatusForbidden).
-			Reason("COMMON_ADMIN_REQUIRED").
-			Message("admin role required").
-			Build())
 	}
+}
+
+// AdminMiddleware admits only callers carrying the global admin role. Retained
+// as the canonical name mounted across services; it now delegates to
+// RequireGlobalRole(admin), preserving the COMMON_ADMIN_REQUIRED reason. Must be
+// applied after AuthMiddleware.
+func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return RequireGlobalRole(authz.GlobalRoleAdmin)(next)
 }
