@@ -79,7 +79,10 @@ func WithLogger(l *zap.Logger) DispatcherOption {
 }
 
 // NewDispatcher constructs a Dispatcher. reader and dlq are required — no code
-// path drops a failed message on the floor.
+// path drops a failed message on the floor: a failed message is forwarded to
+// the retry topic (when WithRetry is set and budget remains) or otherwise
+// dead-lettered, and if that forwarding write fails the source offset is left
+// uncommitted so Kafka redelivers.
 func NewDispatcher(reader Reader, dlq Writer, opts ...DispatcherOption) *Dispatcher {
 	d := &Dispatcher{
 		reader:     reader,
@@ -182,7 +185,16 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) {
 	}
 
 	reason := classify(err)
-	d.routeFailure(ctx, msg, h, err, reason)
+	// If the failure-path write (retry or DLQ) itself fails, do NOT commit the
+	// offset — leave the message uncommitted so Kafka redelivers it instead of
+	// losing it. The success path above commits unchanged.
+	if werr := d.routeFailure(ctx, msg, h, err, reason); werr != nil {
+		d.log.Error("failure-path write failed; leaving offset uncommitted for redelivery",
+			zap.String("event_id", h.EventID()),
+			zap.String("dlq_reason", string(reason)),
+			zap.Error(werr))
+		return
+	}
 	_ = d.reader.CommitMessages(ctx, msg)
 }
 
@@ -208,23 +220,40 @@ func classify(err error) dlqReason {
 	}
 }
 
-func (d *Dispatcher) routeFailure(ctx context.Context, msg kafka.Message, h envelope.Headers, err error, reason dlqReason) {
+// routeFailure forwards a failed message to its retry or DLQ destination and
+// returns the write error, if any. A non-nil return tells handleOne to skip the
+// offset commit so Kafka redelivers the message rather than losing it.
+//
+// Poison/unmarshal/panic failures (non-maxRetries reasons) are never retried —
+// they go straight to the DLQ. For retryable (reasonMaxRetries) failures: if a
+// retry writer is configured and the budget is not exhausted, the message is
+// forwarded to the retry topic with an incremented x-retry-count; otherwise it
+// goes to the DLQ. There is no path that drops a failed message on the floor —
+// every failure is either retried or dead-lettered.
+func (d *Dispatcher) routeFailure(ctx context.Context, msg kafka.Message, h envelope.Headers, err error, reason dlqReason) error {
 	if reason != reasonMaxRetries {
-		d.writeDLQ(ctx, msg, err, reason)
-		return
+		return d.writeDLQ(ctx, msg, err, reason)
 	}
 	retryCount := h.RetryCount()
-	if retryCount >= d.maxRetries {
-		d.writeDLQ(ctx, msg, err, reasonMaxRetries)
-		return
+	if retryCount >= d.maxRetries || d.retry == nil {
+		// Budget exhausted, or no retry writer configured: dead-letter instead
+		// of dropping. DLQ topics exist for every consumer group.
+		return d.writeDLQ(ctx, msg, err, reasonMaxRetries)
 	}
-	if d.retry != nil {
-		next := kafkaCloneWithHeader(msg, envelope.HeaderRetryCount, fmt.Sprintf("%d", retryCount+1))
-		_ = d.retry.WriteMessages(ctx, next)
+	next := kafkaCloneWithHeader(msg, envelope.HeaderRetryCount, fmt.Sprintf("%d", retryCount+1))
+	if werr := d.retry.WriteMessages(ctx, next); werr != nil {
+		d.log.Error("retry write failed",
+			zap.String("event_id", h.EventID()),
+			zap.Error(werr))
+		return werr
 	}
+	return nil
 }
 
-func (d *Dispatcher) writeDLQ(ctx context.Context, src kafka.Message, err error, reason dlqReason) {
+// writeDLQ publishes the failed message to the DLQ topic with diagnostic
+// headers and returns the write error, if any. A non-nil return propagates up
+// to handleOne so the source offset is left uncommitted for redelivery.
+func (d *Dispatcher) writeDLQ(ctx context.Context, src kafka.Message, err error, reason dlqReason) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	headers := make([]kafka.Header, 0, len(src.Headers)+5)
 	headers = append(headers, src.Headers...)
@@ -263,7 +292,9 @@ func (d *Dispatcher) writeDLQ(ctx context.Context, src kafka.Message, err error,
 		d.log.Error("dlq write failed",
 			zap.String("event_id", string(findHeader(src.Headers, envelope.HeaderEventID))),
 			zap.Error(werr))
+		return werr
 	}
+	return nil
 }
 
 func truncate(s string, n int) string {
