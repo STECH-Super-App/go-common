@@ -10,7 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-func runGate(t *testing.T, roles string, min authz.GlobalRole) int {
+func runGate(t *testing.T, roles string, minRole authz.GlobalRole) int {
 	t.Helper()
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -18,7 +18,7 @@ func runGate(t *testing.T, roles string, min authz.GlobalRole) int {
 	req.Header.Set(auth.HeaderUserRoles, roles)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	h := AuthMiddleware(RequireGlobalRole(min)(func(c echo.Context) error {
+	h := AuthMiddleware(RequireGlobalRole(minRole)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	}))
 	_ = h(c)
