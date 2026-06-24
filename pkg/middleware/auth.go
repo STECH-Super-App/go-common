@@ -178,19 +178,19 @@ var globalRoleDenial = map[authz.GlobalRole]struct {
 }
 
 // RequireGlobalRole returns middleware that admits callers whose global roles
-// meet min in the hierarchy admin > support_agent > user — a higher role
+// meet minRole in the hierarchy admin > support_agent > user — a higher role
 // satisfies a lower requirement (admin satisfies a support_agent gate). It must
 // run after AuthMiddleware so the roles are in context. On failure it returns
-// the typed 403 registered for min (default COMMON_ADMIN_REQUIRED, fail-closed).
-func RequireGlobalRole(min authz.GlobalRole) echo.MiddlewareFunc {
-	denial, ok := globalRoleDenial[min]
+// the typed 403 registered for minRole (default COMMON_ADMIN_REQUIRED, fail-closed).
+func RequireGlobalRole(minRole authz.GlobalRole) echo.MiddlewareFunc {
+	denial, ok := globalRoleDenial[minRole]
 	if !ok {
 		denial = globalRoleDenial[authz.GlobalRoleAdmin]
 	}
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			rolesStr, _ := UserRolesFromContext(c)
-			if authz.HasMinGlobalRole(rolesStr, min) {
+			if authz.HasMinGlobalRole(rolesStr, minRole) {
 				return next(c)
 			}
 			return response.JSONError(c, commonErrors.New(http.StatusForbidden).
