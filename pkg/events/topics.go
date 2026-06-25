@@ -27,6 +27,7 @@ var wireNames = map[eventsv1.Topic]string{
 	eventsv1.Topic_TOPIC_MACHINERY_OPERATOR_EVENTS:       "machinery.operator.events",
 	eventsv1.Topic_TOPIC_CHAT_EVENTS:                     "chat.events",
 	eventsv1.Topic_TOPIC_GEO_REGION_EVENTS:               "geo.region.events",
+	eventsv1.Topic_TOPIC_RENT_EVENTS:                     "rent.events",
 }
 
 // TopicName returns the canonical wire name for a base topic.

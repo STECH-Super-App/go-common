@@ -24,6 +24,7 @@ func TestTopicName(t *testing.T) {
 		{eventsv1.Topic_TOPIC_MACHINERY_OPERATOR_EVENTS, "machinery.operator.events"},
 		{eventsv1.Topic_TOPIC_CHAT_EVENTS, "chat.events"},
 		{eventsv1.Topic_TOPIC_GEO_REGION_EVENTS, "geo.region.events"},
+		{eventsv1.Topic_TOPIC_RENT_EVENTS, "rent.events"},
 	}
 	for _, c := range cases {
 		if got := events.TopicName(c.in); got != c.want {
