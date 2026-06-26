@@ -1,7 +1,8 @@
 // Package i18n wraps nicksnyder/go-i18n/v2 with a small, opinionated API
 // for STECH services. It loads translations from an fs.FS containing
-// TOML files named <locale>.toml (e.g., en.toml, ru.toml, kk.toml),
-// resolves keys with locale-fallback semantics, and emits warn logs
+// TOML or JSON files named <locale>.toml / <locale>.json (e.g., en.json,
+// ru.json, kk.json), resolves keys with locale-fallback semantics, and
+// emits warn logs
 // when a target-locale translation is missing but a default-locale one
 // exists.
 //
@@ -21,6 +22,7 @@
 package i18n
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -42,12 +44,13 @@ type Bundle struct {
 	def     language.Tag
 }
 
-// LoadBundle reads every <locale>.toml from fsys and returns a Bundle with
-// the given default locale. Default is used as the final fallback when a
-// requested locale's translation is missing.
+// LoadBundle reads every <locale>.toml / <locale>.json from fsys and returns
+// a Bundle with the given default locale. Default is used as the final
+// fallback when a requested locale's translation is missing.
 func LoadBundle(fsys fs.FS, def language.Tag) (*Bundle, error) {
 	inner := goi18n.NewBundle(def)
 	inner.RegisterUnmarshalFunc("toml", toml.Unmarshal)
+	inner.RegisterUnmarshalFunc("json", json.Unmarshal)
 
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
@@ -56,7 +59,11 @@ func LoadBundle(fsys fs.FS, def language.Tag) (*Bundle, error) {
 
 	var tags []language.Tag
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+		if e.IsDir() {
+			continue
+		}
+		ext := path.Ext(e.Name()) // ".toml" or ".json"
+		if ext != ".toml" && ext != ".json" {
 			continue
 		}
 		data, err := fs.ReadFile(fsys, e.Name())
@@ -66,7 +73,7 @@ func LoadBundle(fsys fs.FS, def language.Tag) (*Bundle, error) {
 		if _, err := inner.ParseMessageFileBytes(data, e.Name()); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
-		base := strings.TrimSuffix(path.Base(e.Name()), ".toml")
+		base := strings.TrimSuffix(path.Base(e.Name()), ext)
 		tag, err := language.Parse(base)
 		if err != nil {
 			return nil, fmt.Errorf("parse locale %q: %w", base, err)

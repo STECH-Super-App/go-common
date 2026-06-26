@@ -3,17 +3,17 @@ on:
   push:
     branches: [main]
     paths:
-      - 'pkg/notifyrender/translations/en.toml'
-
+      - 'pkg/notifyrender/translations/en.json'
+      - 'pkg/i18n/translations/en.json'
+  workflow_dispatch:
 jobs:
   push:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Tolgee CLI
-        run: npm install -g @tolgee/cli
       - name: Push en source to Tolgee
-        env:
-          TOLGEE_API_URL: ${{ secrets.TOLGEE_API_URL }}
-          TOLGEE_API_KEY_NOTIFICATIONS: ${{ secrets.TOLGEE_API_KEY_NOTIFICATIONS }}
-        run: tolgee push --force-mode KEEP
+        uses: tolgee/github-action@v2
+        with:
+          api-url: ${{ secrets.TOLGEE_API_URL }}
+          api-key: ${{ secrets.TOLGEE_API_KEY }}
+          command: push
