@@ -1,14 +1,18 @@
 {
   "$schema": "https://json.schemastore.org/tolgeerc",
-  "projectId": 0,
-  "apiUrl": "${TOLGEE_API_URL}",
-  "apiKey": "${TOLGEE_API_KEY_NOTIFICATIONS}",
-  "format": "TOML",
-  "filesTemplate": "pkg/notifyrender/translations/{languageTag}.toml",
-  "namespaces": [""],
-  "languageMapping": {
-    "en": "en",
-    "ru": "ru",
-    "kk": "kk"
+  "projectId": 2,
+  "format": "JSON_TOLGEE",
+  "push": {
+    "files": [
+      { "path": "pkg/notifyrender/translations/en.json", "language": "en", "namespace": "notifyrender" },
+      { "path": "pkg/i18n/translations/en.json", "language": "en", "namespace": "i18n" }
+    ],
+    "forceMode": "OVERRIDE"
+  },
+  "pull": {
+    "path": ".",
+    "languages": ["ru", "kk"],
+    "namespaces": ["notifyrender", "i18n"],
+    "fileStructureTemplate": "pkg/{namespace}/translations/{languageTag}.json"
   }
 }

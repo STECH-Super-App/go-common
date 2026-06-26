@@ -1,6 +1,7 @@
 package notifyrender
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"regexp"
@@ -37,9 +38,7 @@ func assertReason(t *testing.T, err error, want string) {
 func TestRenderEveryTypeEveryLocale(t *testing.T) {
 	locales := []string{"en", "ru", "kk"}
 	for nt := range typeKey {
-		nt := nt
 		for _, loc := range locales {
-			loc := loc
 			t.Run(nt.String()+"_"+loc, func(t *testing.T) {
 				title, body, err := Render(nt, validParamsFor(nt), loc)
 				if err != nil {
@@ -248,7 +247,6 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			params, err := ExtractParams(tc.env)
 			if err != nil {
@@ -370,23 +368,26 @@ func TestExtractParams_SendPlatformMessage(t *testing.T) {
 	assertReason(t, rerr, ReasonUnknownType)
 }
 
-// TestCatalogVsTemplateConsistency parses each locale's TOML file and
+// TestCatalogVsTemplateConsistency parses each locale's JSON file and
 // verifies every {{.field}} placeholder is in requiredParams[T] for the
 // matching type, and vice versa.
 func TestCatalogVsTemplateConsistency(t *testing.T) {
 	placeholderRe := regexp.MustCompile(`\{\{\.([a-z_]+)\}\}`)
 	for _, loc := range []string{"en", "ru", "kk"} {
-		loc := loc
 		t.Run(loc, func(t *testing.T) {
 			// loc is a hard-coded literal from the slice above, not user input.
-			data, err := os.ReadFile("translations/" + loc + ".toml") // #nosec G304
+			data, err := os.ReadFile("translations/" + loc + ".json") // #nosec G304
 			if err != nil {
 				t.Fatalf("read translations: %v", err)
 			}
-			content := string(data)
+			// catalog maps each message key to its {title, body} fields.
+			var catalog map[string]map[string]string
+			if err := json.Unmarshal(data, &catalog); err != nil {
+				t.Fatalf("parse translations: %v", err)
+			}
 			for nt, key := range typeKey {
 				placeholdersInTemplate := map[string]bool{}
-				section := extractSection(content, key)
+				section := catalog[key]["title"] + " " + catalog[key]["body"]
 				for _, m := range placeholderRe.FindAllStringSubmatch(section, -1) {
 					placeholdersInTemplate[m[1]] = true
 				}
@@ -397,32 +398,17 @@ func TestCatalogVsTemplateConsistency(t *testing.T) {
 				}
 				for p := range placeholdersInTemplate {
 					if !requiredSet[p] {
-						t.Errorf("%s/%s: placeholder %q in TOML but not in requiredParams",
+						t.Errorf("%s/%s: placeholder %q in JSON but not in requiredParams",
 							loc, key, p)
 					}
 				}
 				for r := range requiredSet {
 					if !placeholdersInTemplate[r] {
-						t.Errorf("%s/%s: required param %q not used in TOML placeholders",
+						t.Errorf("%s/%s: required param %q not used in JSON placeholders",
 							loc, key, r)
 					}
 				}
 			}
 		})
 	}
-}
-
-// extractSection returns the lines belonging to a single [<section>] block.
-func extractSection(content, section string) string {
-	marker := "[" + section + "]"
-	idx := strings.Index(content, marker)
-	if idx < 0 {
-		return ""
-	}
-	rest := content[idx:]
-	nextHeader := regexp.MustCompile(`\n\[[a-z_]+\]`).FindStringIndex(rest[1:])
-	if nextHeader == nil {
-		return rest
-	}
-	return rest[:nextHeader[0]+1]
 }

@@ -2,20 +2,21 @@ name: i18n-pull
 on:
   schedule:
     - cron: '0 4 * * *'
-  workflow_dispatch: {}
-
+  workflow_dispatch:
 jobs:
   pull:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - name: Install Tolgee CLI
-        run: npm install -g @tolgee/cli
-      - name: Pull translations
-        env:
-          TOLGEE_API_URL: ${{ secrets.TOLGEE_API_URL }}
-          TOLGEE_API_KEY_NOTIFICATIONS: ${{ secrets.TOLGEE_API_KEY_NOTIFICATIONS }}
-        run: tolgee pull
+      - name: Pull translations from Tolgee
+        uses: tolgee/github-action@v2
+        with:
+          api-url: ${{ secrets.TOLGEE_API_URL }}
+          api-key: ${{ secrets.TOLGEE_API_KEY }}
+          command: pull
       - name: Open PR if changes
         uses: peter-evans/create-pull-request@v6
         with:
@@ -23,6 +24,9 @@ jobs:
           commit-message: "chore(i18n): sync translations from Tolgee"
           title: "chore(i18n): sync translations from Tolgee"
           body: "Automated PR from i18n-pull.yml — review and merge."
+          delete-branch: true
           add-paths: |
-            pkg/notifyrender/translations/ru.toml
-            pkg/notifyrender/translations/kk.toml
+            pkg/notifyrender/translations/ru.json
+            pkg/notifyrender/translations/kk.json
+            pkg/i18n/translations/ru.json
+            pkg/i18n/translations/kk.json
