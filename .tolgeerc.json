@@ -11,7 +11,7 @@
   },
   "pull": {
     "path": ".",
-    "languages": ["ru", "kk"],
+    "languages": ["ru"],
     "namespaces": ["notifyrender", "i18n"],
     "fileStructureTemplate": "pkg/{namespace}/translations/{languageTag}.json"
   }

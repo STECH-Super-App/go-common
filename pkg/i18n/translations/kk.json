@@ -1,9 +1,0 @@
-{
-  "error": {
-    "unauthorized": "Авторизацияланбаған",
-    "internal": "Ішкі сервер қатесі",
-    "validation_failed": "Тексеру қатесі",
-    "not_found": "Табылмады",
-    "forbidden": "Тыйым салынған"
-  }
-}

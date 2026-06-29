@@ -83,9 +83,9 @@ Wire format for errors:
 Setting `LOG_EMPTY_REASON_WARN=true` makes `JSONError` warn-log every `*AppError` it serializes with an empty `Reason` — useful for catching throw sites that haven't been migrated to the reason-tagged builder.
 
 ### `pkg/i18n`
-Server-side translation wrapper around `nicksnyder/go-i18n/v2`. Loads TOML translation files from an `fs.FS`, resolves keys with locale-fallback semantics, and emits warn logs when a target-locale translation is missing but the default-locale one exists.
+Server-side translation wrapper around `nicksnyder/go-i18n/v2`. Loads JSON (or TOML) translation files from an `fs.FS`, resolves keys with locale-fallback semantics, and emits warn logs when a target-locale translation is missing but the default-locale one exists.
 
-Translation files are named `<locale>.toml` (e.g., `en.toml`, `ru.toml`, `kk.toml`). Locale matching uses `golang.org/x/text/language`: `kk-KZ` resolves to `kk` if `kk` is loaded.
+Translation files are named `<locale>.json` (e.g., `en.json`, `ru.json`). Locale matching uses `golang.org/x/text/language`: `ru-RU` resolves to `ru` if `ru` is loaded.
 
 ```go
 import (
@@ -104,7 +104,7 @@ func newBundle() (*commoni18n.Bundle, error) {
     return commoni18n.LoadBundle(sub, language.English)
 }
 
-str, err := bundle.Resolve("kk", "tenant.transfer.expired_sms", map[string]any{
+str, err := bundle.Resolve("ru", "tenant.transfer.expired_sms", map[string]any{
     "ExpiryTime": t.ExpiryTime.Format(time.RFC3339),
 })
 ```

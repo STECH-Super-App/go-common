@@ -27,6 +27,4 @@ jobs:
           delete-branch: true
           add-paths: |
             pkg/notifyrender/translations/ru.json
-            pkg/notifyrender/translations/kk.json
             pkg/i18n/translations/ru.json
-            pkg/i18n/translations/kk.json
