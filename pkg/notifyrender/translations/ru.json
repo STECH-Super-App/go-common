@@ -1,47 +1,47 @@
 {
   "chat_message": {
-    "title": "TODO_RU chat_message.title {{.sender_name}}",
-    "body": "TODO_RU chat_message.body {{.preview}}"
+    "title": "Новое сообщение от {{.sender_name}}",
+    "body": "{{.preview}}"
   },
   "listing_approved": {
-    "title": "TODO_RU listing_approved.title",
-    "body": "TODO_RU listing_approved.body {{.listing_title}}"
+    "title": "Объявление одобрено",
+    "body": "Ваше объявление «{{.listing_title}}» опубликовано."
   },
   "listing_rejected": {
-    "title": "TODO_RU listing_rejected.title",
-    "body": "TODO_RU listing_rejected.body {{.listing_title}} {{.reason}}"
+    "title": "Объявление отклонено",
+    "body": "Ваше объявление «{{.listing_title}}» отклонено: {{.reason}}"
   },
   "listing_unpublished": {
-    "title": "TODO_RU listing_unpublished.title",
-    "body": "TODO_RU listing_unpublished.body {{.listing_title}} {{.reason}}"
+    "title": "Объявление снято с публикации",
+    "body": "Ваше объявление «{{.listing_title}}» снято с публикации: {{.reason}}"
   },
   "favorite_price_changed": {
-    "title": "TODO_RU favorite_price_changed.title",
-    "body": "TODO_RU favorite_price_changed.body {{.listing_title}} {{.old_price}} {{.new_price}} {{.currency}}"
+    "title": "Цена изменилась",
+    "body": "Цена «{{.listing_title}}» изменилась с {{.old_price}} на {{.new_price}} {{.currency}}."
   },
   "favorite_listing_removed": {
-    "title": "TODO_RU favorite_listing_removed.title",
-    "body": "TODO_RU favorite_listing_removed.body {{.listing_title}}"
+    "title": "Избранное объявление удалено",
+    "body": "«{{.listing_title}}» больше не доступно."
   },
   "team_invite_tenant_manager": {
-    "title": "TODO_RU team_invite_tenant_manager.title {{.tenant_name}}",
-    "body": "TODO_RU team_invite_tenant_manager.body {{.inviter_name}} {{.team_name}}"
+    "title": "Приглашение в {{.tenant_name}}",
+    "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли менеджера."
   },
   "team_invite_tenant_operator": {
-    "title": "TODO_RU team_invite_tenant_operator.title {{.tenant_name}}",
-    "body": "TODO_RU team_invite_tenant_operator.body {{.inviter_name}} {{.team_name}}"
+    "title": "Приглашение в {{.tenant_name}}",
+    "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли оператора."
   },
   "team_invite_user_manager": {
-    "title": "TODO_RU team_invite_user_manager.title",
-    "body": "TODO_RU team_invite_user_manager.body {{.inviter_name}} {{.team_name}}"
+    "title": "Приглашение в команду",
+    "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли менеджера."
   },
   "team_invite_user_operator": {
-    "title": "TODO_RU team_invite_user_operator.title",
-    "body": "TODO_RU team_invite_user_operator.body {{.inviter_name}} {{.team_name}}"
+    "title": "Приглашение в команду",
+    "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли оператора."
   },
   "tenant_verified": {
-    "title": "TODO_RU tenant_verified.title",
-    "body": "TODO_RU tenant_verified.body {{.organization_name}}"
+    "title": "Организация верифицирована",
+    "body": "Организация {{.organization_name}} верифицирована."
   },
   "operator_assigned": {
     "title": "Вам назначена техника",
@@ -52,47 +52,47 @@
     "body": "{{.operator_name}}, вы сняты с управления техникой."
   },
   "wallet_operation_requested": {
-    "title": "TODO_RU wallet_operation_requested.title",
-    "body": "TODO_RU wallet_operation_requested.body {{.operation_kind}} {{.amount}} {{.currency}}"
+    "title": "Запрошена операция по кошельку",
+    "body": "Запрошена операция {{.operation_kind}} на сумму {{.amount}} {{.currency}}."
   },
   "wallet_operation_decided": {
-    "title": "TODO_RU wallet_operation_decided.title {{.decision}}",
-    "body": "TODO_RU wallet_operation_decided.body {{.amount}} {{.currency}} {{.decision}}"
+    "title": "Операция по кошельку: {{.decision}}",
+    "body": "Ваша операция по кошельку на сумму {{.amount}} {{.currency}}: {{.decision}}."
   },
   "tenant_rejected": {
-    "title": "TODO_RU tenant_rejected.title",
-    "body": "TODO_RU tenant_rejected.body {{.reason}}"
+    "title": "Организация отклонена",
+    "body": "Ваша организация отклонена: {{.reason}}"
   },
   "invite_accepted": {
-    "title": "TODO_RU invite_accepted.title",
-    "body": "TODO_RU invite_accepted.body {{.phone}} {{.role}}"
+    "title": "Приглашение принято",
+    "body": "{{.phone}} принял ваше приглашение в роли {{.role}}."
   },
   "invite_declined": {
-    "title": "TODO_RU invite_declined.title",
-    "body": "TODO_RU invite_declined.body {{.phone}}"
+    "title": "Приглашение отклонено",
+    "body": "{{.phone}} отклонил ваше приглашение."
   },
   "admin_transferred_new": {
-    "title": "TODO_RU admin_transferred_new.title",
-    "body": "TODO_RU admin_transferred_new.body {{.team_name}}"
+    "title": "Теперь вы администратор команды",
+    "body": "Вы назначены администратором команды {{.team_name}}."
   },
   "admin_transferred_old": {
-    "title": "TODO_RU admin_transferred_old.title",
-    "body": "TODO_RU admin_transferred_old.body {{.team_name}}"
+    "title": "Права администратора переданы",
+    "body": "Вы передали права администратора команды {{.team_name}}."
   },
   "member_blocked": {
-    "title": "TODO_RU member_blocked.title",
-    "body": "TODO_RU member_blocked.body {{.team_name}}"
+    "title": "Доступ временно ограничен",
+    "body": "Ваш доступ к команде {{.team_name}} временно ограничен."
   },
   "member_unblocked": {
-    "title": "TODO_RU member_unblocked.title",
-    "body": "TODO_RU member_unblocked.body {{.team_name}}"
+    "title": "Доступ восстановлен",
+    "body": "Ваш доступ к команде {{.team_name}} восстановлен."
   },
   "member_removed": {
-    "title": "TODO_RU member_removed.title",
-    "body": "TODO_RU member_removed.body {{.team_name}}"
+    "title": "Удалены из команды",
+    "body": "Вы удалены из команды {{.team_name}}."
   },
   "team_member_removed_admin": {
-    "title": "TODO_RU team_member_removed_admin.title {{.removed_member_name}}",
-    "body": "TODO_RU team_member_removed_admin.body {{.removed_member_name}} {{.team_name}}"
+    "title": "{{.removed_member_name}} покинул команду",
+    "body": "{{.removed_member_name}} больше не состоит в команде {{.team_name}}."
   }
 }

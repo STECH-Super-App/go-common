@@ -36,7 +36,7 @@ func assertReason(t *testing.T, err error, want string) {
 }
 
 func TestRenderEveryTypeEveryLocale(t *testing.T) {
-	locales := []string{"en", "ru", "kk"}
+	locales := []string{"en", "ru"}
 	for nt := range typeKey {
 		for _, loc := range locales {
 			t.Run(nt.String()+"_"+loc, func(t *testing.T) {
@@ -127,7 +127,7 @@ func TestExtractParams_SendListingUnpublishedRenders(t *testing.T) {
 		t.Fatalf("ExtractParams returned err: %v", err)
 	}
 	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED
-	for _, loc := range []string{"en", "ru", "kk"} {
+	for _, loc := range []string{"en", "ru"} {
 		title, body, err := Render(nt, params, loc)
 		if err != nil {
 			t.Fatalf("Render(%s) err: %v", loc, err)
@@ -260,7 +260,7 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 					t.Errorf("params[%q] = %q, want %q", k, params[k], v)
 				}
 			}
-			for _, loc := range []string{"en", "ru", "kk"} {
+			for _, loc := range []string{"en", "ru"} {
 				title, body, err := Render(tc.nt, params, loc)
 				if err != nil {
 					t.Fatalf("Render(%s) err: %v", loc, err)
@@ -373,7 +373,7 @@ func TestExtractParams_SendPlatformMessage(t *testing.T) {
 // matching type, and vice versa.
 func TestCatalogVsTemplateConsistency(t *testing.T) {
 	placeholderRe := regexp.MustCompile(`\{\{\.([a-z_]+)\}\}`)
-	for _, loc := range []string{"en", "ru", "kk"} {
+	for _, loc := range []string{"en", "ru"} {
 		t.Run(loc, func(t *testing.T) {
 			// loc is a hard-coded literal from the slice above, not user input.
 			data, err := os.ReadFile("translations/" + loc + ".json") // #nosec G304

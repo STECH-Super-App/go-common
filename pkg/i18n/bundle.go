@@ -1,7 +1,7 @@
 // Package i18n wraps nicksnyder/go-i18n/v2 with a small, opinionated API
 // for STECH services. It loads translations from an fs.FS containing
 // TOML or JSON files named <locale>.toml / <locale>.json (e.g., en.json,
-// ru.json, kk.json), resolves keys with locale-fallback semantics, and
+// ru.json), resolves keys with locale-fallback semantics, and
 // emits warn logs
 // when a target-locale translation is missing but a default-locale one
 // exists.
@@ -16,7 +16,7 @@
 //	    return i18n.LoadBundle(sub, language.English)
 //	}
 //
-//	str, err := bundle.Resolve("kk", "tenant.transfer.expired_sms", map[string]any{
+//	str, err := bundle.Resolve("ru", "tenant.transfer.expired_sms", map[string]any{
 //	    "ExpiryTime": t.ExpiryTime.Format(time.RFC3339),
 //	})
 package i18n

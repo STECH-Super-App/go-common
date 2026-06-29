@@ -64,17 +64,17 @@ func TestResolveMissingKeyReturnsErrKeyNotFound(t *testing.T) {
 }
 
 func TestResolveLocaleAliasMatching(t *testing.T) {
-	// kk-KZ should resolve to kk (Kazakh, ISO 639-1).
+	// ru-RU should resolve to ru (region subtag stripped).
 	b, err := commoni18n.LoadBundle(subFS(t), language.English)
 	if err != nil {
 		t.Fatalf("LoadBundle: %v", err)
 	}
-	got, err := b.Resolve("kk-KZ", "hello", map[string]any{"Name": "Әлем"})
+	got, err := b.Resolve("ru-RU", "hello", map[string]any{"Name": "Мир"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if got != "Сәлем, Әлем" {
-		t.Errorf("kk-KZ hello: want 'Сәлем, Әлем', got %q", got)
+	if got != "Привет, Мир" {
+		t.Errorf("ru-RU hello: want 'Привет, Мир', got %q", got)
 	}
 }
 
@@ -88,7 +88,6 @@ func TestSharedBundleHasErrorKeysInAllLocales(t *testing.T) {
 	}{
 		{"en", "Unauthorized"},
 		{"ru", "Не авторизован"},
-		{"kk", "Авторизацияланбаған"},
 	}
 	for _, tc := range cases {
 		got, err := b.Resolve(tc.locale, "error.unauthorized", nil)
