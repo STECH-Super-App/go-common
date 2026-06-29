@@ -18,3 +18,14 @@ for locale in ru; do
     fi
 done
 echo "OK: all locales have matching keys"
+
+# TODO_ guard: no untranslated placeholders may ship. Every translation file
+# is //go:embed-compiled into the binary, so a stray TODO_RU/TODO_KK would be
+# rendered to users verbatim (ru is the default dispatch locale).
+todo_hits=$(grep -rln 'TODO_' pkg/notifyrender/translations/ pkg/i18n/translations/ 2>/dev/null || true)
+if [[ -n "$todo_hits" ]]; then
+    echo "FAIL: untranslated TODO_ placeholders found:"
+    grep -rn 'TODO_' pkg/notifyrender/translations/ pkg/i18n/translations/ 2>/dev/null | sed 's/^/  /'
+    exit 1
+fi
+echo "OK: no TODO_ placeholders"
