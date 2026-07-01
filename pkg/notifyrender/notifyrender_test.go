@@ -1,17 +1,100 @@
 package notifyrender
 
 import (
-	"encoding/json"
 	"errors"
-	"os"
-	"regexp"
 	"strings"
 	"testing"
+	"testing/fstest"
+
+	"golang.org/x/text/language"
 
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
 
 	commonerr "github.com/STECH-Super-App/go-common/pkg/errors"
+	"github.com/STECH-Super-App/go-common/pkg/i18n"
 )
+
+// testRenderer builds a Renderer backed by a minimal in-memory bundle that
+// only contains the listing_approved template. Use for error-path tests and
+// tests that only need one type resolved.
+func testRenderer(t *testing.T) *Renderer {
+	t.Helper()
+	fsys := fstest.MapFS{
+		"en.json": {Data: []byte(`{
+			"listing_approved": {"title": "Listing approved", "body": "Your listing '{{.listing_title}}' is now live."}
+		}`)},
+	}
+	b, err := i18n.LoadBundle(fsys, language.English)
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	return NewRenderer(b)
+}
+
+// testRendererFull builds a Renderer with the complete catalog in both en and
+// ru locales. Use for tests that iterate typeKey or render multiple types.
+func testRendererFull(t *testing.T) *Renderer {
+	t.Helper()
+	fsys := fstest.MapFS{
+		"en.json": {Data: []byte(`{
+  "chat_message": {"title": "New message from {{.sender_name}}", "body": "{{.preview}}"},
+  "listing_approved": {"title": "Listing approved", "body": "Your listing '{{.listing_title}}' is now live."},
+  "listing_rejected": {"title": "Listing rejected", "body": "Your listing '{{.listing_title}}' was rejected: {{.reason}}"},
+  "listing_unpublished": {"title": "Listing unpublished", "body": "Your listing '{{.listing_title}}' was unpublished: {{.reason}}"},
+  "favorite_price_changed": {"title": "Price changed", "body": "The price of '{{.listing_title}}' changed from {{.old_price}} to {{.new_price}} {{.currency}}."},
+  "favorite_listing_removed": {"title": "Favorite listing removed", "body": "'{{.listing_title}}' is no longer available."},
+  "team_invite_tenant_manager": {"title": "Invitation to join {{.tenant_name}}", "body": "{{.inviter_name}} invited you to join {{.team_name}} as a manager."},
+  "team_invite_tenant_operator": {"title": "Invitation to join {{.tenant_name}}", "body": "{{.inviter_name}} invited you to join {{.team_name}} as an operator."},
+  "team_invite_user_manager": {"title": "Team invitation", "body": "{{.inviter_name}} invited you to {{.team_name}} as a manager."},
+  "team_invite_user_operator": {"title": "Team invitation", "body": "{{.inviter_name}} invited you to {{.team_name}} as an operator."},
+  "tenant_verified": {"title": "Organization verified", "body": "{{.organization_name}} has been verified."},
+  "operator_assigned": {"title": "Operator assigned", "body": "{{.operator_name}} has been assigned."},
+  "operator_released": {"title": "Operator released", "body": "{{.operator_name}} has been released."},
+  "wallet_operation_requested": {"title": "Wallet operation requested", "body": "A {{.operation_kind}} of {{.amount}} {{.currency}} has been requested."},
+  "wallet_operation_decided": {"title": "Wallet operation {{.decision}}", "body": "Your wallet operation for {{.amount}} {{.currency}} was {{.decision}}."},
+  "tenant_rejected": {"title": "Organization rejected", "body": "Your organization was rejected: {{.reason}}"},
+  "invite_accepted": {"title": "Invitation accepted", "body": "{{.phone}} accepted your invitation to join as {{.role}}."},
+  "invite_declined": {"title": "Invitation declined", "body": "{{.phone}} declined your invitation."},
+  "admin_transferred_new": {"title": "You are now the team admin", "body": "You have been made the admin of {{.team_name}}."},
+  "admin_transferred_old": {"title": "Team admin transferred", "body": "You transferred admin rights for {{.team_name}}."},
+  "member_blocked": {"title": "Access temporarily restricted", "body": "Your access to the team {{.team_name}} has been temporarily restricted."},
+  "member_unblocked": {"title": "Access restored", "body": "Your access to the team {{.team_name}} has been restored."},
+  "member_removed": {"title": "Removed from team", "body": "You have been removed from the team {{.team_name}}."},
+  "team_member_removed_admin": {"title": "{{.removed_member_name}} left the team", "body": "{{.removed_member_name}} is no longer a member of the team {{.team_name}}."}
+}`)},
+		"ru.json": {Data: []byte(`{
+  "chat_message": {"title": "Новое сообщение от {{.sender_name}}", "body": "{{.preview}}"},
+  "listing_approved": {"title": "Объявление одобрено", "body": "Ваше объявление «{{.listing_title}}» опубликовано."},
+  "listing_rejected": {"title": "Объявление отклонено", "body": "Ваше объявление «{{.listing_title}}» отклонено: {{.reason}}"},
+  "listing_unpublished": {"title": "Объявление снято с публикации", "body": "Ваше объявление «{{.listing_title}}» снято с публикации: {{.reason}}"},
+  "favorite_price_changed": {"title": "Цена изменилась", "body": "Цена «{{.listing_title}}» изменилась с {{.old_price}} на {{.new_price}} {{.currency}}."},
+  "favorite_listing_removed": {"title": "Избранное объявление удалено", "body": "«{{.listing_title}}» больше не доступно."},
+  "team_invite_tenant_manager": {"title": "Приглашение в {{.tenant_name}}", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли менеджера."},
+  "team_invite_tenant_operator": {"title": "Приглашение в {{.tenant_name}}", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли оператора."},
+  "team_invite_user_manager": {"title": "Приглашение в команду", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли менеджера."},
+  "team_invite_user_operator": {"title": "Приглашение в команду", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли оператора."},
+  "tenant_verified": {"title": "Организация верифицирована", "body": "Организация {{.organization_name}} верифицирована."},
+  "operator_assigned": {"title": "Вам назначена техника", "body": "{{.operator_name}}, вы назначены оператором техники."},
+  "operator_released": {"title": "Вы сняты с техники", "body": "{{.operator_name}}, вы сняты с управления техникой."},
+  "wallet_operation_requested": {"title": "Запрошена операция по кошельку", "body": "Запрошена операция {{.operation_kind}} на сумму {{.amount}} {{.currency}}."},
+  "wallet_operation_decided": {"title": "Операция по кошельку: {{.decision}}", "body": "Ваша операция по кошельку на сумму {{.amount}} {{.currency}}: {{.decision}}."},
+  "tenant_rejected": {"title": "Организация отклонена", "body": "Ваша организация отклонена: {{.reason}}"},
+  "invite_accepted": {"title": "Приглашение принято", "body": "{{.phone}} принял ваше приглашение в роли {{.role}}."},
+  "invite_declined": {"title": "Приглашение отклонено", "body": "{{.phone}} отклонил ваше приглашение."},
+  "admin_transferred_new": {"title": "Теперь вы администратор команды", "body": "Вы назначены администратором команды {{.team_name}}."},
+  "admin_transferred_old": {"title": "Права администратора переданы", "body": "Вы передали права администратора команды {{.team_name}}."},
+  "member_blocked": {"title": "Доступ временно ограничен", "body": "Ваш доступ к команде {{.team_name}} временно ограничен."},
+  "member_unblocked": {"title": "Доступ восстановлен", "body": "Ваш доступ к команде {{.team_name}} восстановлен."},
+  "member_removed": {"title": "Удалены из команды", "body": "Вы удалены из команды {{.team_name}}."},
+  "team_member_removed_admin": {"title": "{{.removed_member_name}} покинул команду", "body": "{{.removed_member_name}} больше не состоит в команде {{.team_name}}."}
+}`)},
+	}
+	b, err := i18n.LoadBundle(fsys, language.English)
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	return NewRenderer(b)
+}
 
 // validParamsFor builds a complete params map for the given type so
 // Render's required-param check passes.
@@ -35,12 +118,47 @@ func assertReason(t *testing.T, err error, want string) {
 	}
 }
 
+// ── New tests (Renderer API) ──────────────────────────────────────────────────
+
+func TestRenderer_Render_Success(t *testing.T) {
+	r := testRenderer(t)
+	title, body, err := r.Render(
+		notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED,
+		map[string]string{"listing_title": "Excavator"},
+		"en",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != "Listing approved" {
+		t.Errorf("title = %q", title)
+	}
+	if body != "Your listing 'Excavator' is now live." {
+		t.Errorf("body = %q", body)
+	}
+}
+
+func TestRenderer_Render_MissingParam(t *testing.T) {
+	r := testRenderer(t)
+	_, _, err := r.Render(
+		notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED,
+		map[string]string{}, // listing_title missing
+		"en",
+	)
+	if err == nil {
+		t.Fatal("expected ErrMissingParam, got nil")
+	}
+}
+
+// ── Converted existing tests ──────────────────────────────────────────────────
+
 func TestRenderEveryTypeEveryLocale(t *testing.T) {
+	r := testRendererFull(t)
 	locales := []string{"en", "ru"}
 	for nt := range typeKey {
 		for _, loc := range locales {
 			t.Run(nt.String()+"_"+loc, func(t *testing.T) {
-				title, body, err := Render(nt, validParamsFor(nt), loc)
+				title, body, err := r.Render(nt, validParamsFor(nt), loc)
 				if err != nil {
 					t.Fatalf("Render returned err: %v", err)
 				}
@@ -56,9 +174,10 @@ func TestRenderEveryTypeEveryLocale(t *testing.T) {
 }
 
 func TestRenderMissingParam(t *testing.T) {
+	r := testRenderer(t)
 	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED
 	params := map[string]string{"listing_title": "X"} // missing "reason"
-	_, _, err := Render(nt, params, "en")
+	_, _, err := r.Render(nt, params, "en")
 	assertReason(t, err, ReasonMissingParam)
 	var appErr *commonerr.AppError
 	if errors.As(err, &appErr) {
@@ -69,11 +188,12 @@ func TestRenderMissingParam(t *testing.T) {
 }
 
 func TestRenderUnknownType(t *testing.T) {
-	_, _, err := Render(notificationv1.NotificationType_NOTIFICATION_TYPE_UNSPECIFIED,
+	r := testRenderer(t)
+	_, _, err := r.Render(notificationv1.NotificationType_NOTIFICATION_TYPE_UNSPECIFIED,
 		map[string]string{}, "en")
 	assertReason(t, err, ReasonUnknownType)
 
-	_, _, err = Render(notificationv1.NotificationType_NOTIFICATION_TYPE_SYSTEM,
+	_, _, err = r.Render(notificationv1.NotificationType_NOTIFICATION_TYPE_SYSTEM,
 		map[string]string{}, "en")
 	assertReason(t, err, ReasonUnknownType)
 }
@@ -114,6 +234,7 @@ func TestExtractParams_SendListingUnpublished(t *testing.T) {
 // TestExtractParams_SendListingUnpublishedRenders proves the full extract →
 // render path for the new type lands non-empty title/body in every locale.
 func TestExtractParams_SendListingUnpublishedRenders(t *testing.T) {
+	r := testRendererFull(t)
 	env := &notificationv1.NotificationEnvelope{
 		Payload: &notificationv1.NotificationEnvelope_SendListingUnpublished{
 			SendListingUnpublished: &notificationv1.SendListingUnpublished{
@@ -128,7 +249,7 @@ func TestExtractParams_SendListingUnpublishedRenders(t *testing.T) {
 	}
 	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED
 	for _, loc := range []string{"en", "ru"} {
-		title, body, err := Render(nt, params, loc)
+		title, body, err := r.Render(nt, params, loc)
 		if err != nil {
 			t.Fatalf("Render(%s) err: %v", loc, err)
 		}
@@ -143,6 +264,7 @@ func TestExtractParams_SendListingUnpublishedRenders(t *testing.T) {
 // lifecycle): each payload must extract exactly the expected params and render
 // non-empty title/body in all three locales.
 func TestExtractAndRender_Slice2And4(t *testing.T) {
+	r := testRendererFull(t)
 	cases := []struct {
 		name string
 		nt   notificationv1.NotificationType
@@ -261,7 +383,7 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 				}
 			}
 			for _, loc := range []string{"en", "ru"} {
-				title, body, err := Render(tc.nt, params, loc)
+				title, body, err := r.Render(tc.nt, params, loc)
 				if err != nil {
 					t.Fatalf("Render(%s) err: %v", loc, err)
 				}
@@ -277,9 +399,10 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 // template actually interpolates both removed_member_name and team_name into
 // the rendered output (guards against a static body).
 func TestRenderTeamMemberRemovedAdmin_Interpolates(t *testing.T) {
+	r := testRendererFull(t)
 	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_REMOVED_ADMIN
 	params := map[string]string{"team_name": "Crew A", "removed_member_name": "Ivan"}
-	title, body, err := Render(nt, params, "en")
+	title, body, err := r.Render(nt, params, "en")
 	if err != nil {
 		t.Fatalf("Render err: %v", err)
 	}
@@ -364,51 +487,7 @@ func TestExtractParams_SendPlatformMessage(t *testing.T) {
 		t.Errorf("params = %v, want title=Hello body=World", params)
 	}
 	// PLATFORM_MESSAGE must NOT be in the catalog: Render rejects it as unknown.
-	_, _, rerr := Render(notificationv1.NotificationType_NOTIFICATION_TYPE_PLATFORM_MESSAGE, params, "en")
+	r := testRenderer(t)
+	_, _, rerr := r.Render(notificationv1.NotificationType_NOTIFICATION_TYPE_PLATFORM_MESSAGE, params, "en")
 	assertReason(t, rerr, ReasonUnknownType)
-}
-
-// TestCatalogVsTemplateConsistency parses each locale's JSON file and
-// verifies every {{.field}} placeholder is in requiredParams[T] for the
-// matching type, and vice versa.
-func TestCatalogVsTemplateConsistency(t *testing.T) {
-	placeholderRe := regexp.MustCompile(`\{\{\.([a-z_]+)\}\}`)
-	for _, loc := range []string{"en", "ru"} {
-		t.Run(loc, func(t *testing.T) {
-			// loc is a hard-coded literal from the slice above, not user input.
-			data, err := os.ReadFile("translations/" + loc + ".json") // #nosec G304
-			if err != nil {
-				t.Fatalf("read translations: %v", err)
-			}
-			// catalog maps each message key to its {title, body} fields.
-			var catalog map[string]map[string]string
-			if err := json.Unmarshal(data, &catalog); err != nil {
-				t.Fatalf("parse translations: %v", err)
-			}
-			for nt, key := range typeKey {
-				placeholdersInTemplate := map[string]bool{}
-				section := catalog[key]["title"] + " " + catalog[key]["body"]
-				for _, m := range placeholderRe.FindAllStringSubmatch(section, -1) {
-					placeholdersInTemplate[m[1]] = true
-				}
-				required := requiredParams[nt]
-				requiredSet := map[string]bool{}
-				for _, r := range required {
-					requiredSet[r] = true
-				}
-				for p := range placeholdersInTemplate {
-					if !requiredSet[p] {
-						t.Errorf("%s/%s: placeholder %q in JSON but not in requiredParams",
-							loc, key, p)
-					}
-				}
-				for r := range requiredSet {
-					if !placeholdersInTemplate[r] {
-						t.Errorf("%s/%s: required param %q not used in JSON placeholders",
-							loc, key, r)
-					}
-				}
-			}
-		})
-	}
 }

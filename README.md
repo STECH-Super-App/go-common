@@ -83,7 +83,7 @@ Wire format for errors:
 Setting `LOG_EMPTY_REASON_WARN=true` makes `JSONError` warn-log every `*AppError` it serializes with an empty `Reason` — useful for catching throw sites that haven't been migrated to the reason-tagged builder.
 
 ### `pkg/i18n`
-Server-side translation wrapper around `nicksnyder/go-i18n/v2`. Loads JSON (or TOML) translation files from an `fs.FS`, resolves keys with locale-fallback semantics, and emits warn logs when a target-locale translation is missing but the default-locale one exists.
+Server-side translation wrapper around `nicksnyder/go-i18n/v2`. Loads JSON translation files from an `fs.FS`, resolves keys with locale-fallback semantics, and emits warn logs when a target-locale translation is missing but the default-locale one exists.
 
 Translation files are named `<locale>.json` (e.g., `en.json`, `ru.json`). Locale matching uses `golang.org/x/text/language`: `ru-RU` resolves to `ru` if `ru` is loaded.
 
@@ -112,6 +112,31 @@ str, err := bundle.Resolve("ru", "tenant.transfer.expired_sms", map[string]any{
 `Bundle.Resolve(locale, key, params)` returns the localized string. Missing key returns `ErrKeyNotFound`. Engine/template failure returns `ErrTranslationFailed`.
 
 `SharedBundle()` exposes go-common's embedded shared `error.*` translations (en, ru, kk) — `error.unauthorized`, `error.internal`, `error.validation_failed`, `error.not_found`, `error.forbidden`. Services compose this with their own service bundle as a layered fallback.
+
+### `pkg/notifyrender`
+Renders in-app/push notification templates. `notifyrender.Renderer` is constructed by the consuming service from an `*i18n.Bundle` the service builds at startup from a mounted source (see the `i18n-catalog` repo). go-common carries the render *logic* (`typeKey`, `requiredParams`, `Render`, `ValidateBundle`) but **no strings** — the notification text lives in the external `i18n-catalog` data repo and is mounted into the service at runtime via a Kubernetes ConfigMap.
+
+```go
+import (
+    "golang.org/x/text/language"
+    commoni18n "github.com/STECH-Super-App/go-common/pkg/i18n"
+    "github.com/STECH-Super-App/go-common/pkg/notifyrender"
+)
+
+// At service boot (main.go):
+bundle, err := commoni18n.LoadBundle(os.DirFS(cfg.I18nBundleDir), language.English)
+if err != nil {
+    logger.Fatal("load i18n bundle", zap.Error(err))
+}
+renderer := notifyrender.NewRenderer(bundle)
+
+// In the application layer:
+title, body, err := renderer.Render(notificationType, params, locale)
+```
+
+Package-level helpers that stay unchanged: `ExtractParams`, `RequiredParams`, `IsVerbatim`, `RenderVerbatim`, and the `Reason*` error constants / constructors (`ErrUnknownType`, `ErrMissingParam`, `ErrEmptyPayload`, `ErrEmptyVerbatimText`).
+
+`ValidateBundle(fs.FS) error` is the placeholder-consistency guard that `i18n-catalog` CI runs on every PR: it checks that every `{{.placeholder}}` in the source-locale `en.json` is declared in `requiredParams` for its type, and every declared `requiredParam` appears in at least one placeholder. A partial bundle (subset of catalog types) is accepted; use the full `en.json` in CI to catch missing sections.
 
 ### `pkg/logger`
 Structured logging using `uber-go/zap`.
