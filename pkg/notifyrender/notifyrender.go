@@ -7,22 +7,35 @@ import (
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
 
 	commonerr "github.com/STECH-Super-App/go-common/pkg/errors"
+	"github.com/STECH-Super-App/go-common/pkg/i18n"
 )
 
 // ReasonRenderResolveFailed is emitted when the underlying i18n.Bundle
-// fails to resolve a template key (missing key in the target locale's
-// TOML, malformed template, etc.). Distinct from ReasonUnknownType
+// fails to resolve a template key (missing key in the target locale,
+// malformed template, etc.). Distinct from ReasonUnknownType
 // (catalog miss) and ReasonMissingParam (caller forgot a param).
 const ReasonRenderResolveFailed = "NOTIFYRENDER_RESOLVE_FAILED"
 
+// Renderer resolves notification templates against an i18n bundle supplied
+// at construction time. The strings are NOT compiled in; the consuming
+// service builds the bundle from a mounted source at startup and injects it.
+type Renderer struct {
+	bundle *i18n.Bundle
+}
+
+// NewRenderer returns a Renderer backed by the given bundle.
+func NewRenderer(bundle *i18n.Bundle) *Renderer {
+	return &Renderer{bundle: bundle}
+}
+
 // Render returns the rendered title and body for the given notification
-// type, params, and locale. Returns the typed AppError for any failure
-// mode (ErrUnknownType, ErrMissingParam, or a resolve failure).
+// type, params, and locale. The render is pure: same inputs, same outputs.
+// Returns the typed AppError for any failure mode (ErrUnknownType,
+// ErrMissingParam, or a resolve failure).
 //
-// The render is pure: same inputs always return same outputs. Consumers
-// that store rendered text (e.g. inbox-service) call Render once at
-// insert time and lock the result in the row.
-func Render(
+// Consumers that store rendered text (e.g. inbox-service) call Render once
+// at insert time and lock the result in the row.
+func (r *Renderer) Render(
 	t notificationv1.NotificationType,
 	params map[string]string,
 	locale string,
@@ -38,10 +51,9 @@ func Render(
 	}
 	titleKey := key + ".title"
 	bodyKey := key + ".body"
-
 	asAny := toAny(params)
 
-	title, err = bundle.Resolve(locale, titleKey, asAny)
+	title, err = r.bundle.Resolve(locale, titleKey, asAny)
 	if err != nil {
 		return "", "", commonerr.New(http.StatusInternalServerError).
 			Reason(ReasonRenderResolveFailed).
@@ -50,7 +62,7 @@ func Render(
 			Cause(err).
 			Build()
 	}
-	body, err = bundle.Resolve(locale, bodyKey, asAny)
+	body, err = r.bundle.Resolve(locale, bodyKey, asAny)
 	if err != nil {
 		return "", "", commonerr.New(http.StatusInternalServerError).
 			Reason(ReasonRenderResolveFailed).

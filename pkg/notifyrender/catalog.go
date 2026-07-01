@@ -23,11 +23,11 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_WALLET_OPERATION_REQUESTED:  "wallet_operation_requested",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_WALLET_OPERATION_DECIDED:    "wallet_operation_decided",
 	// tenant + team lifecycle (slice 2): EMAIL-only flows now also render IN_APP.
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_REJECTED:        "tenant_rejected",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_ACCEPTED:        "invite_accepted",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_DECLINED:        "invite_declined",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_NEW:  "admin_transferred_new",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_OLD:  "admin_transferred_old",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_REJECTED:       "tenant_rejected",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_ACCEPTED:       "invite_accepted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_DECLINED:       "invite_declined",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_NEW: "admin_transferred_new",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_OLD: "admin_transferred_old",
 	// team membership lifecycle (slice 4): block / unblock / remove.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_BLOCKED:            "member_blocked",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_UNBLOCKED:          "member_unblocked",
