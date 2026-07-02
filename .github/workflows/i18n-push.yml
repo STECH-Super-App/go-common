@@ -10,9 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Push en source to Tolgee
-        uses: tolgee/github-action@v2
+      - uses: actions/setup-node@v4
         with:
-          api-url: ${{ secrets.TOLGEE_API_URL }}
-          api-key: ${{ secrets.TOLGEE_API_KEY }}
-          command: push
+          node-version: '20'
+      - name: Push en source to Tolgee
+        run: npx --yes @tolgee/cli@2 push --api-url "$TOLGEE_API_URL"
+        env:
+          TOLGEE_API_URL: ${{ secrets.TOLGEE_API_URL }}
+          TOLGEE_API_KEY: ${{ secrets.TOLGEE_API_KEY }}
