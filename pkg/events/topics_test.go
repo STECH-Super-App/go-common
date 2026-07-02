@@ -25,6 +25,7 @@ func TestTopicName(t *testing.T) {
 		{eventsv1.Topic_TOPIC_CHAT_EVENTS, "chat.events"},
 		{eventsv1.Topic_TOPIC_GEO_REGION_EVENTS, "geo.region.events"},
 		{eventsv1.Topic_TOPIC_RENT_EVENTS, "rent.events"},
+		{eventsv1.Topic_TOPIC_ORDER_EVENTS, "order.events"},
 	}
 	for _, c := range cases {
 		if got := events.TopicName(c.in); got != c.want {
@@ -64,6 +65,10 @@ func TestDLQName(t *testing.T) {
 	}
 	got = events.DLQName(eventsv1.Topic_TOPIC_MACHINERY_SERVICE_STATUS_EVENTS, "sale")
 	if want := "machinery.service-status.events.dlq.sale"; got != want {
+		t.Errorf("DLQName = %q, want %q", got, want)
+	}
+	got = events.DLQName(eventsv1.Topic_TOPIC_ORDER_EVENTS, "notification")
+	if want := "order.events.dlq.notification"; got != want {
 		t.Errorf("DLQName = %q, want %q", got, want)
 	}
 }

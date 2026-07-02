@@ -60,7 +60,19 @@ func testRendererFull(t *testing.T) *Renderer {
   "member_blocked": {"title": "Access temporarily restricted", "body": "Your access to the team {{.team_name}} has been temporarily restricted."},
   "member_unblocked": {"title": "Access restored", "body": "Your access to the team {{.team_name}} has been restored."},
   "member_removed": {"title": "Removed from team", "body": "You have been removed from the team {{.team_name}}."},
-  "team_member_removed_admin": {"title": "{{.removed_member_name}} left the team", "body": "{{.removed_member_name}} is no longer a member of the team {{.team_name}}."}
+  "team_member_removed_admin": {"title": "{{.removed_member_name}} left the team", "body": "{{.removed_member_name}} is no longer a member of the team {{.team_name}}."},
+  "order_request_created": {"title": "New order request", "body": "You have a new request for '{{.listing_title}}'."},
+  "order_request_accepted": {"title": "Request accepted", "body": "Your request for '{{.listing_title}}' was accepted."},
+  "order_terms_agreed": {"title": "Terms agreed", "body": "Both sides agreed on terms for '{{.listing_title}}'."},
+  "order_confirmed": {"title": "Order confirmed", "body": "The order for '{{.listing_title}}' is confirmed."},
+  "order_counter_offer_sent": {"title": "Counter offer received", "body": "A counter offer was sent for '{{.listing_title}}'."},
+  "order_counter_offer_withdrawn": {"title": "Counter offer withdrawn", "body": "The counter offer for '{{.listing_title}}' was withdrawn."},
+  "order_cancelled": {"title": "Order cancelled", "body": "The order for '{{.listing_title}}' was cancelled by {{.cancelled_by}}."},
+  "order_auto_cancelled": {"title": "Order auto-cancelled", "body": "The order for '{{.listing_title}}' was automatically cancelled."},
+  "order_transferred": {"title": "Order transferred", "body": "The order for '{{.listing_title}}' was transferred."},
+  "order_receipt_confirmed": {"title": "Receipt confirmed", "body": "Receipt was confirmed for '{{.listing_title}}'."},
+  "order_auto_completed": {"title": "Order auto-completed", "body": "The order for '{{.listing_title}}' was automatically completed."},
+  "order_review_window_ending": {"title": "Review window ending", "body": "The review window for '{{.listing_title}}' is ending soon."}
 }`)},
 		"ru.json": {Data: []byte(`{
   "chat_message": {"title": "Новое сообщение от {{.sender_name}}", "body": "{{.preview}}"},
@@ -86,7 +98,19 @@ func testRendererFull(t *testing.T) *Renderer {
   "member_blocked": {"title": "Доступ временно ограничен", "body": "Ваш доступ к команде {{.team_name}} временно ограничен."},
   "member_unblocked": {"title": "Доступ восстановлен", "body": "Ваш доступ к команде {{.team_name}} восстановлен."},
   "member_removed": {"title": "Удалены из команды", "body": "Вы удалены из команды {{.team_name}}."},
-  "team_member_removed_admin": {"title": "{{.removed_member_name}} покинул команду", "body": "{{.removed_member_name}} больше не состоит в команде {{.team_name}}."}
+  "team_member_removed_admin": {"title": "{{.removed_member_name}} покинул команду", "body": "{{.removed_member_name}} больше не состоит в команде {{.team_name}}."},
+  "order_request_created": {"title": "Новый запрос на заказ", "body": "У вас новый запрос по «{{.listing_title}}»."},
+  "order_request_accepted": {"title": "Запрос принят", "body": "Ваш запрос по «{{.listing_title}}» принят."},
+  "order_terms_agreed": {"title": "Условия согласованы", "body": "Обе стороны согласовали условия по «{{.listing_title}}»."},
+  "order_confirmed": {"title": "Заказ подтверждён", "body": "Заказ по «{{.listing_title}}» подтверждён."},
+  "order_counter_offer_sent": {"title": "Получено встречное предложение", "body": "Отправлено встречное предложение по «{{.listing_title}}»."},
+  "order_counter_offer_withdrawn": {"title": "Встречное предложение отозвано", "body": "Встречное предложение по «{{.listing_title}}» отозвано."},
+  "order_cancelled": {"title": "Заказ отменён", "body": "Заказ по «{{.listing_title}}» отменён пользователем {{.cancelled_by}}."},
+  "order_auto_cancelled": {"title": "Заказ отменён автоматически", "body": "Заказ по «{{.listing_title}}» был автоматически отменён."},
+  "order_transferred": {"title": "Заказ передан", "body": "Заказ по «{{.listing_title}}» передан."},
+  "order_receipt_confirmed": {"title": "Получение подтверждено", "body": "Получение подтверждено по «{{.listing_title}}»."},
+  "order_auto_completed": {"title": "Заказ завершён автоматически", "body": "Заказ по «{{.listing_title}}» был автоматически завершён."},
+  "order_review_window_ending": {"title": "Окно отзыва закрывается", "body": "Окно отзыва по «{{.listing_title}}» скоро закроется."}
 }`)},
 	}
 	b, err := i18n.LoadBundle(fsys, language.English)
@@ -411,6 +435,49 @@ func TestRenderTeamMemberRemovedAdmin_Interpolates(t *testing.T) {
 	}
 	if !strings.Contains(body, "Ivan") || !strings.Contains(body, "Crew A") {
 		t.Errorf("body %q does not interpolate both params", body)
+	}
+}
+
+// TestRenderOrderLifecycle_EveryLocale locks the 12 order-lifecycle catalog
+// entries (order-service contracts, gen-go-lib NotificationType 27-38): each
+// must render non-empty title/body in every locale with exactly its required
+// params. Params are listed explicitly (not read back from requiredParams) so
+// this test is red before catalog.go registers the types, and stays a real
+// lock on the table afterward.
+func TestRenderOrderLifecycle_EveryLocale(t *testing.T) {
+	r := testRendererFull(t)
+	cases := []struct {
+		nt     notificationv1.NotificationType
+		params map[string]string
+	}{
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_ACCEPTED, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TERMS_AGREED, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CONFIRMED, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_SENT, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_WITHDRAWN, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED, map[string]string{"listing_title": "Excavator", "cancelled_by": "customer"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_CANCELLED, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TRANSFERRED, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_RECEIPT_CONFIRMED, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING, map[string]string{"listing_title": "Excavator"}},
+	}
+	for _, tc := range cases {
+		for _, loc := range []string{"en", "ru"} {
+			t.Run(tc.nt.String()+"_"+loc, func(t *testing.T) {
+				title, body, err := r.Render(tc.nt, tc.params, loc)
+				if err != nil {
+					t.Fatalf("Render returned err: %v", err)
+				}
+				if title == "" {
+					t.Errorf("empty title for %s/%s", tc.nt, loc)
+				}
+				if body == "" {
+					t.Errorf("empty body for %s/%s", tc.nt, loc)
+				}
+			})
+		}
 	}
 }
 
