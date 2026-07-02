@@ -3,7 +3,6 @@ on:
   push:
     branches: [main]
     paths:
-      - 'pkg/notifyrender/translations/en.json'
       - 'pkg/i18n/translations/en.json'
   workflow_dispatch:
 jobs:

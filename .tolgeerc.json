@@ -4,7 +4,6 @@
   "format": "JSON_TOLGEE",
   "push": {
     "files": [
-      { "path": "pkg/notifyrender/translations/en.json", "language": "en", "namespace": "notifyrender" },
       { "path": "pkg/i18n/translations/en.json", "language": "en", "namespace": "i18n" }
     ],
     "forceMode": "OVERRIDE"
@@ -12,7 +11,7 @@
   "pull": {
     "path": ".",
     "languages": ["ru"],
-    "namespaces": ["notifyrender", "i18n"],
+    "namespaces": ["i18n"],
     "fileStructureTemplate": "pkg/{namespace}/translations/{languageTag}.json"
   }
 }

@@ -26,5 +26,4 @@ jobs:
           body: "Automated PR from i18n-pull.yml — review and merge."
           delete-branch: true
           add-paths: |
-            pkg/notifyrender/translations/ru.json
             pkg/i18n/translations/ru.json
