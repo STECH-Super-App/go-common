@@ -33,6 +33,19 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_UNBLOCKED:          "member_unblocked",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_REMOVED:            "member_removed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_REMOVED_ADMIN: "team_member_removed_admin",
+	// order lifecycle (order-service contracts, gen-go-lib NotificationType 27-38).
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED:         "order_request_created",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_ACCEPTED:        "order_request_accepted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TERMS_AGREED:            "order_terms_agreed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CONFIRMED:               "order_confirmed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_SENT:      "order_counter_offer_sent",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_WITHDRAWN: "order_counter_offer_withdrawn",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED:               "order_cancelled",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_CANCELLED:          "order_auto_cancelled",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TRANSFERRED:             "order_transferred",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_RECEIPT_CONFIRMED:       "order_receipt_confirmed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED:          "order_auto_completed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING:    "order_review_window_ending",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -117,6 +130,43 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_REMOVED_ADMIN: {
 		"team_name", "removed_member_name",
+	},
+	// ─── order lifecycle (order-service) ───
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_ACCEPTED: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TERMS_AGREED: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CONFIRMED: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_SENT: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_WITHDRAWN: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED: {
+		"listing_title", "cancelled_by",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_CANCELLED: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TRANSFERRED: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_RECEIPT_CONFIRMED: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED: {
+		"listing_title",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING: {
+		"listing_title",
 	},
 }
 

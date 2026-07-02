@@ -169,6 +169,12 @@ Generic utility functions.
 - **Ptr**: Pointer helpers (`Ptr[T]`, `ToVal[T]`).
 - **Slice**: Slice manipulation (`Contains`, `Map`, `Filter`).
 
+### `pkg/money`
+The platform's sanctioned money primitive: an immutable `Money` value holding an integer amount in **minor units** (kopecks for RUB) paired with a validated ISO 4217 `Code`. Floats are forbidden for money across STECH — this is the only approved representation.
+- `ParseCode(s)` / `New(amountMinor, code)`: `Code` is three uppercase ASCII letters; **currency-registry membership is deliberately NOT validated** — which currencies a service accepts is that service's own policy (e.g. order-service whitelists RUB only).
+- `Add`, `Mul`, `Cmp`: overflow-checked arithmetic and comparison; cross-currency operands and int64 overflow return typed `pkg/errors` `AppError`s (`COMMON_MONEY_*` reasons, HTTP 422).
+- Scope is deliberately minimal: **no FX/conversion, no rounding, no formatting/`String()`** (YAGNI).
+
 ## Events pipeline
 
 Async events across STECH services flow through three cooperating packages — **`pkg/envelope`** (wire contract), **`pkg/outbox`** (producer side + dedup state), **`pkg/events`** (consumer side). The split is one-directional: envelope imports nothing repo-local; outbox and events both import envelope; outbox and events never import each other.
