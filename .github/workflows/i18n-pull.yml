@@ -11,12 +11,14 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - name: Pull translations from Tolgee
-        uses: tolgee/github-action@v2
+      - uses: actions/setup-node@v4
         with:
-          api-url: ${{ secrets.TOLGEE_API_URL }}
-          api-key: ${{ secrets.TOLGEE_API_KEY }}
-          command: pull
+          node-version: '20'
+      - name: Pull translations from Tolgee
+        run: npx --yes @tolgee/cli@2 pull --api-url "$TOLGEE_API_URL"
+        env:
+          TOLGEE_API_URL: ${{ secrets.TOLGEE_API_URL }}
+          TOLGEE_API_KEY: ${{ secrets.TOLGEE_API_KEY }}
       - name: Open PR if changes
         uses: peter-evans/create-pull-request@v6
         with:
