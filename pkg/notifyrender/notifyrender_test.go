@@ -481,6 +481,199 @@ func TestRenderOrderLifecycle_EveryLocale(t *testing.T) {
 	}
 }
 
+// TestExtractParams_OrderLifecycle locks the ExtractParams mapping for all 12
+// SendOrder* payloads (order-service contracts, gen-go-lib NotificationType
+// 27-38 / oneof fields 51-62): each must extract exactly its catalog params
+// (listing_title for all, plus cancelled_by for SendOrderCancelled) and not
+// fall through to the default ErrEmptyPayload branch.
+func TestExtractParams_OrderLifecycle(t *testing.T) {
+	r := testRendererFull(t)
+	cases := []struct {
+		name string
+		nt   notificationv1.NotificationType
+		env  *notificationv1.NotificationEnvelope
+		want map[string]string
+	}{
+		{
+			name: "order_request_created",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderRequestCreated{
+					SendOrderRequestCreated: &notificationv1.SendOrderRequestCreated{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_request_accepted",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_ACCEPTED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderRequestAccepted{
+					SendOrderRequestAccepted: &notificationv1.SendOrderRequestAccepted{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_terms_agreed",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TERMS_AGREED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderTermsAgreed{
+					SendOrderTermsAgreed: &notificationv1.SendOrderTermsAgreed{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_confirmed",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CONFIRMED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderConfirmed{
+					SendOrderConfirmed: &notificationv1.SendOrderConfirmed{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_counter_offer_sent",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_SENT,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderCounterOfferSent{
+					SendOrderCounterOfferSent: &notificationv1.SendOrderCounterOfferSent{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_counter_offer_withdrawn",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_WITHDRAWN,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderCounterOfferWithdrawn{
+					SendOrderCounterOfferWithdrawn: &notificationv1.SendOrderCounterOfferWithdrawn{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_cancelled",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderCancelled{
+					SendOrderCancelled: &notificationv1.SendOrderCancelled{
+						OrderId: "order-1", ListingTitle: "Excavator", CancelledBy: "customer",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator", "cancelled_by": "customer"},
+		},
+		{
+			name: "order_auto_cancelled",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_CANCELLED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderAutoCancelled{
+					SendOrderAutoCancelled: &notificationv1.SendOrderAutoCancelled{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_transferred",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TRANSFERRED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderTransferred{
+					SendOrderTransferred: &notificationv1.SendOrderTransferred{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_receipt_confirmed",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_RECEIPT_CONFIRMED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderReceiptConfirmed{
+					SendOrderReceiptConfirmed: &notificationv1.SendOrderReceiptConfirmed{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_auto_completed",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderAutoCompleted{
+					SendOrderAutoCompleted: &notificationv1.SendOrderAutoCompleted{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_review_window_ending",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderReviewWindowEnding{
+					SendOrderReviewWindowEnding: &notificationv1.SendOrderReviewWindowEnding{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := ExtractParams(tc.env)
+			if err != nil {
+				t.Fatalf("ExtractParams err: %v", err)
+			}
+			if len(params) != len(tc.want) {
+				t.Fatalf("params = %v, want %v", params, tc.want)
+			}
+			for k, v := range tc.want {
+				if params[k] != v {
+					t.Errorf("params[%q] = %q, want %q", k, params[k], v)
+				}
+			}
+			for _, loc := range []string{"en", "ru"} {
+				title, body, err := r.Render(tc.nt, params, loc)
+				if err != nil {
+					t.Fatalf("Render(%s) err: %v", loc, err)
+				}
+				if title == "" || body == "" {
+					t.Errorf("%s/%s: empty title/body (title=%q body=%q)", tc.name, loc, title, body)
+				}
+			}
+		})
+	}
+}
+
+// TestExtractParams_NilPayload locks the shared error path: an envelope with
+// no payload set (covers the SendOrder* additions same as every other
+// payload) must return ErrEmptyPayload, never a panic or a zero-value map.
+func TestExtractParams_NilPayload(t *testing.T) {
+	_, err := ExtractParams(&notificationv1.NotificationEnvelope{})
+	assertReason(t, err, ReasonEmptyPayload)
+}
+
 // TestIsVerbatim covers the verbatim-type predicate: only PLATFORM_MESSAGE is
 // verbatim; every catalog type and the reserved types are not.
 func TestIsVerbatim(t *testing.T) {

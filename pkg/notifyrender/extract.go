@@ -219,6 +219,57 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"device_name": p.SendNewDeviceLogin.GetDeviceName(),
 			"ip":          p.SendNewDeviceLogin.GetIp(),
 		}, nil
+
+	// ─── order lifecycle payloads (order-service contracts, oneof fields 51-62) ───
+	case *notificationv1.NotificationEnvelope_SendOrderRequestCreated:
+		return map[string]string{
+			"listing_title": p.SendOrderRequestCreated.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderRequestAccepted:
+		return map[string]string{
+			"listing_title": p.SendOrderRequestAccepted.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderTermsAgreed:
+		return map[string]string{
+			"listing_title": p.SendOrderTermsAgreed.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderConfirmed:
+		return map[string]string{
+			"listing_title": p.SendOrderConfirmed.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderCounterOfferSent:
+		return map[string]string{
+			"listing_title": p.SendOrderCounterOfferSent.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderCounterOfferWithdrawn:
+		return map[string]string{
+			"listing_title": p.SendOrderCounterOfferWithdrawn.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderCancelled:
+		return map[string]string{
+			"listing_title": p.SendOrderCancelled.GetListingTitle(),
+			"cancelled_by":  p.SendOrderCancelled.GetCancelledBy(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderAutoCancelled:
+		return map[string]string{
+			"listing_title": p.SendOrderAutoCancelled.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderTransferred:
+		return map[string]string{
+			"listing_title": p.SendOrderTransferred.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderReceiptConfirmed:
+		return map[string]string{
+			"listing_title": p.SendOrderReceiptConfirmed.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderAutoCompleted:
+		return map[string]string{
+			"listing_title": p.SendOrderAutoCompleted.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderReviewWindowEnding:
+		return map[string]string{
+			"listing_title": p.SendOrderReviewWindowEnding.GetListingTitle(),
+		}, nil
 	default:
 		return nil, ErrEmptyPayload()
 	}
