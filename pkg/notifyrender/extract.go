@@ -1,6 +1,8 @@
 package notifyrender
 
 import (
+	"strings"
+
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
 )
 
@@ -8,7 +10,12 @@ import (
 // a params map suitable for Render. Recipient-specific metadata fields
 // stay on the envelope; this is only template fill-in fields.
 //
-// Returns ErrEmptyPayload() when env.Payload is unset.
+// Returns ErrEmptyPayload() when env.Payload is nil (no payload set at all),
+// and ErrUnknownType() when a payload IS set but no case maps it — a directive
+// variant that reached this package without a dispatch entry. The two are kept
+// distinct so the caller can tell "producer sent an empty envelope" apart from
+// "we forgot to wire up this directive" (the latter used to masquerade as the
+// former and get dead-lettered as unrecoverable).
 //
 // The function is a flat dispatch table over the oneof payload variants;
 // each case is a 1-3 line literal map. Splitting it into helpers would
@@ -88,6 +95,15 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		// actually present so callers don't get a phantom empty key.
 		return map[string]string{
 			"reason": p.SendTenantRejected.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendTenantDocumentsRequested:
+		// tenant-service EMAIL/SYSTEM directive: the org owner is asked to
+		// resubmit verification documents. reasons is a repeated field; join it
+		// into a single value since the params map is map[string]string.
+		return map[string]string{
+			"tenant_id": p.SendTenantDocumentsRequested.GetTenantId(),
+			"comment":   p.SendTenantDocumentsRequested.GetComment(),
+			"reasons":   strings.Join(p.SendTenantDocumentsRequested.GetReasons(), ", "),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendAdminTransferInitiated:
 		return map[string]string{
@@ -271,6 +287,11 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"listing_title": p.SendOrderReviewWindowEnding.GetListingTitle(),
 		}, nil
 	default:
-		return nil, ErrEmptyPayload()
+		// A payload IS set (the nil case is caught by the guard at the top) but no
+		// case matched it — a directive variant that reached this package without a
+		// dispatch entry. Report it as unknown-type, NOT empty-payload: masquerading
+		// as empty made the caller treat a merely-unmapped directive as unrecoverable
+		// and dead-letter it. GetMetadata()/GetType() are nil-safe.
+		return nil, ErrUnknownType(env.GetMetadata().GetType())
 	}
 }
