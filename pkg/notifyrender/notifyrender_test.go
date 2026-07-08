@@ -674,6 +674,65 @@ func TestExtractParams_NilPayload(t *testing.T) {
 	assertReason(t, err, ReasonEmptyPayload)
 }
 
+// TestExtractParams_SendTenantDocumentsRequested locks the ExtractParams
+// mapping for the tenant-service EMAIL/SYSTEM directive: it must extract
+// tenant_id, comment, and the repeated reasons joined with ", " into a single
+// string value — and return a nil error so the caller does not dead-letter it.
+func TestExtractParams_SendTenantDocumentsRequested(t *testing.T) {
+	env := &notificationv1.NotificationEnvelope{
+		Payload: &notificationv1.NotificationEnvelope_SendTenantDocumentsRequested{
+			SendTenantDocumentsRequested: &notificationv1.SendTenantDocumentsRequested{
+				TenantId: "tenant-42",
+				Reasons:  []string{"blurry scan", "expired license"},
+				Comment:  "please resubmit clearer photos",
+			},
+		},
+	}
+
+	params, err := ExtractParams(env)
+	if err != nil {
+		t.Fatalf("ExtractParams returned err: %v", err)
+	}
+
+	want := map[string]string{
+		"tenant_id": "tenant-42",
+		"comment":   "please resubmit clearer photos",
+		"reasons":   "blurry scan, expired license",
+	}
+	if len(params) != len(want) {
+		t.Fatalf("params = %v, want %v", params, want)
+	}
+	for k, v := range want {
+		if params[k] != v {
+			t.Errorf("params[%q] = %q, want %q", k, params[k], v)
+		}
+	}
+}
+
+// TestExtractParams_UnmappedPayload locks the fixed default arm: a payload that
+// IS set but has no case in the switch must return ErrUnknownType
+// (ReasonUnknownType), NOT ErrEmptyPayload. Before the fix, a set-but-unmapped
+// directive masqueraded as empty and got dead-lettered as unrecoverable.
+// SendContactPhoneOtpSms is a deliberately-unmapped payload used only to
+// exercise this arm; if a case is ever added for it, swap in another unmapped
+// variant.
+func TestExtractParams_UnmappedPayload(t *testing.T) {
+	env := &notificationv1.NotificationEnvelope{
+		Metadata: &notificationv1.EnvelopeMetadata{
+			Type: notificationv1.NotificationType_NOTIFICATION_TYPE_SYSTEM,
+		},
+		Payload: &notificationv1.NotificationEnvelope_SendContactPhoneOtpSms{
+			SendContactPhoneOtpSms: &notificationv1.SendContactPhoneOtpSms{
+				Phone: "+77001234567",
+				Code:  "1234",
+			},
+		},
+	}
+
+	_, err := ExtractParams(env)
+	assertReason(t, err, ReasonUnknownType)
+}
+
 // TestIsVerbatim covers the verbatim-type predicate: only PLATFORM_MESSAGE is
 // verbatim; every catalog type and the reserved types are not.
 func TestIsVerbatim(t *testing.T) {
