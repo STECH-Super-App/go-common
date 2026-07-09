@@ -72,7 +72,12 @@ func testRendererFull(t *testing.T) *Renderer {
   "order_transferred": {"title": "Order transferred", "body": "The order for '{{.listing_title}}' was transferred."},
   "order_receipt_confirmed": {"title": "Receipt confirmed", "body": "Receipt was confirmed for '{{.listing_title}}'."},
   "order_auto_completed": {"title": "Order auto-completed", "body": "The order for '{{.listing_title}}' was automatically completed."},
-  "order_review_window_ending": {"title": "Review window ending", "body": "The review window for '{{.listing_title}}' is ending soon."}
+  "order_review_window_ending": {"title": "Review window ending", "body": "The review window for '{{.listing_title}}' is ending soon."},
+  "admin_transfer_initiated": {"title": "Admin role transfer offer", "body": "{{.from_user_name}} wants to transfer the admin role of {{.organization_name}} to you. Respond before the offer expires."},
+  "admin_transfer_accepted": {"title": "Admin transfer accepted", "body": "{{.to_user_name}} accepted the admin role of {{.organization_name}}."},
+  "admin_transfer_rejected": {"title": "Admin transfer declined", "body": "{{.to_user_name}} declined the admin transfer for {{.organization_name}}."},
+  "admin_transfer_cancelled": {"title": "Admin transfer cancelled", "body": "{{.from_user_name}} cancelled the admin transfer for {{.organization_name}}."},
+  "admin_transfer_expired": {"title": "Admin transfer expired", "body": "The admin transfer for {{.organization_name}} with {{.counterparty_name}} expired without action."}
 }`)},
 		"ru.json": {Data: []byte(`{
   "chat_message": {"title": "Новое сообщение от {{.sender_name}}", "body": "{{.preview}}"},
@@ -110,7 +115,12 @@ func testRendererFull(t *testing.T) *Renderer {
   "order_transferred": {"title": "Заказ передан", "body": "Заказ по «{{.listing_title}}» передан."},
   "order_receipt_confirmed": {"title": "Получение подтверждено", "body": "Получение подтверждено по «{{.listing_title}}»."},
   "order_auto_completed": {"title": "Заказ завершён автоматически", "body": "Заказ по «{{.listing_title}}» был автоматически завершён."},
-  "order_review_window_ending": {"title": "Окно отзыва закрывается", "body": "Окно отзыва по «{{.listing_title}}» скоро закроется."}
+  "order_review_window_ending": {"title": "Окно отзыва закрывается", "body": "Окно отзыва по «{{.listing_title}}» скоро закроется."},
+  "admin_transfer_initiated": {"title": "Предложение передать права администратора", "body": "{{.from_user_name}} хочет передать вам роль администратора организации {{.organization_name}}. Ответьте до истечения срока действия запроса."},
+  "admin_transfer_accepted": {"title": "Передача администратора принята", "body": "{{.to_user_name}} принял роль администратора организации {{.organization_name}}."},
+  "admin_transfer_rejected": {"title": "Передача администратора отклонена", "body": "{{.to_user_name}} отклонил передачу прав администратора для {{.organization_name}}."},
+  "admin_transfer_cancelled": {"title": "Передача администратора отменена", "body": "{{.from_user_name}} отменил передачу прав администратора для {{.organization_name}}."},
+  "admin_transfer_expired": {"title": "Передача администратора истекла", "body": "Передача прав администратора для {{.organization_name}} с {{.counterparty_name}} истекла без действий."}
 }`)},
 	}
 	b, err := i18n.LoadBundle(fsys, language.English)
@@ -413,6 +423,108 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 				}
 				if title == "" || body == "" {
 					t.Errorf("%s/%s: empty title/body (title=%q body=%q)", tc.name, loc, title, body)
+				}
+			}
+		})
+	}
+}
+
+// TestExtractAndRender_AdminTransferLifecycle locks the five tenant
+// admin-transfer directives: each payload extracts exactly its params and
+// renders non-empty title/body in en and ru. reason is extracted for the
+// rejected payload but is intentionally absent from the template and from
+// requiredParams (it is optional at the HTTP boundary and cannot be
+// localized), so it never reaches a placeholder.
+func TestExtractAndRender_AdminTransferLifecycle(t *testing.T) {
+	r := testRendererFull(t)
+	cases := []struct {
+		name string
+		nt   notificationv1.NotificationType
+		env  *notificationv1.NotificationEnvelope
+		want map[string]string
+	}{
+		{
+			name: "admin_transfer_initiated",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_INITIATED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferInitiated{
+					SendAdminTransferInitiated: &notificationv1.SendAdminTransferInitiated{
+						OrganizationName: "Acme LLC", FromUserName: "Ivan",
+					},
+				},
+			},
+			want: map[string]string{"organization_name": "Acme LLC", "from_user_name": "Ivan"},
+		},
+		{
+			name: "admin_transfer_accepted",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_ACCEPTED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferAccepted{
+					SendAdminTransferAccepted: &notificationv1.SendAdminTransferAccepted{
+						OrganizationName: "Acme LLC", ToUserName: "Petr",
+					},
+				},
+			},
+			want: map[string]string{"organization_name": "Acme LLC", "to_user_name": "Petr"},
+		},
+		{
+			name: "admin_transfer_rejected",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_REJECTED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferRejected{
+					SendAdminTransferRejected: &notificationv1.SendAdminTransferRejected{
+						OrganizationName: "Acme LLC", ToUserName: "Petr", Reason: "changed mind",
+					},
+				},
+			},
+			want: map[string]string{"organization_name": "Acme LLC", "to_user_name": "Petr", "reason": "changed mind"},
+		},
+		{
+			name: "admin_transfer_cancelled",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_CANCELLED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferCancelled{
+					SendAdminTransferCancelled: &notificationv1.SendAdminTransferCancelled{
+						OrganizationName: "Acme LLC", FromUserName: "Ivan",
+					},
+				},
+			},
+			want: map[string]string{"organization_name": "Acme LLC", "from_user_name": "Ivan"},
+		},
+		{
+			name: "admin_transfer_expired",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_EXPIRED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferExpired{
+					SendAdminTransferExpired: &notificationv1.SendAdminTransferExpired{
+						OrganizationName: "Acme LLC", CounterpartyName: "Petr",
+					},
+				},
+			},
+			want: map[string]string{"organization_name": "Acme LLC", "counterparty_name": "Petr"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := ExtractParams(tc.env)
+			if err != nil {
+				t.Fatalf("ExtractParams err: %v", err)
+			}
+			if len(params) != len(tc.want) {
+				t.Fatalf("param count = %d, want %d (%v)", len(params), len(tc.want), params)
+			}
+			for k, v := range tc.want {
+				if params[k] != v {
+					t.Errorf("param[%q] = %q, want %q", k, params[k], v)
+				}
+			}
+			for _, loc := range []string{"en", "ru"} {
+				title, body, err := r.Render(tc.nt, params, loc)
+				if err != nil {
+					t.Fatalf("Render(%s): %v", loc, err)
+				}
+				if title == "" || body == "" {
+					t.Errorf("Render(%s) returned empty title/body", loc)
 				}
 			}
 		})
