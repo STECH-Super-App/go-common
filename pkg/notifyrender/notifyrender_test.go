@@ -43,8 +43,8 @@ func testRendererFull(t *testing.T) *Renderer {
   "listing_unpublished": {"title": "Listing unpublished", "body": "Your listing '{{.listing_title}}' was unpublished: {{.reason}}"},
   "favorite_price_changed": {"title": "Price changed", "body": "The price of '{{.listing_title}}' changed from {{.old_price}} to {{.new_price}} {{.currency}}."},
   "favorite_listing_removed": {"title": "Favorite listing removed", "body": "'{{.listing_title}}' is no longer available."},
-  "team_invite_tenant_manager": {"title": "Invitation to join {{.tenant_name}}", "body": "{{.inviter_name}} invited you to join {{.team_name}} as a manager."},
-  "team_invite_tenant_operator": {"title": "Invitation to join {{.tenant_name}}", "body": "{{.inviter_name}} invited you to join {{.team_name}} as an operator."},
+  "team_invite_tenant_manager": {"title": "Invitation to join {{.team_name}}", "body": "{{.inviter_name}} invited you to join {{.team_name}} as a manager."},
+  "team_invite_tenant_operator": {"title": "Invitation to join {{.team_name}}", "body": "{{.inviter_name}} invited you to join {{.team_name}} as an operator."},
   "team_invite_user_manager": {"title": "Team invitation", "body": "{{.inviter_name}} invited you to {{.team_name}} as a manager."},
   "team_invite_user_operator": {"title": "Team invitation", "body": "{{.inviter_name}} invited you to {{.team_name}} as an operator."},
   "tenant_verified": {"title": "Organization verified", "body": "{{.organization_name}} has been verified."},
@@ -81,8 +81,8 @@ func testRendererFull(t *testing.T) *Renderer {
   "listing_unpublished": {"title": "Объявление снято с публикации", "body": "Ваше объявление «{{.listing_title}}» снято с публикации: {{.reason}}"},
   "favorite_price_changed": {"title": "Цена изменилась", "body": "Цена «{{.listing_title}}» изменилась с {{.old_price}} на {{.new_price}} {{.currency}}."},
   "favorite_listing_removed": {"title": "Избранное объявление удалено", "body": "«{{.listing_title}}» больше не доступно."},
-  "team_invite_tenant_manager": {"title": "Приглашение в {{.tenant_name}}", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли менеджера."},
-  "team_invite_tenant_operator": {"title": "Приглашение в {{.tenant_name}}", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли оператора."},
+  "team_invite_tenant_manager": {"title": "Приглашение в {{.team_name}}", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли менеджера."},
+  "team_invite_tenant_operator": {"title": "Приглашение в {{.team_name}}", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли оператора."},
   "team_invite_user_manager": {"title": "Приглашение в команду", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли менеджера."},
   "team_invite_user_operator": {"title": "Приглашение в команду", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли оператора."},
   "tenant_verified": {"title": "Организация верифицирована", "body": "Организация {{.organization_name}} верифицирована."},
@@ -663,6 +663,49 @@ func TestExtractParams_OrderLifecycle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestExtractAndRender_TeamInviteTenant locks the full extract → render path
+// for the TENANT team-invite variants against the only payload that produces
+// them, SendInviteExistingUser. The payload carries team_name + inviter_name
+// (+ role) — there is NO tenant/org name on the wire, so the catalog must not
+// require a tenant_name param (it previously did, which made every real
+// extract fail Render's required-param check).
+func TestExtractAndRender_TeamInviteTenant(t *testing.T) {
+	r := testRendererFull(t)
+	env := &notificationv1.NotificationEnvelope{
+		Payload: &notificationv1.NotificationEnvelope_SendInviteExistingUser{
+			SendInviteExistingUser: &notificationv1.SendInviteExistingUser{
+				TeamName:    "Crew A",
+				InviterName: "Ivan",
+				Role:        "manager",
+			},
+		},
+	}
+	params, err := ExtractParams(env)
+	if err != nil {
+		t.Fatalf("ExtractParams err: %v", err)
+	}
+	types := []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_MANAGER,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_OPERATOR,
+	}
+	for _, nt := range types {
+		for _, loc := range []string{"en", "ru"} {
+			t.Run(nt.String()+"_"+loc, func(t *testing.T) {
+				title, body, err := r.Render(nt, params, loc)
+				if err != nil {
+					t.Fatalf("Render err: %v", err)
+				}
+				if !strings.Contains(title, "Crew A") {
+					t.Errorf("title %q does not interpolate team_name", title)
+				}
+				if !strings.Contains(body, "Ivan") || !strings.Contains(body, "Crew A") {
+					t.Errorf("body %q does not interpolate inviter_name and team_name", body)
+				}
+			})
+		}
 	}
 }
 

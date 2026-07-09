@@ -75,11 +75,14 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_FAVORITE_LISTING_REMOVED: {
 		"listing_title",
 	},
+	// No directive payload carries a tenant/org name for team invites
+	// (SendInviteExistingUser has team_name + inviter_name + role only), so the
+	// TENANT variants require the same params as the USER variants.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_MANAGER: {
-		"team_name", "inviter_name", "tenant_name",
+		"team_name", "inviter_name",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_OPERATOR: {
-		"team_name", "inviter_name", "tenant_name",
+		"team_name", "inviter_name",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_USER_MANAGER: {
 		"team_name", "inviter_name",

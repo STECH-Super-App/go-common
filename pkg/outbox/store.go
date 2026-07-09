@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -11,8 +12,8 @@ import (
 )
 
 // Store manages persistence for outbox_messages rows.
-// It separates transactional writes (InsertTx) from non-transactional reads
-// (FetchPending) and deletes (DeleteSent).
+// It separates transactional writes (InsertTx) from non-transactional claims
+// (ClaimPending), releases (ReleaseBatch, ReleaseStuck) and deletes (DeleteSent).
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -60,23 +61,41 @@ func (s *Store) InsertTx(ctx context.Context, tx Tx, msg *Message) error {
 	return nil
 }
 
-// FetchPending retrieves up to batchSize unsent messages ordered by creation time.
-// Uses FOR UPDATE SKIP LOCKED for zero-contention concurrent polling.
+// ClaimPending atomically claims up to batchSize pending messages for this
+// relay by flipping them to 'processing' and stamping claimed_at, returning
+// the claimed rows. FOR UPDATE SKIP LOCKED in the inner select keeps
+// concurrent relays contention-free, and — unlike the previous standalone
+// autocommit SELECT, whose row locks evaporated when the statement returned —
+// the status flip persists the claim, so no other relay can pick up the same
+// rows. The caller must terminate every claim: MarkSentBatch on success,
+// ReleaseBatch on failure (the Reaper's ReleaseStuck backstops crashes).
 //
-// Big O: O(log n) via the partial index idx_outbox_pending.
-func (s *Store) FetchPending(ctx context.Context, batchSize int) ([]*Message, error) {
+// RETURNING order is unspecified in Postgres, so results are re-sorted by
+// created_at in Go. Big O: O(log n) claim via the partial index
+// idx_outbox_pending + O(k log k) sort for k = batch size.
+func (s *Store) ClaimPending(ctx context.Context, batchSize int) ([]*Message, error) {
 	const query = `
-		SELECT id, aggregate_type, aggregate_id, event_type, topic, key,
-		       payload, headers, status, created_at, sent_at
-		FROM outbox_messages
-		WHERE status = 'pending'
-		ORDER BY created_at ASC
-		LIMIT $1
-		FOR UPDATE SKIP LOCKED`
+		UPDATE outbox_messages
+		SET status = 'processing', claimed_at = $2
+		FROM (
+			SELECT id
+			FROM outbox_messages
+			WHERE status = 'pending'
+			ORDER BY created_at ASC
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		) AS claimable
+		WHERE outbox_messages.id = claimable.id
+		RETURNING outbox_messages.id, outbox_messages.aggregate_type,
+		          outbox_messages.aggregate_id, outbox_messages.event_type,
+		          outbox_messages.topic, outbox_messages.key,
+		          outbox_messages.payload, outbox_messages.headers,
+		          outbox_messages.status, outbox_messages.created_at,
+		          outbox_messages.sent_at`
 
-	rows, err := s.pool.Query(ctx, query, batchSize)
+	rows, err := s.pool.Query(ctx, query, batchSize, time.Now().UTC())
 	if err != nil {
-		return nil, fmt.Errorf("outbox: fetch pending: %w", err)
+		return nil, fmt.Errorf("outbox: claim pending: %w", err)
 	}
 	defer rows.Close()
 
@@ -90,17 +109,61 @@ func (s *Store) FetchPending(ctx context.Context, batchSize int) ([]*Message, er
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("outbox: iterate pending rows: %w", err)
+		return nil, fmt.Errorf("outbox: iterate claimed rows: %w", err)
 	}
 
+	sortMessagesByCreatedAt(messages)
 	return messages, nil
+}
+
+// ReleaseBatch returns claimed messages to 'pending' so the next poll retries
+// them immediately (preserving the relay's ~PollInterval retry latency after
+// a failed Kafka write). The status guard keeps the release idempotent and
+// scoped: rows already released (or marked sent) are untouched.
+func (s *Store) ReleaseBatch(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	const query = `
+		UPDATE outbox_messages
+		SET status = 'pending', claimed_at = NULL
+		WHERE id = ANY($1::uuid[]) AND status = 'processing'`
+
+	if _, err := s.pool.Exec(ctx, query, ids); err != nil {
+		return fmt.Errorf("outbox: release batch (%d ids): %w", len(ids), err)
+	}
+	return nil
+}
+
+// ReleaseStuck returns messages that have been in 'processing' longer than
+// olderThan back to 'pending'. This is the Reaper's backstop for claims
+// orphaned by a relay that crashed between ClaimPending and MarkSentBatch/
+// ReleaseBatch — without it those rows would never be forwarded. Returns the
+// count of released rows for observability logging.
+//
+// Big O: O(k log n) where k = released rows, via partial index idx_outbox_processing.
+func (s *Store) ReleaseStuck(ctx context.Context, olderThan time.Duration) (int64, error) {
+	const query = `
+		UPDATE outbox_messages
+		SET status = 'pending', claimed_at = NULL
+		WHERE status = 'processing' AND claimed_at < $1`
+
+	cutoff := time.Now().UTC().Add(-olderThan)
+
+	result, err := s.pool.Exec(ctx, query, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("outbox: release stuck: %w", err)
+	}
+
+	return result.RowsAffected(), nil
 }
 
 // MarkSent updates a message status to 'sent' with a timestamp.
 func (s *Store) MarkSent(ctx context.Context, id string) error {
 	const query = `
 		UPDATE outbox_messages
-		SET status = 'sent', sent_at = $2
+		SET status = 'sent', sent_at = $2, claimed_at = NULL
 		WHERE id = $1`
 
 	result, err := s.pool.Exec(ctx, query, id, time.Now().UTC())
@@ -125,7 +188,7 @@ func (s *Store) MarkSentBatch(ctx context.Context, ids []string) error {
 
 	const query = `
 		UPDATE outbox_messages
-		SET status = 'sent', sent_at = $2
+		SET status = 'sent', sent_at = $2, claimed_at = NULL
 		WHERE id = ANY($1::uuid[])`
 
 	if _, err := s.pool.Exec(ctx, query, ids, time.Now().UTC()); err != nil {
@@ -151,6 +214,15 @@ func (s *Store) DeleteSent(ctx context.Context, retention time.Duration) (int64,
 	}
 
 	return result.RowsAffected(), nil
+}
+
+// sortMessagesByCreatedAt restores creation order after a RETURNING clause,
+// whose row order Postgres leaves unspecified. Stable so messages sharing a
+// created_at timestamp keep their scan order.
+func sortMessagesByCreatedAt(messages []*Message) {
+	sort.SliceStable(messages, func(i, j int) bool {
+		return messages[i].CreatedAt.Before(messages[j].CreatedAt)
+	})
 }
 
 // scanMessage maps a single database row to a Message struct.

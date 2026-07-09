@@ -15,6 +15,11 @@ type Status string
 const (
 	// StatusPending indicates the message has been written but not yet forwarded.
 	StatusPending Status = "pending"
+	// StatusProcessing indicates a relay has claimed the message and is
+	// forwarding it to Kafka. Failed writes are released back to pending
+	// immediately; claims orphaned by a crashed relay are released by the
+	// Reaper once they exceed ReaperConfig.ClaimTimeout.
+	StatusProcessing Status = "processing"
 	// StatusSent indicates the message has been successfully published to Kafka.
 	StatusSent Status = "sent"
 )

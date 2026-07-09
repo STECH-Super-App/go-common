@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -247,6 +249,96 @@ func TestRequireUserUUID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRegistrationAuthMiddleware_ValidRegistrationToken(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set(auth.HeaderPhone, "+77001234567")
+	req.Header.Set(auth.HeaderScope, "registration")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	called := false
+	handler := RegistrationAuthMiddleware(func(c echo.Context) error {
+		called = true
+		return c.String(http.StatusOK, "OK")
+	})
+
+	require.NoError(t, handler(c))
+	assert.True(t, called)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "+77001234567", c.Get(string(auth.ContextKeyPhone)))
+	assert.Equal(t, "registration", c.Get(string(auth.ContextKeyScope)))
+}
+
+func TestRegistrationAuthMiddleware_Rejects(t *testing.T) {
+	cases := []struct {
+		name  string
+		phone string
+		scope string
+	}{
+		{name: "missing phone", phone: "", scope: "registration"},
+		{name: "wrong scope", phone: "+77001234567", scope: "access"},
+		{name: "missing both", phone: "", scope: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodPost, "/", nil)
+			if tc.phone != "" {
+				req.Header.Set(auth.HeaderPhone, tc.phone)
+			}
+			if tc.scope != "" {
+				req.Header.Set(auth.HeaderScope, tc.scope)
+			}
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			handler := RegistrationAuthMiddleware(func(_ echo.Context) error {
+				t.Fatal("handler must not be called")
+				return nil
+			})
+
+			require.NoError(t, handler(c))
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+			var body map[string]interface{}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			errObj := body["error"].(map[string]interface{})
+			assert.Equal(t, "COMMON_REGISTRATION_TOKEN_REQUIRED", errObj["reason"])
+		})
+	}
+}
+
+// TestRegistrationAuthMiddleware_NeverLogsPhone is the PII regression test: the
+// middleware once contained a debug log.Printf that wrote the caller's full
+// phone number to the process log. Capture the standard logger's output across
+// both the pass and reject paths and assert the phone never appears.
+func TestRegistrationAuthMiddleware_NeverLogsPhone(t *testing.T) {
+	const phone = "+77001234567"
+
+	var captured bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&captured)
+	defer log.SetOutput(prev)
+
+	for _, scope := range []string{"registration", "access"} {
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		req.Header.Set(auth.HeaderPhone, phone)
+		req.Header.Set(auth.HeaderScope, scope)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		handler := RegistrationAuthMiddleware(func(c echo.Context) error {
+			return c.String(http.StatusOK, "OK")
+		})
+		require.NoError(t, handler(c))
+	}
+
+	assert.NotContains(t, captured.String(), phone,
+		"RegistrationAuthMiddleware must never log the caller's phone number")
 }
 
 func TestAuthMiddleware_NoTeamMembershipsHeaderYieldsNil(t *testing.T) {

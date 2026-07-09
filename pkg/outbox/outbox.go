@@ -42,8 +42,10 @@ func New(pool *pgxpool.Pool, kafkaWriter *kafka.Writer, logger *zap.Logger, cfg 
 		Publisher: NewPublisher(store, defaultTopic),
 		store:     store,
 		relay:     NewRelay(store, kafkaWriter, logger, cfg.Relay),
-		reaper:    NewReaper(store, logger, cfg.Reaper),
-		logger:    logger,
+		// The reaper also trims the dedup table (processed_outbox_messages) —
+		// New holds the pool, so it wires the cleaner automatically.
+		reaper: NewReaper(store, logger, cfg.Reaper, WithDeduplicator(NewDeduplicator(pool))),
+		logger: logger,
 	}
 }
 

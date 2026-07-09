@@ -204,17 +204,21 @@ Single source of truth for the Kafka message envelope carried on every event.
 ### `pkg/outbox`
 Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafka, plus consumer-side idempotency.
 
-- `New(pool, kafkaWriter, logger, cfg)`: Creates the full outbox subsystem.
+- `New(pool, kafkaWriter, logger, cfg)`: Creates the full outbox subsystem (publisher + relay + reaper, with the dedup-table cleaner wired in automatically).
 - `Start(ctx)`: Launches background relay (poll → Kafka) and reaper (cleanup) goroutines.
 - `Migrate(postgresURL)`: Runs the embedded goose migrations (outbox + dedup tables).
 - `RunInTx(ctx, pool, fn)`: Executes a function within a Postgres transaction.
+
+**Relay claim lifecycle:** each poll claims its batch by atomically flipping rows `pending → processing` (single `UPDATE ... FROM (SELECT ... FOR UPDATE SKIP LOCKED)` with `claimed_at` stamped), so concurrent relay replicas never forward the same row. Successful Kafka writes flip the batch to `sent`; failed writes are released straight back to `pending` (next poll retries, ~`OUTBOX_POLL_INTERVAL` latency). Claims orphaned by a crashed relay are recovered by the reaper's `ReleaseStuck` backstop after `ClaimTimeout` (`OUTBOX_CLAIM_TIMEOUT`, default 5m; zero-value in a hand-built `ReaperConfig` falls back to the default).
+
+**Reaper:** one cycle per `Interval` runs three independent steps — delete `sent` rows older than `Retention`, release stuck `processing` claims older than `ClaimTimeout`, and (when a `Deduplicator` is attached via `NewReaper(..., WithDeduplicator(d))` — `outbox.New` does this automatically) delete `processed_outbox_messages` rows older than `Retention` so the dedup table doesn't grow unbounded.
 
 **Publishing:**
 - `Publisher.PublishProto(ctx, tx, opts)` — **preferred**. Typed proto message path. Serializes via `protojson` (snake_case), auto-injects the full envelope header set (`event_id`, `event_type`, `aggregate_type`, `aggregate_id`, `occurred_at`, `schema_version`, `content_type`). Generates `event_id` UUID and writes it to both the header and the proto payload's `event_id` field.
 - `Publisher.Publish(ctx, tx, opts)` — legacy any-typed JSON path. Retained for transitional compat during the events-to-proto rollout; removed in the cleanup PR.
 
 **Consumer-side idempotency:**
-- `Deduplicator.Process(ctx, eventID, fn)` — atomic check-and-record-and-run in a Postgres transaction with `SELECT ... FOR UPDATE`. If the event_id is already recorded, `fn` is not invoked and the call returns nil. If `fn` errors, the event_id is not recorded (safe to retry). Provides exactly-once processing on top of at-least-once Kafka delivery.
+- `Deduplicator.Process(ctx, eventID, fn)` — claims the event_id FIRST via `INSERT ... ON CONFLICT DO NOTHING` inside a Postgres transaction, then runs `fn` in the same transaction only when the insert took the row. A conflict means already processed (or being processed by the claim holder): `fn` is skipped and nil returned. If `fn` errors, the transaction rolls back and the claim is released (safe to retry). The insert-first claim is what makes it atomic under concurrent first-time deliveries — exactly-once processing on top of at-least-once Kafka delivery. The reaper trims recorded event_ids older than `Retention` (`CleanupProcessed`).
 
 **Environment Variables:**
 
@@ -223,7 +227,8 @@ Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafk
 | `OUTBOX_POLL_INTERVAL` | `1s` | Relay polling frequency |
 | `OUTBOX_BATCH_SIZE` | `100` | Messages per poll cycle |
 | `OUTBOX_REAPER_INTERVAL` | `5m` | Cleanup schedule |
-| `OUTBOX_RETENTION` | `72h` | Sent message retention before deletion |
+| `OUTBOX_RETENTION` | `72h` | Sent message retention before deletion (also dedup-table retention) |
+| `OUTBOX_CLAIM_TIMEOUT` | `5m` | Age after which a stuck `processing` claim is released back to `pending` |
 
 **Quick Start (producer):**
 ```go

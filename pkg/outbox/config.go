@@ -20,6 +20,8 @@ type Config struct {
 //	OUTBOX_BATCH_SIZE     - Messages per poll cycle     (default: 100)
 //	OUTBOX_REAPER_INTERVAL - Cleanup schedule           (default: "5m")
 //	OUTBOX_RETENTION      - Sent message retention      (default: "72h")
+//	OUTBOX_CLAIM_TIMEOUT  - Stuck 'processing' claim age before the reaper
+//	                        releases it back to 'pending' (default: "5m")
 func DefaultConfig() *Config {
 	return &Config{
 		Relay: RelayConfig{
@@ -27,8 +29,9 @@ func DefaultConfig() *Config {
 			BatchSize:    config.GetEnvInt("OUTBOX_BATCH_SIZE", 100),
 		},
 		Reaper: ReaperConfig{
-			Interval:  config.GetEnvDuration("OUTBOX_REAPER_INTERVAL", 5*time.Minute),
-			Retention: config.GetEnvDuration("OUTBOX_RETENTION", 72*time.Hour),
+			Interval:     config.GetEnvDuration("OUTBOX_REAPER_INTERVAL", 5*time.Minute),
+			Retention:    config.GetEnvDuration("OUTBOX_RETENTION", 72*time.Hour),
+			ClaimTimeout: config.GetEnvDuration("OUTBOX_CLAIM_TIMEOUT", DefaultClaimTimeout),
 		},
 	}
 }
