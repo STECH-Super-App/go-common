@@ -46,6 +46,12 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_RECEIPT_CONFIRMED:       "order_receipt_confirmed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED:          "order_auto_completed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING:    "order_review_window_ending",
+	// tenant admin-transfer lifecycle (handoff): in-app + email + push.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_INITIATED: "admin_transfer_initiated",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_ACCEPTED:  "admin_transfer_accepted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_REJECTED:  "admin_transfer_rejected",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_CANCELLED: "admin_transfer_cancelled",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_EXPIRED:   "admin_transfer_expired",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -167,6 +173,22 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING: {
 		"listing_title",
+	},
+	// ─── tenant admin-transfer lifecycle (handoff) ───
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_INITIATED: {
+		"organization_name", "from_user_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_ACCEPTED: {
+		"organization_name", "to_user_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_REJECTED: {
+		"organization_name", "to_user_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_CANCELLED: {
+		"organization_name", "from_user_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_EXPIRED: {
+		"organization_name", "counterparty_name",
 	},
 }
 
