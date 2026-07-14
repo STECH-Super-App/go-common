@@ -22,7 +22,7 @@ jobs:
       - name: Open PR if changes
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GEN_GO_PAT }}
+          token: ${{ secrets.I18N_SYNC_PAT }}
           branch: chore/i18n-sync-translations-from-tolgee
           commit-message: "chore(i18n): sync translations from Tolgee"
           title: "chore(i18n): sync translations from Tolgee"
