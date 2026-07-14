@@ -85,10 +85,10 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 		"listing_title",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_MANAGER: {
-		"team_name", "inviter_name", "tenant_name",
+		"team_name", "inviter_name",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_OPERATOR: {
-		"team_name", "inviter_name", "tenant_name",
+		"team_name", "inviter_name",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_USER_MANAGER: {
 		"team_name", "inviter_name",
