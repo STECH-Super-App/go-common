@@ -29,11 +29,13 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_NEW: "admin_transferred_new",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_OLD: "admin_transferred_old",
 	// team membership lifecycle (slice 4): block / unblock / remove / leave.
-	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_BLOCKED:            "member_blocked",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_UNBLOCKED:          "member_unblocked",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_REMOVED:            "member_removed",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_REMOVED_ADMIN: "team_member_removed_admin",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_LEFT:          "team_member_left",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_BLOCKED:               "member_blocked",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_UNBLOCKED:             "member_unblocked",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_REMOVED:               "member_removed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_REMOVED_ADMIN:    "team_member_removed_admin",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_LEFT:             "team_member_left",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_MANAGER:  "member_role_changed_manager",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_OPERATOR: "member_role_changed_operator",
 	// order lifecycle (order-service contracts, gen-go-lib NotificationType 27-38).
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED:         "order_request_created",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_ACCEPTED:        "order_request_accepted",
@@ -140,6 +142,12 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_LEFT: {
 		"team_name", "member_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_MANAGER: {
+		"team_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_OPERATOR: {
+		"team_name",
 	},
 	// ─── order lifecycle (order-service) ───
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED: {

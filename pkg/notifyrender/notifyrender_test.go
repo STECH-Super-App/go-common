@@ -62,6 +62,8 @@ func testRendererFull(t *testing.T) *Renderer {
   "member_removed": {"title": "Removed from team", "body": "You have been removed from the team {{.team_name}}."},
   "team_member_removed_admin": {"title": "{{.removed_member_name}} was removed from the team", "body": "{{.removed_member_name}} was removed from the team {{.team_name}}."},
   "team_member_left": {"title": "{{.member_name}} left the team", "body": "{{.member_name}} is no longer a member of the team {{.team_name}}."},
+  "member_role_changed_manager": {"title": "Your role has changed", "body": "You are now a manager of the team {{.team_name}}."},
+  "member_role_changed_operator": {"title": "Your role has changed", "body": "You are now an operator of the team {{.team_name}}."},
   "order_request_created": {"title": "New order request", "body": "You have a new request for '{{.listing_title}}'."},
   "order_request_accepted": {"title": "Request accepted", "body": "Your request for '{{.listing_title}}' was accepted."},
   "order_terms_agreed": {"title": "Terms agreed", "body": "Both sides agreed on terms for '{{.listing_title}}'."},
@@ -106,6 +108,8 @@ func testRendererFull(t *testing.T) *Renderer {
   "member_removed": {"title": "Удалены из команды", "body": "Вы удалены из команды {{.team_name}}."},
   "team_member_removed_admin": {"title": "{{.removed_member_name}} исключён из команды", "body": "{{.removed_member_name}} исключён из команды {{.team_name}}."},
   "team_member_left": {"title": "{{.member_name}} покинул команду", "body": "{{.member_name}} больше не состоит в команде {{.team_name}}."},
+  "member_role_changed_manager": {"title": "Ваша роль изменена", "body": "Теперь вы менеджер команды {{.team_name}}."},
+  "member_role_changed_operator": {"title": "Ваша роль изменена", "body": "Теперь вы оператор команды {{.team_name}}."},
   "order_request_created": {"title": "Новый запрос на заказ", "body": "У вас новый запрос по «{{.listing_title}}»."},
   "order_request_accepted": {"title": "Запрос принят", "body": "Ваш запрос по «{{.listing_title}}» принят."},
   "order_terms_agreed": {"title": "Условия согласованы", "body": "Обе стороны согласовали условия по «{{.listing_title}}»."},
@@ -402,6 +406,32 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 				},
 			},
 			want: map[string]string{"team_name": "Crew A", "removed_member_name": "Ivan"},
+		},
+		{
+			name: "member_role_changed_manager",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_MANAGER,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendMemberRoleChanged{
+					SendMemberRoleChanged: &notificationv1.SendMemberRoleChanged{
+						TeamId: "tm-1", TeamName: "Crew A", NewRole: "MANAGER",
+					},
+				},
+			},
+			// new_role is intentionally not extracted: the role word is
+			// localized via the per-role NotificationType, not a placeholder.
+			want: map[string]string{"team_name": "Crew A"},
+		},
+		{
+			name: "member_role_changed_operator",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_OPERATOR,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendMemberRoleChanged{
+					SendMemberRoleChanged: &notificationv1.SendMemberRoleChanged{
+						TeamId: "tm-1", TeamName: "Crew A", NewRole: "OPERATOR",
+					},
+				},
+			},
+			want: map[string]string{"team_name": "Crew A"},
 		},
 	}
 	for _, tc := range cases {

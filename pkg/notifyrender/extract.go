@@ -211,6 +211,10 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"team_name":   p.SendTeamMemberLeft.GetTeamName(),
 			"member_name": p.SendTeamMemberLeft.GetMemberName(),
 		}, nil
+	case *notificationv1.NotificationEnvelope_SendMemberRoleChanged:
+		return map[string]string{
+			"team_name": p.SendMemberRoleChanged.GetTeamName(),
+		}, nil
 
 	// ─── free-text platform message (slice 5, verbatim) ───
 	// Unlike every other payload this carries the literal title/body that the
