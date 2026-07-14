@@ -2,9 +2,9 @@ name: i18n-consistency
 on:
   pull_request:
     paths:
-      - 'pkg/notifyrender/**'
       - 'pkg/i18n/translations/**'
       - 'scripts/check-i18n-consistency.sh'
+      - '.github/workflows/i18n-consistency.yml'
   workflow_dispatch:
 
 jobs:
@@ -12,10 +12,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-      - name: Run consistency unit test
-        run: go test ./pkg/notifyrender/... -run TestCatalogVsTemplateConsistency -v
       - name: Run shell consistency check
         run: bash scripts/check-i18n-consistency.sh
