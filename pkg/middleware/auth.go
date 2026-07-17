@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
@@ -64,8 +63,6 @@ func RegistrationAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		phone := c.Request().Header.Get(auth.HeaderPhone)
 		scope := c.Request().Header.Get(auth.HeaderScope)
-
-		log.Printf("RegistrationAuthMiddleware - Phone: %q, Scope: %q", phone, scope)
 
 		if phone == "" || scope != "registration" {
 			return response.JSONError(c, commonErrors.New(http.StatusUnauthorized).
