@@ -10,13 +10,11 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.6.0
 	github.com/STECH-Super-App/gen-go-lib v0.0.0-20260714112004-91983b16443f
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/labstack/echo/v4 v4.15.1
 	github.com/mssola/user_agent v0.6.0
-	github.com/nicksnyder/go-i18n/v2 v2.6.1
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/segmentio/kafka-go v0.4.51
 	github.com/stretchr/testify v1.11.1

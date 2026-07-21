@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 // LoadSummary reports what a Load/Reload accepted, rejected, and flagged.
 // Source is "overlay" when the overlay dir was read (even if some files were
-// skipped) or "baselines-only" when the dir was nil or unreadable.
+// skipped) or "baselines-only" when the path was empty, missing, or unreadable.
 //
 // Entry formats:
 //   - Rejected: "<localeTag>/<dotted.key>" (a locale value dropped by placeholder policy)
@@ -28,6 +29,13 @@ type LoadSummary struct {
 	Missing   []string // baseline keys absent from the en overlay
 	Shadowed  []string // en overlay keys whose value differs from the baseline
 }
+
+// LoadSummary.Source values: "overlay" when the overlay dir was read,
+// "baselines-only" when the path was empty, missing, or unreadable.
+const (
+	sourceOverlay       = "overlay"
+	sourceBaselinesOnly = "baselines-only"
+)
 
 // placeholderRe matches a Go text/template field reference like {{ .name }}.
 var placeholderRe = regexp.MustCompile(`\{\{\s*\.\s*([A-Za-z0-9_]+)\s*\}\}`)
@@ -51,29 +59,45 @@ func (b *OverlayBundle) load(_ context.Context) *LoadSummary {
 	overlay := map[string]map[string]string{}
 	tagSet := map[string]language.Tag{}
 
-	if b.dir == nil {
-		sum.Source = "baselines-only"
+	// Late-bind the overlay directory: re-stat dirPath on EVERY Load/Reload so a
+	// ConfigMap mount that appears AFTER pod boot is picked up by the next Reload
+	// without a restart. Freezing an fs.FS at construction pinned a missing mount
+	// forever — the 2026-07 dev incident where a deploy raced apply-configmap by
+	// ~3.5 min left both services stuck on English baselines with no way back.
+	if b.dirPath == "" {
+		sum.Source = sourceBaselinesOnly
 		b.logger.Warn("i18n_overlay dir unavailable",
-			zap.String("namespace", b.ns), zap.String("reason", "nil dir"))
+			zap.String("namespace", b.ns), zap.String("reason", "empty path"))
 		b.publish(overlay, tagSet, sum)
 		return sum
 	}
 
-	entries, err := fs.ReadDir(b.dir, ".")
+	info, err := os.Stat(b.dirPath)
+	if err != nil || !info.IsDir() {
+		sum.Source = sourceBaselinesOnly
+		b.logger.Warn("i18n_overlay dir unavailable",
+			zap.String("namespace", b.ns), zap.String("path", b.dirPath),
+			zap.String("reason", "missing or not a directory"), zap.Error(err))
+		b.publish(overlay, tagSet, sum)
+		return sum
+	}
+
+	dirFS := os.DirFS(b.dirPath)
+	entries, err := fs.ReadDir(dirFS, ".")
 	if err != nil {
-		sum.Source = "baselines-only"
+		sum.Source = sourceBaselinesOnly
 		b.logger.Warn("i18n_overlay dir unavailable",
-			zap.String("namespace", b.ns), zap.Error(err))
+			zap.String("namespace", b.ns), zap.String("path", b.dirPath), zap.Error(err))
 		b.publish(overlay, tagSet, sum)
 		return sum
 	}
 
-	sum.Source = "overlay"
+	sum.Source = sourceOverlay
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		b.loadFile(e.Name(), overlay, tagSet, sum)
+		b.loadFile(dirFS, e.Name(), overlay, tagSet, sum)
 	}
 
 	b.computeShadowMissing(overlay["en"], sum)
@@ -83,7 +107,7 @@ func (b *OverlayBundle) load(_ context.Context) *LoadSummary {
 
 // loadFile parses one <locale>.json overlay file. An unparseable locale name or
 // invalid JSON is a skip-with-warn, not a fatal error (spec F13).
-func (b *OverlayBundle) loadFile(name string, overlay map[string]map[string]string, tagSet map[string]language.Tag, sum *LoadSummary) {
+func (b *OverlayBundle) loadFile(dirFS fs.FS, name string, overlay map[string]map[string]string, tagSet map[string]language.Tag, sum *LoadSummary) {
 	base := strings.TrimSuffix(name, ".json")
 	tag, err := language.Parse(base)
 	if err != nil {
@@ -93,7 +117,7 @@ func (b *OverlayBundle) loadFile(name string, overlay map[string]map[string]stri
 		return
 	}
 
-	data, err := fs.ReadFile(b.dir, name)
+	data, err := fs.ReadFile(dirFS, name)
 	if err != nil {
 		b.logger.Warn("i18n_overlay locale file skipped",
 			zap.String("namespace", b.ns), zap.String("file", name),
