@@ -83,60 +83,84 @@ Wire format for errors:
 Setting `LOG_EMPTY_REASON_WARN=true` makes `JSONError` warn-log every `*AppError` it serializes with an empty `Reason` — useful for catching throw sites that haven't been migrated to the reason-tagged builder.
 
 ### `pkg/i18n`
-Server-side translation wrapper around `nicksnyder/go-i18n/v2`. Loads JSON translation files from an `fs.FS`, resolves keys with locale-fallback semantics, and emits warn logs when a target-locale translation is missing but the default-locale one exists.
-
-Translation files are named `<locale>.json` (e.g., `en.json`, `ru.json`). Locale matching uses `golang.org/x/text/language`: `ru-RU` resolves to `ru` if `ru` is loaded.
+Fs-based overlay localization engine (the 2026-07 one-truth-repo redesign — replaced the old `nicksnyder/go-i18n/v2` bundle wrapper). A bundle holds a compiled-in **en baseline** (a plain `map[string]string` owned by the consuming package, not JSON, not `//go:embed`) plus an optional filesystem **overlay** of per-locale JSON translation files mounted at runtime. `Load`/`Reload` build an immutable `Snapshot` and publish it atomically; consumers always resolve through a `Snapshot`, never through the bundle directly, so a multi-key operation (e.g. a notification's title + body) can't be torn by a concurrent reload.
 
 ```go
 import (
-    "embed"
-    "io/fs"
+    "context"
+    "os"
 
-    "golang.org/x/text/language"
     commoni18n "github.com/STECH-Super-App/go-common/pkg/i18n"
 )
 
-//go:embed translations
-var translationsFS embed.FS
-
-func newBundle() (*commoni18n.Bundle, error) {
-    sub, _ := fs.Sub(translationsFS, "translations")
-    return commoni18n.LoadBundle(sub, language.English)
+var baselineEN = map[string]string{
+    "tenant.transfer.expired_sms": "Your transfer for {{.OrganizationName}} expired.",
 }
 
-str, err := bundle.Resolve("ru", "tenant.transfer.expired_sms", map[string]any{
-    "ExpiryTime": t.ExpiryTime.Format(time.RFC3339),
+// At service boot (main.go): dir may be nil (or unreadable) — Load never
+// errors and never panics, it just degrades to baselines-only.
+dir := os.DirFS(cfg.I18nBundleDir) // nil if the mount is absent
+bundle := commoni18n.NewOverlayBundle(baselineEN, dir,
+    commoni18n.WithNamespace("tenant"),
+    commoni18n.WithLogger(log),
+)
+summary := bundle.Load(ctx) // summary.Source == "overlay" | "baselines-only"
+
+// In the application layer, resolve everything for one response against ONE snapshot:
+snap := bundle.Snapshot()
+str, err := snap.Resolve("ru", "tenant.transfer.expired_sms", map[string]any{
+    "OrganizationName": org.Name,
 })
 ```
 
-`Bundle.Resolve(locale, key, params)` returns the localized string. Missing key returns `ErrKeyNotFound`. Engine/template failure returns `ErrTranslationFailed`.
+- `NewOverlayBundle(baseline, dir fs.FS, opts...)` — `dir` nil means baselines-only forever; a non-nil dir that fails to read on `Load` degrades to baselines-only too. Either way construction and loading are infallible — there is no `log.Fatal` path.
+- `(b *OverlayBundle) Load(ctx)` / `Reload(ctx)` — both do the same thing (`Reload` just re-reads `dir`); return a `*LoadSummary{Namespace, Source, Loaded, Rejected, Missing, Shadowed}` for logging/response, never an error.
+- `(b *OverlayBundle) Snapshot() *Snapshot` — the only way to resolve keys; `(s *Snapshot) Resolve(locale, key string, params map[string]any) (string, error)`.
+- Resolution order per key: matched-locale overlay -> en overlay -> compiled-in baseline -> `ErrKeyNotFound`. Locale matching is base-language equality (`ru-RU` -> `ru`); an unsupported locale (e.g. `kk` with no `kk.json` mounted) falls through to en, not to a fuzzy-nearest language.
+- **Fail-soft per-key validation, not fail-fast.** `WithAllowedParams(func(key string) ([]string, bool))` supplies a placeholder allow-list; a locale value whose `{{.placeholder}}`s aren't a subset of the allowed set is dropped (falls back to baseline) and listed in `LoadSummary.Rejected` as `"<tag>/<key>"`, with a structured warn — it does not fail the load. Without an allow-list, a key defers to its own baseline's placeholders. Malformed JSON or an unparseable locale filename is likewise a skip-with-warn on that one file, never a hard error.
+- **En shadow warnings.** If the overlay ships an `en.json` that overrides a baseline key (translators editing the "source of truth" copy instead of just non-en locales), the overlay value wins at `Resolve()` time — the truth repo is authoritative over the compiled-in baseline, by design (spec F3). That key is still accepted-but-flagged: it's listed in `LoadSummary.Shadowed` with a structured warn, because a dev who later changes the Go baseline string won't see their change take effect until the truth repo (`i18n-catalog`) is updated to match — the shadow warning is what surfaces that silent drift.
+- `Missing` lists baseline keys absent from the overlay's `en` section — this is the "someone added a new type in Go but forgot the catalog entry" signal (see the new-key flow below).
+- `Snapshot`/`OverlayBundle` keep the same sentinel errors as before: `ErrKeyNotFound` (key absent everywhere), `ErrTranslationFailed` (template parse/exec failure, `text/template` with `missingkey=error` so a stray unrendered placeholder never leaks to a user).
 
-`SharedBundle()` exposes go-common's embedded shared `error.*` translations (en, ru, kk) — `error.unauthorized`, `error.internal`, `error.validation_failed`, `error.not_found`, `error.forbidden`. Services compose this with their own service bundle as a layered fallback.
+**Baseline ownership.** Each consumer owns its own en baseline in Go, next to the code that uses it — there is no more shared `translations/` JSON or `SharedBundle()`. `pkg/notifyrender.BaselineEN` (below) is go-common's only baseline; `notification-service` and `inbox-service` each carry their own. The **truth repo** for translated/overridden strings (ru and any future locale, plus any en override) is the external `i18n-catalog` repo, mounted into each service at `cfg.I18nBundleDir` (default `/etc/i18n`) as a per-namespace directory of `<locale>.json` files via a Kubernetes ConfigMap — that's the `dir fs.FS` passed to `NewOverlayBundle`. Nothing in go-common talks to Tolgee or i18n-catalog directly.
 
 ### `pkg/notifyrender`
-Renders in-app/push notification templates. `notifyrender.Renderer` is constructed by the consuming service from an `*i18n.Bundle` the service builds at startup from a mounted source (see the `i18n-catalog` repo). go-common carries the render *logic* (`typeKey`, `requiredParams`, `Render`, `ValidateBundle`) but **no strings** — the notification text lives in the external `i18n-catalog` data repo and is mounted into the service at runtime via a Kubernetes ConfigMap.
+Renders in-app/push notification templates. `notifyrender.Renderer` is constructed by the consuming service from an `i18n.Resolver` (satisfied by `*i18n.OverlayBundle`) the service builds at startup. go-common carries the render *logic* (`typeKey`, `requiredParams`, `Render`, `ValidateBundle`) **and** the compiled-in en baseline (`BaselineEN`) — truth-repo overrides layer on top of it at runtime via the overlay engine above.
 
 ```go
 import (
-    "golang.org/x/text/language"
+    "os"
+
     commoni18n "github.com/STECH-Super-App/go-common/pkg/i18n"
     "github.com/STECH-Super-App/go-common/pkg/notifyrender"
 )
 
 // At service boot (main.go):
-bundle, err := commoni18n.LoadBundle(os.DirFS(cfg.I18nBundleDir), language.English)
-if err != nil {
-    logger.Fatal("load i18n bundle", zap.Error(err))
-}
-renderer := notifyrender.NewRenderer(bundle)
+dir := os.DirFS(cfg.I18nBundleDir + "/notifyrender") // nil-safe if the mount is absent
+bundle := commoni18n.NewOverlayBundle(notifyrender.BaselineEN, dir,
+    commoni18n.WithNamespace("notifyrender"),
+    commoni18n.WithLogger(log),
+    commoni18n.WithAllowedParams(notifyrender.AllowedParamsByKey), // enforce the catalog contract on overlay values
+)
+bundle.Load(ctx) // summary logged; never fatal
+
+renderer := notifyrender.NewRenderer(bundle) // NewRenderer takes an i18n.Resolver
 
 // In the application layer:
 title, body, err := renderer.Render(notificationType, params, locale)
 ```
 
+`BaselineEN` is the compiled-in en fallback catalog: dotted `"<section>.title"`/`"<section>.body"` keys for every catalog section, ported from `i18n-catalog/en.json` and kept 1:1 with the `typeKey`/`requiredParams` contract (`baseline_test.go` asserts the union both ways). `AllowedParamsByKey(key string) ([]string, bool)` derives the placeholder allow-list for a catalog key from `requiredParams`, for wiring into `i18n.WithAllowedParams`.
+
 Package-level helpers that stay unchanged: `ExtractParams`, `RequiredParams`, `IsVerbatim`, `RenderVerbatim`, and the `Reason*` error constants / constructors (`ErrUnknownType`, `ErrMissingParam`, `ErrEmptyPayload`, `ErrEmptyVerbatimText`).
 
-`ValidateBundle(fs.FS) error` is the placeholder-consistency guard that `i18n-catalog` CI runs on every PR: it checks that every `{{.placeholder}}` in the source-locale `en.json` is declared in `requiredParams` for its type, and every declared `requiredParam` appears in at least one placeholder. A partial bundle (subset of catalog types) is accepted; use the full `en.json` in CI to catch missing sections.
+`ValidateBundle(fs.FS) error` is the placeholder-consistency guard that `i18n-catalog`'s `cmd/validate` runs on every PR: it checks that every `{{.placeholder}}` in the source-locale `en.json` is declared in `requiredParams` for its type, and every declared `requiredParam` appears in at least one placeholder. A partial bundle (subset of catalog types) is accepted; `ValidateBundleComplete(fs.FS) error` additionally asserts every catalog `NotificationType` has a section present — that's the one `i18n-catalog` CI runs against the real shipped bundle.
+
+**New-key / new-type flow.** Adding a translated string to an *existing* notification type is just an `i18n-catalog` PR (new locale entry under an existing section) — no go-common change needed. Adding a **new in-app notification type** is three coupled steps, strictly ordered (this is rule **F11** from the i18n redesign spec):
+1. A go-common PR adds the proto enum pin, the `typeKey`/`requiredParams` entry in `pkg/notifyrender/catalog.go`, and the new `BaselineEN` entry — merges and gets tagged first.
+2. The `i18n-catalog` PR carries **both** the new `en` section **and** `go get github.com/STECH-Super-App/go-common@<the new sha>` in the same commit. `i18n-catalog`'s validator runs `ValidateBundleComplete` against its **pinned** go-common version, so a catalog PR that adds the en section without bumping the pin fails with "has no matching NotificationType" — a real incident (2026-07-13, `team_member_left`) that looked like unrelated CI breakage. Skipping the bump is soft at runtime (the compiled-in baseline still covers en; only non-en locales are affected until the catalog PR lands) but hard-red in CI.
+3. Consumer services (notification-service, inbox-service) re-pin go-common and redeploy to pick up the new baseline entry and render the new type.
+The `Missing` field on `LoadSummary` is the load-time backstop for this flow: a baseline key with no matching overlay `en` entry means step 2 was skipped or hasn't merged yet.
 
 ### `pkg/logger`
 Structured logging using `uber-go/zap`.

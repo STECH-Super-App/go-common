@@ -1,6 +1,8 @@
 package notifyrender
 
 import (
+	"strings"
+
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
 )
 
@@ -208,4 +210,39 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 // nil for unknown / reserved types.
 func RequiredParams(t notificationv1.NotificationType) []string {
 	return requiredParams[t]
+}
+
+// sectionToType is the reverse of typeKey: catalog section name →
+// NotificationType. Built once at package init.
+var sectionToType = func() map[string]notificationv1.NotificationType {
+	m := make(map[string]notificationv1.NotificationType, len(typeKey))
+	for t, name := range typeKey {
+		m[name] = t
+	}
+	return m
+}()
+
+// AllowedParamsByKey maps a dotted catalog key ("<section>.title" or
+// "<section>.body") to the required param names declared for that section's
+// NotificationType. It is the reverse of typeKey plus a suffix strip.
+//
+// Returns (nil, false) for a key without a .title/.body suffix or one whose
+// section maps to no known NotificationType. Task 5 wires this into
+// i18n.WithAllowedParams so overlay translations may reference only declared
+// placeholders.
+func AllowedParamsByKey(key string) ([]string, bool) {
+	var section string
+	switch {
+	case strings.HasSuffix(key, ".title"):
+		section = strings.TrimSuffix(key, ".title")
+	case strings.HasSuffix(key, ".body"):
+		section = strings.TrimSuffix(key, ".body")
+	default:
+		return nil, false
+	}
+	t, ok := sectionToType[section]
+	if !ok {
+		return nil, false
+	}
+	return requiredParams[t], true
 }

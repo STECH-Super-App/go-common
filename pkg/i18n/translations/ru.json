@@ -1,9 +1,0 @@
-{
-  "error": {
-    "forbidden": "Доступ запрещён",
-    "internal": "Внутренняя ошибка сервера",
-    "not_found": "Не найдено",
-    "unauthorized": "Не авторизован",
-    "validation_failed": "Ошибка валидации"
-  }
-}

@@ -10,22 +10,23 @@ import (
 	"github.com/STECH-Super-App/go-common/pkg/i18n"
 )
 
-// ReasonRenderResolveFailed is emitted when the underlying i18n.Bundle
-// fails to resolve a template key (missing key in the target locale,
+// ReasonRenderResolveFailed is emitted when the underlying i18n resolver
+// fails to resolve a template key (missing key in every locale layer,
 // malformed template, etc.). Distinct from ReasonUnknownType
 // (catalog miss) and ReasonMissingParam (caller forgot a param).
 const ReasonRenderResolveFailed = "NOTIFYRENDER_RESOLVE_FAILED"
 
-// Renderer resolves notification templates against an i18n bundle supplied
-// at construction time. The strings are NOT compiled in; the consuming
-// service builds the bundle from a mounted source at startup and injects it.
+// Renderer resolves notification templates against an i18n.Resolver supplied
+// at construction time. The strings are NOT compiled into the Renderer; the
+// consuming service builds the overlay bundle (compiled-in BaselineEN plus an
+// optional mounted overlay) at startup and injects it as the Resolver.
 type Renderer struct {
-	bundle *i18n.Bundle
+	res i18n.Resolver
 }
 
-// NewRenderer returns a Renderer backed by the given bundle.
-func NewRenderer(bundle *i18n.Bundle) *Renderer {
-	return &Renderer{bundle: bundle}
+// NewRenderer returns a Renderer backed by the given resolver.
+func NewRenderer(res i18n.Resolver) *Renderer {
+	return &Renderer{res: res}
 }
 
 // Render returns the rendered title and body for the given notification
@@ -53,7 +54,11 @@ func (r *Renderer) Render(
 	bodyKey := key + ".body"
 	asAny := toAny(params)
 
-	title, err = r.bundle.Resolve(locale, titleKey, asAny)
+	// Resolve title and body against ONE snapshot so a concurrent overlay
+	// Reload cannot tear the title/body pair (spec F4).
+	snap := r.res.Snapshot()
+
+	title, err = snap.Resolve(locale, titleKey, asAny)
 	if err != nil {
 		return "", "", commonerr.New(http.StatusInternalServerError).
 			Reason(ReasonRenderResolveFailed).
@@ -62,7 +67,7 @@ func (r *Renderer) Render(
 			Cause(err).
 			Build()
 	}
-	body, err = r.bundle.Resolve(locale, bodyKey, asAny)
+	body, err = snap.Resolve(locale, bodyKey, asAny)
 	if err != nil {
 		return "", "", commonerr.New(http.StatusInternalServerError).
 			Reason(ReasonRenderResolveFailed).

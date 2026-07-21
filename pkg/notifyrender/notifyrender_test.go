@@ -1,12 +1,11 @@
 package notifyrender
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"testing/fstest"
-
-	"golang.org/x/text/language"
 
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
 
@@ -14,21 +13,30 @@ import (
 	"github.com/STECH-Super-App/go-common/pkg/i18n"
 )
 
+// newTestRenderer builds a Renderer over an OverlayBundle seeded with BaselineEN
+// and the given overlay files. The allow-list is the real per-key contract so
+// overlay values are validated exactly as they are in production wiring.
+func newTestRenderer(t *testing.T, files map[string]string) *Renderer {
+	t.Helper()
+	fsys := fstest.MapFS{}
+	for name, data := range files {
+		fsys[name] = &fstest.MapFile{Data: []byte(data)}
+	}
+	b := i18n.NewOverlayBundle(BaselineEN, fsys, i18n.WithAllowedParams(AllowedParamsByKey))
+	b.Load(context.Background())
+	return NewRenderer(b)
+}
+
 // testRenderer builds a Renderer backed by a minimal in-memory bundle that
 // only contains the listing_approved template. Use for error-path tests and
 // tests that only need one type resolved.
 func testRenderer(t *testing.T) *Renderer {
 	t.Helper()
-	fsys := fstest.MapFS{
-		"en.json": {Data: []byte(`{
+	return newTestRenderer(t, map[string]string{
+		"en.json": `{
 			"listing_approved": {"title": "Listing approved", "body": "Your listing '{{.listing_title}}' is now live."}
-		}`)},
-	}
-	b, err := i18n.LoadBundle(fsys, language.English)
-	if err != nil {
-		t.Fatalf("load bundle: %v", err)
-	}
-	return NewRenderer(b)
+		}`,
+	})
 }
 
 // testRendererFull builds a Renderer with the complete catalog in both en and
@@ -129,10 +137,8 @@ func testRendererFull(t *testing.T) *Renderer {
   "admin_transfer_expired": {"title": "Передача администратора истекла", "body": "Передача прав администратора для {{.organization_name}} с {{.counterparty_name}} истекла без действий."}
 }`)},
 	}
-	b, err := i18n.LoadBundle(fsys, language.English)
-	if err != nil {
-		t.Fatalf("load bundle: %v", err)
-	}
+	b := i18n.NewOverlayBundle(BaselineEN, fsys, i18n.WithAllowedParams(AllowedParamsByKey))
+	b.Load(context.Background())
 	return NewRenderer(b)
 }
 
