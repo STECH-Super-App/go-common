@@ -3,9 +3,10 @@ package notifyrender
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-	"testing/fstest"
 
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
 
@@ -14,15 +15,19 @@ import (
 )
 
 // newTestRenderer builds a Renderer over an OverlayBundle seeded with BaselineEN
-// and the given overlay files. The allow-list is the real per-key contract so
-// overlay values are validated exactly as they are in production wiring.
+// and the given overlay files. The files are written to a real temp dir (the
+// overlay engine binds a directory path, not an fs.FS). The allow-list is the
+// real per-key contract so overlay values are validated exactly as they are in
+// production wiring.
 func newTestRenderer(t *testing.T, files map[string]string) *Renderer {
 	t.Helper()
-	fsys := fstest.MapFS{}
+	dir := t.TempDir()
 	for name, data := range files {
-		fsys[name] = &fstest.MapFile{Data: []byte(data)}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
 	}
-	b := i18n.NewOverlayBundle(BaselineEN, fsys, i18n.WithAllowedParams(AllowedParamsByKey))
+	b := i18n.NewOverlayBundle(BaselineEN, dir, i18n.WithAllowedParams(AllowedParamsByKey))
 	b.Load(context.Background())
 	return NewRenderer(b)
 }
@@ -43,8 +48,8 @@ func testRenderer(t *testing.T) *Renderer {
 // ru locales. Use for tests that iterate typeKey or render multiple types.
 func testRendererFull(t *testing.T) *Renderer {
 	t.Helper()
-	fsys := fstest.MapFS{
-		"en.json": {Data: []byte(`{
+	return newTestRenderer(t, map[string]string{
+		"en.json": `{
   "chat_message": {"title": "New message from {{.sender_name}}", "body": "{{.preview}}"},
   "listing_approved": {"title": "Listing approved", "body": "Your listing '{{.listing_title}}' is now live."},
   "listing_rejected": {"title": "Listing rejected", "body": "Your listing '{{.listing_title}}' was rejected: {{.reason}}"},
@@ -89,8 +94,8 @@ func testRendererFull(t *testing.T) *Renderer {
   "admin_transfer_rejected": {"title": "Admin transfer declined", "body": "{{.to_user_name}} declined the admin transfer for {{.organization_name}}."},
   "admin_transfer_cancelled": {"title": "Admin transfer cancelled", "body": "{{.from_user_name}} cancelled the admin transfer for {{.organization_name}}."},
   "admin_transfer_expired": {"title": "Admin transfer expired", "body": "The admin transfer for {{.organization_name}} with {{.counterparty_name}} expired without action."}
-}`)},
-		"ru.json": {Data: []byte(`{
+}`,
+		"ru.json": `{
   "chat_message": {"title": "Новое сообщение от {{.sender_name}}", "body": "{{.preview}}"},
   "listing_approved": {"title": "Объявление одобрено", "body": "Ваше объявление «{{.listing_title}}» опубликовано."},
   "listing_rejected": {"title": "Объявление отклонено", "body": "Ваше объявление «{{.listing_title}}» отклонено: {{.reason}}"},
@@ -135,11 +140,8 @@ func testRendererFull(t *testing.T) *Renderer {
   "admin_transfer_rejected": {"title": "Передача администратора отклонена", "body": "{{.to_user_name}} отклонил передачу прав администратора для {{.organization_name}}."},
   "admin_transfer_cancelled": {"title": "Передача администратора отменена", "body": "{{.from_user_name}} отменил передачу прав администратора для {{.organization_name}}."},
   "admin_transfer_expired": {"title": "Передача администратора истекла", "body": "Передача прав администратора для {{.organization_name}} с {{.counterparty_name}} истекла без действий."}
-}`)},
-	}
-	b := i18n.NewOverlayBundle(BaselineEN, fsys, i18n.WithAllowedParams(AllowedParamsByKey))
-	b.Load(context.Background())
-	return NewRenderer(b)
+}`,
+	})
 }
 
 // validParamsFor builds a complete params map for the given type so

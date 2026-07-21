@@ -2,9 +2,10 @@ package i18n_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
-	"testing/fstest"
 
 	i18n "github.com/STECH-Super-App/go-common/pkg/i18n"
 )
@@ -14,16 +15,22 @@ var baseline = map[string]string{
 	"only.code":   "code-only",
 }
 
-func dir(files map[string]string) fstest.MapFS {
-	fs := fstest.MapFS{}
+// writeDir materializes the given <name> -> <contents> map as real files in a
+// fresh temp dir and returns its path. The overlay engine binds a directory
+// path (not an fs.FS), so fixtures live on disk and Reload re-reads them.
+func writeDir(t *testing.T, files map[string]string) string {
+	t.Helper()
+	d := t.TempDir()
 	for name, data := range files {
-		fs[name] = &fstest.MapFile{Data: []byte(data)}
+		if err := os.WriteFile(filepath.Join(d, name), []byte(data), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
 	}
-	return fs
+	return d
 }
 
-func TestBaselinesOnlyWhenDirNil(t *testing.T) {
-	b := i18n.NewOverlayBundle(baseline, nil)
+func TestBaselinesOnlyWhenPathEmpty(t *testing.T) {
+	b := i18n.NewOverlayBundle(baseline, "")
 	sum := b.Load(context.Background())
 	if sum.Source != "baselines-only" {
 		t.Fatalf("source = %q", sum.Source)
@@ -35,7 +42,7 @@ func TestBaselinesOnlyWhenDirNil(t *testing.T) {
 }
 
 func TestOverlayWinsAndLocaleMatches(t *testing.T) {
-	b := i18n.NewOverlayBundle(baseline, dir(map[string]string{
+	b := i18n.NewOverlayBundle(baseline, writeDir(t, map[string]string{
 		"en.json": `{"greet":{"title":"Hi {{.name}}"}}`,
 		"ru.json": `{"greet":{"title":"Привет {{.name}}"}}`,
 	}))
@@ -53,7 +60,7 @@ func TestOverlayWinsAndLocaleMatches(t *testing.T) {
 }
 
 func TestRejectUndeclaredPlaceholder(t *testing.T) {
-	b := i18n.NewOverlayBundle(baseline, dir(map[string]string{
+	b := i18n.NewOverlayBundle(baseline, writeDir(t, map[string]string{
 		"ru.json": `{"greet":{"title":"Привет {{.hacker}}"}}`,
 	}), i18n.WithAllowedParams(func(_ string) ([]string, bool) {
 		return []string{"name"}, true
@@ -68,7 +75,7 @@ func TestRejectUndeclaredPlaceholder(t *testing.T) {
 }
 
 func TestShadowWarningOnEnOverride(t *testing.T) { // F3
-	b := i18n.NewOverlayBundle(baseline, dir(map[string]string{
+	b := i18n.NewOverlayBundle(baseline, writeDir(t, map[string]string{
 		"en.json": `{"greet":{"title":"DIFFERENT {{.name}}"}}`,
 	}))
 	sum := b.Load(context.Background())
@@ -88,7 +95,7 @@ func TestShadowWarningOnEnOverride(t *testing.T) { // F3
 }
 
 func TestMissingKeysReported(t *testing.T) { // D5
-	b := i18n.NewOverlayBundle(baseline, dir(map[string]string{
+	b := i18n.NewOverlayBundle(baseline, writeDir(t, map[string]string{
 		"en.json": `{"greet":{"title":"Hello {{.name}}"}}`,
 	}))
 	sum := b.Load(context.Background())
@@ -98,7 +105,7 @@ func TestMissingKeysReported(t *testing.T) { // D5
 }
 
 func TestInvalidLocaleFileSkippedNotFatal(t *testing.T) { // F13
-	b := i18n.NewOverlayBundle(baseline, dir(map[string]string{
+	b := i18n.NewOverlayBundle(baseline, writeDir(t, map[string]string{
 		"ru.json":         `{"greet":{"title":"Привет {{.name}}"}}`,
 		"not-a-tag!.json": `{}`,
 		"broken.json":     `{{{`,
@@ -110,11 +117,13 @@ func TestInvalidLocaleFileSkippedNotFatal(t *testing.T) { // F13
 }
 
 func TestReloadSwapsAtomically(t *testing.T) { // F4 substrate
-	fsys := dir(map[string]string{"ru.json": `{"greet":{"title":"v1 {{.name}}"}}`})
-	b := i18n.NewOverlayBundle(baseline, fsys)
+	d := writeDir(t, map[string]string{"ru.json": `{"greet":{"title":"v1 {{.name}}"}}`})
+	b := i18n.NewOverlayBundle(baseline, d)
 	b.Load(context.Background())
 	snap := b.Snapshot()
-	fsys["ru.json"] = &fstest.MapFile{Data: []byte(`{"greet":{"title":"v2 {{.name}}"}}`)}
+	if err := os.WriteFile(filepath.Join(d, "ru.json"), []byte(`{"greet":{"title":"v2 {{.name}}"}}`), 0o600); err != nil {
+		t.Fatalf("rewrite ru.json: %v", err)
+	}
 	b.Reload(context.Background())
 	// old snapshot still consistent:
 	if got, _ := snap.Resolve("ru", "greet.title", map[string]any{"name": "x"}); got != "v1 x" {
@@ -130,8 +139,8 @@ func TestReloadSwapsAtomically(t *testing.T) { // F4 substrate
 // (spec F4) must let readers keep resolving without error or data race; run under
 // -race to catch a torn read of the current pointer or its maps.
 func TestSnapshotResolveRaceWithReload(t *testing.T) {
-	fsys := dir(map[string]string{"ru.json": `{"greet":{"title":"v {{.name}}"}}`})
-	b := i18n.NewOverlayBundle(baseline, fsys)
+	d := writeDir(t, map[string]string{"ru.json": `{"greet":{"title":"v {{.name}}"}}`})
+	b := i18n.NewOverlayBundle(baseline, d)
 	b.Load(context.Background())
 
 	const readers = 8
@@ -169,9 +178,52 @@ func TestSnapshotResolveRaceWithReload(t *testing.T) {
 }
 
 func TestUnknownKeyTyped(t *testing.T) {
-	b := i18n.NewOverlayBundle(baseline, nil)
+	b := i18n.NewOverlayBundle(baseline, "")
 	b.Load(context.Background())
 	if _, err := b.Snapshot().Resolve("en", "nope", nil); err == nil {
 		t.Fatal("want ErrKeyNotFound")
+	}
+}
+
+// TestReloadRecoversLateMount is the regression lock for the 2026-07 dev
+// incident: a ConfigMap overlay mount that appears AFTER pod boot must be picked
+// up by the next Reload with no restart. Construct against a not-yet-existing
+// dir (mount not applied) -> Load degrades to baselines-only; then create the
+// dir + write locale files (mount lands) -> Reload flips Source to "overlay" and
+// keys resolve from the overlay. Before the late-bind fix the bundle froze a nil
+// fs.FS at construction and could never recover.
+func TestReloadRecoversLateMount(t *testing.T) {
+	parent := t.TempDir()
+	dirPath := filepath.Join(parent, "i18n") // deliberately not created yet
+	b := i18n.NewOverlayBundle(baseline, dirPath)
+
+	sum := b.Load(context.Background())
+	if sum.Source != "baselines-only" {
+		t.Fatalf("pre-mount Source = %q, want baselines-only", sum.Source)
+	}
+	if got, _ := b.Snapshot().Resolve("ru", "greet.title", map[string]any{"name": "Ann"}); got != "Hello Ann" {
+		t.Fatalf("pre-mount resolve = %q, want baseline", got)
+	}
+
+	// Mount appears after boot.
+	if err := os.Mkdir(dirPath, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirPath, "en.json"), []byte(`{"greet":{"title":"Hi {{.name}}"}}`), 0o600); err != nil {
+		t.Fatalf("write en.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirPath, "ru.json"), []byte(`{"greet":{"title":"Привет {{.name}}"}}`), 0o600); err != nil {
+		t.Fatalf("write ru.json: %v", err)
+	}
+
+	sum2 := b.Reload(context.Background())
+	if sum2.Source != "overlay" {
+		t.Fatalf("post-mount Source = %q, want overlay", sum2.Source)
+	}
+	if got, _ := b.Snapshot().Resolve("ru", "greet.title", map[string]any{"name": "Ann"}); got != "Привет Ann" {
+		t.Fatalf("post-mount ru resolve = %q, want overlay value", got)
+	}
+	if got, _ := b.Snapshot().Resolve("en", "greet.title", map[string]any{"name": "Ann"}); got != "Hi Ann" {
+		t.Fatalf("post-mount en resolve = %q, want overlay value", got)
 	}
 }

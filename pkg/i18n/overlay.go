@@ -9,7 +9,6 @@ package i18n
 import (
 	"bytes"
 	"fmt"
-	"io/fs"
 	"sync/atomic"
 	"text/template"
 
@@ -39,7 +38,7 @@ type Resolver interface {
 // build an immutable Snapshot and publish it atomically.
 type OverlayBundle struct {
 	baseline map[string]string
-	dir      fs.FS // nil => baselines-only
+	dirPath  string // "" => baselines-only; re-stat'd each Load/Reload for late mounts
 	ns       string
 	logger   *zap.Logger
 	allowed  func(key string) ([]string, bool)
@@ -73,17 +72,20 @@ func WithAllowedParams(fn func(key string) ([]string, bool)) Option {
 	return func(b *OverlayBundle) { b.allowed = fn }
 }
 
-// NewOverlayBundle builds a bundle over the given baselines and overlay dir.
-// dir may be nil, in which case Load resolves from baselines only. The returned
-// bundle already holds an empty (baselines-only) Snapshot so Snapshot() is safe
-// to call before the first Load.
-func NewOverlayBundle(baseline map[string]string, dir fs.FS, opts ...Option) *OverlayBundle {
+// NewOverlayBundle builds a bundle over the given baselines and an overlay
+// directory PATH (not a frozen fs.FS). The path is re-stat'd on every
+// Load/Reload, so an overlay mount that appears after boot is picked up by the
+// next Reload — no restart needed. An empty dirPath means baselines-only (still
+// valid for tests and local runs without a mount). The returned bundle already
+// holds an empty (baselines-only) Snapshot so Snapshot() is safe to call before
+// the first Load.
+func NewOverlayBundle(baseline map[string]string, dirPath string, opts ...Option) *OverlayBundle {
 	if baseline == nil {
 		baseline = map[string]string{}
 	}
 	b := &OverlayBundle{
 		baseline: baseline,
-		dir:      dir,
+		dirPath:  dirPath,
 		logger:   zap.NewNop(),
 	}
 	for _, o := range opts {

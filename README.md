@@ -88,7 +88,6 @@ Fs-based overlay localization engine (the 2026-07 one-truth-repo redesign — re
 ```go
 import (
     "context"
-    "os"
 
     commoni18n "github.com/STECH-Super-App/go-common/pkg/i18n"
 )
@@ -97,10 +96,11 @@ var baselineEN = map[string]string{
     "tenant.transfer.expired_sms": "Your transfer for {{.OrganizationName}} expired.",
 }
 
-// At service boot (main.go): dir may be nil (or unreadable) — Load never
-// errors and never panics, it just degrades to baselines-only.
-dir := os.DirFS(cfg.I18nBundleDir) // nil if the mount is absent
-bundle := commoni18n.NewOverlayBundle(baselineEN, dir,
+// At service boot (main.go): pass the overlay directory PATH (not an fs.FS). An
+// empty, missing, or unreadable path degrades to baselines-only — Load never
+// errors and never panics. The path is re-stat'd on every Load/Reload, so a
+// mount that appears after boot is picked up by the next Reload — no restart.
+bundle := commoni18n.NewOverlayBundle(baselineEN, cfg.I18nBundleDir, // "" => baselines-only
     commoni18n.WithNamespace("tenant"),
     commoni18n.WithLogger(log),
 )
@@ -113,8 +113,9 @@ str, err := snap.Resolve("ru", "tenant.transfer.expired_sms", map[string]any{
 })
 ```
 
-- `NewOverlayBundle(baseline, dir fs.FS, opts...)` — `dir` nil means baselines-only forever; a non-nil dir that fails to read on `Load` degrades to baselines-only too. Either way construction and loading are infallible — there is no `log.Fatal` path.
-- `(b *OverlayBundle) Load(ctx)` / `Reload(ctx)` — both do the same thing (`Reload` just re-reads `dir`); return a `*LoadSummary{Namespace, Source, Loaded, Rejected, Missing, Shadowed}` for logging/response, never an error.
+- `NewOverlayBundle(baseline, dirPath string, opts...)` — `dirPath` is the overlay **directory path**, not a frozen `fs.FS`. An empty path means baselines-only; a path that is missing, not a directory, or unreadable on `Load` degrades to baselines-only too. Either way construction and loading are infallible — there is no `log.Fatal` path.
+- **Late-mount recovery.** The path is re-`os.Stat`'d on **every** `Load`/`Reload` — a ConfigMap overlay mount that appears *after* pod boot is picked up by the next `Reload`, no restart needed. (Binding a frozen `fs.FS` at construction pinned a missing mount forever: a 2026-07 dev incident where a deploy raced apply-configmap by ~3.5 min left both services stuck on English baselines with no way to recover short of a restart. The reload endpoint exists precisely to recover such states.)
+- `(b *OverlayBundle) Load(ctx)` / `Reload(ctx)` — both do the same thing (`Reload` just re-reads `dirPath`); return a `*LoadSummary{Namespace, Source, Loaded, Rejected, Missing, Shadowed}` for logging/response, never an error.
 - `(b *OverlayBundle) Snapshot() *Snapshot` — the only way to resolve keys; `(s *Snapshot) Resolve(locale, key string, params map[string]any) (string, error)`.
 - Resolution order per key: matched-locale overlay -> en overlay -> compiled-in baseline -> `ErrKeyNotFound`. Locale matching is base-language equality (`ru-RU` -> `ru`); an unsupported locale (e.g. `kk` with no `kk.json` mounted) falls through to en, not to a fuzzy-nearest language.
 - **Fail-soft per-key validation, not fail-fast.** `WithAllowedParams(func(key string) ([]string, bool))` supplies a placeholder allow-list; a locale value whose `{{.placeholder}}`s aren't a subset of the allowed set is dropped (falls back to baseline) and listed in `LoadSummary.Rejected` as `"<tag>/<key>"`, with a structured warn — it does not fail the load. Without an allow-list, a key defers to its own baseline's placeholders. Malformed JSON or an unparseable locale filename is likewise a skip-with-warn on that one file, never a hard error.
@@ -122,22 +123,20 @@ str, err := snap.Resolve("ru", "tenant.transfer.expired_sms", map[string]any{
 - `Missing` lists baseline keys absent from the overlay's `en` section — this is the "someone added a new type in Go but forgot the catalog entry" signal (see the new-key flow below).
 - `Snapshot`/`OverlayBundle` keep the same sentinel errors as before: `ErrKeyNotFound` (key absent everywhere), `ErrTranslationFailed` (template parse/exec failure, `text/template` with `missingkey=error` so a stray unrendered placeholder never leaks to a user).
 
-**Baseline ownership.** Each consumer owns its own en baseline in Go, next to the code that uses it — there is no more shared `translations/` JSON or `SharedBundle()`. `pkg/notifyrender.BaselineEN` (below) is go-common's only baseline; `notification-service` and `inbox-service` each carry their own. The **truth repo** for translated/overridden strings (ru and any future locale, plus any en override) is the external `i18n-catalog` repo, mounted into each service at `cfg.I18nBundleDir` (default `/etc/i18n`) as a per-namespace directory of `<locale>.json` files via a Kubernetes ConfigMap — that's the `dir fs.FS` passed to `NewOverlayBundle`. Nothing in go-common talks to Tolgee or i18n-catalog directly.
+**Baseline ownership.** Each consumer owns its own en baseline in Go, next to the code that uses it — there is no more shared `translations/` JSON or `SharedBundle()`. `pkg/notifyrender.BaselineEN` (below) is go-common's only baseline; `notification-service` and `inbox-service` each carry their own. The **truth repo** for translated/overridden strings (ru and any future locale, plus any en override) is the external `i18n-catalog` repo, mounted into each service at `cfg.I18nBundleDir` (default `/etc/i18n`) as a per-namespace directory of `<locale>.json` files via a Kubernetes ConfigMap — that's the directory **path** passed to `NewOverlayBundle`. Nothing in go-common talks to Tolgee or i18n-catalog directly.
 
 ### `pkg/notifyrender`
 Renders in-app/push notification templates. `notifyrender.Renderer` is constructed by the consuming service from an `i18n.Resolver` (satisfied by `*i18n.OverlayBundle`) the service builds at startup. go-common carries the render *logic* (`typeKey`, `requiredParams`, `Render`, `ValidateBundle`) **and** the compiled-in en baseline (`BaselineEN`) — truth-repo overrides layer on top of it at runtime via the overlay engine above.
 
 ```go
 import (
-    "os"
-
     commoni18n "github.com/STECH-Super-App/go-common/pkg/i18n"
     "github.com/STECH-Super-App/go-common/pkg/notifyrender"
 )
 
-// At service boot (main.go):
-dir := os.DirFS(cfg.I18nBundleDir + "/notifyrender") // nil-safe if the mount is absent
-bundle := commoni18n.NewOverlayBundle(notifyrender.BaselineEN, dir,
+// At service boot (main.go): pass the overlay dir path; empty/missing degrades
+// to baselines-only, and a late mount is recovered by the next Reload.
+bundle := commoni18n.NewOverlayBundle(notifyrender.BaselineEN, cfg.I18nBundleDir+"/notifyrender",
     commoni18n.WithNamespace("notifyrender"),
     commoni18n.WithLogger(log),
     commoni18n.WithAllowedParams(notifyrender.AllowedParamsByKey), // enforce the catalog contract on overlay values
