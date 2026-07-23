@@ -22,7 +22,6 @@ const (
 	ReasonEmptyOccurredAt    = "NOTIFYOUTBOX_EMPTY_OCCURRED_AT"
 	ReasonEmptyRecipient     = "NOTIFYOUTBOX_EMPTY_RECIPIENT"
 	ReasonAmbiguousRecipient = "NOTIFYOUTBOX_AMBIGUOUS_RECIPIENT"
-	ReasonEmptyLocale        = "NOTIFYOUTBOX_EMPTY_LOCALE"
 	ReasonUnspecifiedType    = "NOTIFYOUTBOX_UNSPECIFIED_TYPE"
 	ReasonEmptyChannels      = "NOTIFYOUTBOX_EMPTY_CHANNELS"
 	ReasonMissingDeepLink    = "NOTIFYOUTBOX_MISSING_DEEP_LINK"
@@ -64,13 +63,6 @@ func errAmbiguousRecipient() *commonerr.AppError {
 	return commonerr.New(http.StatusInternalServerError).
 		Reason(ReasonAmbiguousRecipient).
 		Message("metadata sets both recipient_user_id and recipient_tenant_id (ambiguous addressing — set exactly one)").
-		Build()
-}
-
-func errEmptyLocale() *commonerr.AppError {
-	return commonerr.New(http.StatusInternalServerError).
-		Reason(ReasonEmptyLocale).
-		Message("metadata.locale is empty").
 		Build()
 }
 

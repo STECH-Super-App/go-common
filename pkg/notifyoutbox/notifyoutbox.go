@@ -72,9 +72,12 @@ func validate(env *notificationv1.NotificationEnvelope) error {
 	if m.GetOccurredAt() == nil || m.GetOccurredAt().GetSeconds() == 0 {
 		return errEmptyOccurredAt()
 	}
-	if m.GetLocale() == "" {
-		return errEmptyLocale()
-	}
+	// Locale is OPTIONAL. Every channel-owning consumer resolves the real
+	// per-recipient locale (envelope hint -> user preference -> platform
+	// default); a producer that pins a locale here overrides recipient
+	// preference for every recipient — the exact bug the tenant-unification
+	// pivot removed from order-service. Producers with genuine per-request
+	// locale context may still set it as a hint.
 	if m.GetType() == notificationv1.NotificationType_NOTIFICATION_TYPE_UNSPECIFIED {
 		return errUnspecifiedType()
 	}

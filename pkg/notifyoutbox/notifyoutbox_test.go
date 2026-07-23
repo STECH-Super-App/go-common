@@ -81,10 +81,16 @@ func TestValidate_EmptyOccurredAt(t *testing.T) {
 	assertReason(t, validate(e), ReasonEmptyOccurredAt)
 }
 
-func TestValidate_EmptyLocale(t *testing.T) {
+func TestValidate_EmptyLocaleIsAllowed(t *testing.T) {
+	// Locale is an optional hint: consumers resolve the real per-recipient
+	// locale (envelope -> user preference -> platform default). Producers
+	// without per-request locale context (order-service transitions/sweeps)
+	// publish with it empty.
 	e := validEnvelope(t)
 	e.Metadata.Locale = ""
-	assertReason(t, validate(e), ReasonEmptyLocale)
+	if err := validate(e); err != nil {
+		t.Fatalf("empty locale must validate, got %v", err)
+	}
 }
 
 func TestValidate_UnspecifiedType(t *testing.T) {
