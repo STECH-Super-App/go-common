@@ -17,18 +17,19 @@ import (
 // the only function that returns them; downstream code asserts via
 // errors.As(err, &*AppError) and inspects Reason.
 const (
-	ReasonEmptyEventID     = "NOTIFYOUTBOX_EMPTY_EVENT_ID"
-	ReasonEmptyAggregateID = "NOTIFYOUTBOX_EMPTY_AGGREGATE_ID"
-	ReasonEmptyOccurredAt  = "NOTIFYOUTBOX_EMPTY_OCCURRED_AT"
-	ReasonEmptyRecipient   = "NOTIFYOUTBOX_EMPTY_RECIPIENT"
-	ReasonEmptyLocale      = "NOTIFYOUTBOX_EMPTY_LOCALE"
-	ReasonUnspecifiedType  = "NOTIFYOUTBOX_UNSPECIFIED_TYPE"
-	ReasonEmptyChannels    = "NOTIFYOUTBOX_EMPTY_CHANNELS"
-	ReasonMissingDeepLink  = "NOTIFYOUTBOX_MISSING_DEEP_LINK"
-	ReasonEmptyPayload     = "NOTIFYOUTBOX_EMPTY_PAYLOAD"
-	ReasonMissingParam     = "NOTIFYOUTBOX_MISSING_PARAM"
-	ReasonNilPublisher     = "NOTIFYOUTBOX_NIL_PUBLISHER"
-	ReasonEmptyVerbatim    = "NOTIFYOUTBOX_EMPTY_VERBATIM"
+	ReasonEmptyEventID       = "NOTIFYOUTBOX_EMPTY_EVENT_ID"
+	ReasonEmptyAggregateID   = "NOTIFYOUTBOX_EMPTY_AGGREGATE_ID"
+	ReasonEmptyOccurredAt    = "NOTIFYOUTBOX_EMPTY_OCCURRED_AT"
+	ReasonEmptyRecipient     = "NOTIFYOUTBOX_EMPTY_RECIPIENT"
+	ReasonAmbiguousRecipient = "NOTIFYOUTBOX_AMBIGUOUS_RECIPIENT"
+	ReasonEmptyLocale        = "NOTIFYOUTBOX_EMPTY_LOCALE"
+	ReasonUnspecifiedType    = "NOTIFYOUTBOX_UNSPECIFIED_TYPE"
+	ReasonEmptyChannels      = "NOTIFYOUTBOX_EMPTY_CHANNELS"
+	ReasonMissingDeepLink    = "NOTIFYOUTBOX_MISSING_DEEP_LINK"
+	ReasonEmptyPayload       = "NOTIFYOUTBOX_EMPTY_PAYLOAD"
+	ReasonMissingParam       = "NOTIFYOUTBOX_MISSING_PARAM"
+	ReasonNilPublisher       = "NOTIFYOUTBOX_NIL_PUBLISHER"
+	ReasonEmptyVerbatim      = "NOTIFYOUTBOX_EMPTY_VERBATIM"
 )
 
 func errEmptyEventID() *commonerr.AppError {
@@ -56,6 +57,13 @@ func errEmptyRecipient() *commonerr.AppError {
 	return commonerr.New(http.StatusInternalServerError).
 		Reason(ReasonEmptyRecipient).
 		Message("metadata.recipient_user_id is empty (and channels contains IN_APP or PUSH)").
+		Build()
+}
+
+func errAmbiguousRecipient() *commonerr.AppError {
+	return commonerr.New(http.StatusInternalServerError).
+		Reason(ReasonAmbiguousRecipient).
+		Message("metadata sets both recipient_user_id and recipient_tenant_id (ambiguous addressing — set exactly one)").
 		Build()
 }
 

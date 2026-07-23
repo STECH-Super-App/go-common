@@ -8,10 +8,10 @@ import (
 )
 
 // GlobalRole is a platform-wide role carried in the JWT `roles` claim and the
-// X-User-Roles header. It is distinct from the team-scoped Role
-// (ADMIN/MANAGER/OPERATOR) defined in authz.go, which is keyed per team
-// membership. A higher GlobalRole satisfies a lower GlobalRole *gate*, but
-// confers no team-scoped authority.
+// X-User-Roles header. It is distinct from the per-tenant role
+// (ADMIN/MANAGER/OPERATOR) carried in TenantMembership.Role, which is keyed per
+// tenant membership. A higher GlobalRole satisfies a lower GlobalRole *gate*,
+// but confers no per-tenant authority.
 type GlobalRole string
 
 // Global roles, ordered by authority in globalRoleRank below.

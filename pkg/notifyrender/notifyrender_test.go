@@ -56,27 +56,27 @@ func testRendererFull(t *testing.T) *Renderer {
   "listing_unpublished": {"title": "Listing unpublished", "body": "Your listing '{{.listing_title}}' was unpublished: {{.reason}}"},
   "favorite_price_changed": {"title": "Price changed", "body": "The price of '{{.listing_title}}' changed from {{.old_price}} to {{.new_price}} {{.currency}}."},
   "favorite_listing_removed": {"title": "Favorite listing removed", "body": "'{{.listing_title}}' is no longer available."},
-  "team_invite_tenant_manager": {"title": "Invitation to join {{.team_name}}", "body": "{{.inviter_name}} invited you to join {{.team_name}} as a manager."},
-  "team_invite_tenant_operator": {"title": "Invitation to join {{.team_name}}", "body": "{{.inviter_name}} invited you to join {{.team_name}} as an operator."},
-  "team_invite_user_manager": {"title": "Team invitation", "body": "{{.inviter_name}} invited you to {{.team_name}} as a manager."},
-  "team_invite_user_operator": {"title": "Team invitation", "body": "{{.inviter_name}} invited you to {{.team_name}} as an operator."},
-  "tenant_verified": {"title": "Organization verified", "body": "{{.organization_name}} has been verified."},
+  "tenant_invite_organisation_manager": {"title": "Invitation to join {{.tenant_name}}", "body": "{{.inviter_name}} invited you to join {{.tenant_name}} as a manager."},
+  "tenant_invite_organisation_operator": {"title": "Invitation to join {{.tenant_name}}", "body": "{{.inviter_name}} invited you to join {{.tenant_name}} as an operator."},
+  "tenant_invite_personal_manager": {"title": "Tenant invitation", "body": "{{.inviter_name}} invited you to {{.tenant_name}} as a manager."},
+  "tenant_invite_personal_operator": {"title": "Tenant invitation", "body": "{{.inviter_name}} invited you to {{.tenant_name}} as an operator."},
+  "organisation_verified": {"title": "Organization verified", "body": "{{.organization_name}} has been verified."},
   "operator_assigned": {"title": "Operator assigned", "body": "{{.operator_name}} has been assigned."},
   "operator_released": {"title": "Operator released", "body": "{{.operator_name}} has been released."},
   "wallet_operation_requested": {"title": "Wallet operation requested", "body": "A {{.operation_kind}} of {{.amount}} {{.currency}} has been requested."},
   "wallet_operation_decided": {"title": "Wallet operation {{.decision}}", "body": "Your wallet operation for {{.amount}} {{.currency}} was {{.decision}}."},
-  "tenant_rejected": {"title": "Organization rejected", "body": "Your organization was rejected: {{.reason}}"},
+  "organisation_rejected": {"title": "Organization rejected", "body": "Your organization was rejected: {{.reason}}"},
   "invite_accepted": {"title": "Invitation accepted", "body": "{{.phone}} accepted your invitation to join as {{.role}}."},
   "invite_declined": {"title": "Invitation declined", "body": "{{.phone}} declined your invitation."},
-  "admin_transferred_new": {"title": "You are now the team admin", "body": "You have been made the admin of {{.team_name}}."},
-  "admin_transferred_old": {"title": "Team admin transferred", "body": "You transferred admin rights for {{.team_name}}."},
-  "member_blocked": {"title": "Access temporarily restricted", "body": "Your access to the team {{.team_name}} has been temporarily restricted."},
-  "member_unblocked": {"title": "Access restored", "body": "Your access to the team {{.team_name}} has been restored."},
-  "member_removed": {"title": "Removed from team", "body": "You have been removed from the team {{.team_name}}."},
-  "team_member_removed_admin": {"title": "{{.removed_member_name}} was removed from the team", "body": "{{.removed_member_name}} was removed from the team {{.team_name}}."},
-  "team_member_left": {"title": "{{.member_name}} left the team", "body": "{{.member_name}} is no longer a member of the team {{.team_name}}."},
-  "member_role_changed_manager": {"title": "Your role has changed", "body": "You are now a manager of the team {{.team_name}}."},
-  "member_role_changed_operator": {"title": "Your role has changed", "body": "You are now an operator of the team {{.team_name}}."},
+  "org_admin_transferred_new": {"title": "You are now the tenant admin", "body": "You have been made the admin of {{.tenant_name}}."},
+  "org_admin_transferred_old": {"title": "Tenant admin transferred", "body": "You transferred admin rights for {{.tenant_name}}."},
+  "member_blocked": {"title": "Access temporarily restricted", "body": "Your access to the tenant {{.tenant_name}} has been temporarily restricted."},
+  "member_unblocked": {"title": "Access restored", "body": "Your access to the tenant {{.tenant_name}} has been restored."},
+  "member_removed": {"title": "Removed from tenant", "body": "You have been removed from the tenant {{.tenant_name}}."},
+  "tenant_member_removed_admin": {"title": "{{.removed_member_name}} was removed from the tenant", "body": "{{.removed_member_name}} was removed from the tenant {{.tenant_name}}."},
+  "tenant_member_left": {"title": "{{.member_name}} left the tenant", "body": "{{.member_name}} is no longer a member of the tenant {{.tenant_name}}."},
+  "member_role_changed_manager": {"title": "Your role has changed", "body": "You are now a manager of the tenant {{.tenant_name}}."},
+  "member_role_changed_operator": {"title": "Your role has changed", "body": "You are now an operator of the tenant {{.tenant_name}}."},
   "order_request_created": {"title": "New order request", "body": "You have a new request for '{{.listing_title}}'."},
   "order_request_accepted": {"title": "Request accepted", "body": "Your request for '{{.listing_title}}' was accepted."},
   "order_terms_agreed": {"title": "Terms agreed", "body": "Both sides agreed on terms for '{{.listing_title}}'."},
@@ -89,11 +89,11 @@ func testRendererFull(t *testing.T) *Renderer {
   "order_receipt_confirmed": {"title": "Receipt confirmed", "body": "Receipt was confirmed for '{{.listing_title}}'."},
   "order_auto_completed": {"title": "Order auto-completed", "body": "The order for '{{.listing_title}}' was automatically completed."},
   "order_review_window_ending": {"title": "Review window ending", "body": "The review window for '{{.listing_title}}' is ending soon."},
-  "admin_transfer_initiated": {"title": "Admin role transfer offer", "body": "{{.from_user_name}} wants to transfer the admin role of {{.organization_name}} to you. Respond before the offer expires."},
-  "admin_transfer_accepted": {"title": "Admin transfer accepted", "body": "{{.to_user_name}} accepted the admin role of {{.organization_name}}."},
-  "admin_transfer_rejected": {"title": "Admin transfer declined", "body": "{{.to_user_name}} declined the admin transfer for {{.organization_name}}."},
-  "admin_transfer_cancelled": {"title": "Admin transfer cancelled", "body": "{{.from_user_name}} cancelled the admin transfer for {{.organization_name}}."},
-  "admin_transfer_expired": {"title": "Admin transfer expired", "body": "The admin transfer for {{.organization_name}} with {{.counterparty_name}} expired without action."}
+  "org_admin_transfer_initiated": {"title": "Admin role transfer offer", "body": "{{.from_user_name}} wants to transfer the admin role of {{.organization_name}} to you. Respond before the offer expires."},
+  "org_admin_transfer_accepted": {"title": "Admin transfer accepted", "body": "{{.to_user_name}} accepted the admin role of {{.organization_name}}."},
+  "org_admin_transfer_rejected": {"title": "Admin transfer declined", "body": "{{.to_user_name}} declined the admin transfer for {{.organization_name}}."},
+  "org_admin_transfer_cancelled": {"title": "Admin transfer cancelled", "body": "{{.from_user_name}} cancelled the admin transfer for {{.organization_name}}."},
+  "org_admin_transfer_expired": {"title": "Admin transfer expired", "body": "The admin transfer for {{.organization_name}} with {{.counterparty_name}} expired without action."}
 }`,
 		"ru.json": `{
   "chat_message": {"title": "Новое сообщение от {{.sender_name}}", "body": "{{.preview}}"},
@@ -102,27 +102,27 @@ func testRendererFull(t *testing.T) *Renderer {
   "listing_unpublished": {"title": "Объявление снято с публикации", "body": "Ваше объявление «{{.listing_title}}» снято с публикации: {{.reason}}"},
   "favorite_price_changed": {"title": "Цена изменилась", "body": "Цена «{{.listing_title}}» изменилась с {{.old_price}} на {{.new_price}} {{.currency}}."},
   "favorite_listing_removed": {"title": "Избранное объявление удалено", "body": "«{{.listing_title}}» больше не доступно."},
-  "team_invite_tenant_manager": {"title": "Приглашение в {{.team_name}}", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли менеджера."},
-  "team_invite_tenant_operator": {"title": "Приглашение в {{.team_name}}", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли оператора."},
-  "team_invite_user_manager": {"title": "Приглашение в команду", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли менеджера."},
-  "team_invite_user_operator": {"title": "Приглашение в команду", "body": "{{.inviter_name}} приглашает вас в {{.team_name}} в роли оператора."},
-  "tenant_verified": {"title": "Организация верифицирована", "body": "Организация {{.organization_name}} верифицирована."},
+  "tenant_invite_organisation_manager": {"title": "Приглашение в {{.tenant_name}}", "body": "{{.inviter_name}} приглашает вас в {{.tenant_name}} в роли менеджера."},
+  "tenant_invite_organisation_operator": {"title": "Приглашение в {{.tenant_name}}", "body": "{{.inviter_name}} приглашает вас в {{.tenant_name}} в роли оператора."},
+  "tenant_invite_personal_manager": {"title": "Приглашение в тенант", "body": "{{.inviter_name}} приглашает вас в {{.tenant_name}} в роли менеджера."},
+  "tenant_invite_personal_operator": {"title": "Приглашение в тенант", "body": "{{.inviter_name}} приглашает вас в {{.tenant_name}} в роли оператора."},
+  "organisation_verified": {"title": "Организация верифицирована", "body": "Организация {{.organization_name}} верифицирована."},
   "operator_assigned": {"title": "Вам назначена техника", "body": "{{.operator_name}}, вы назначены оператором техники."},
   "operator_released": {"title": "Вы сняты с техники", "body": "{{.operator_name}}, вы сняты с управления техникой."},
   "wallet_operation_requested": {"title": "Запрошена операция по кошельку", "body": "Запрошена операция {{.operation_kind}} на сумму {{.amount}} {{.currency}}."},
   "wallet_operation_decided": {"title": "Операция по кошельку: {{.decision}}", "body": "Ваша операция по кошельку на сумму {{.amount}} {{.currency}}: {{.decision}}."},
-  "tenant_rejected": {"title": "Организация отклонена", "body": "Ваша организация отклонена: {{.reason}}"},
+  "organisation_rejected": {"title": "Организация отклонена", "body": "Ваша организация отклонена: {{.reason}}"},
   "invite_accepted": {"title": "Приглашение принято", "body": "{{.phone}} принял ваше приглашение в роли {{.role}}."},
   "invite_declined": {"title": "Приглашение отклонено", "body": "{{.phone}} отклонил ваше приглашение."},
-  "admin_transferred_new": {"title": "Теперь вы администратор команды", "body": "Вы назначены администратором команды {{.team_name}}."},
-  "admin_transferred_old": {"title": "Права администратора переданы", "body": "Вы передали права администратора команды {{.team_name}}."},
-  "member_blocked": {"title": "Доступ временно ограничен", "body": "Ваш доступ к команде {{.team_name}} временно ограничен."},
-  "member_unblocked": {"title": "Доступ восстановлен", "body": "Ваш доступ к команде {{.team_name}} восстановлен."},
-  "member_removed": {"title": "Удалены из команды", "body": "Вы удалены из команды {{.team_name}}."},
-  "team_member_removed_admin": {"title": "{{.removed_member_name}} исключён из команды", "body": "{{.removed_member_name}} исключён из команды {{.team_name}}."},
-  "team_member_left": {"title": "{{.member_name}} покинул команду", "body": "{{.member_name}} больше не состоит в команде {{.team_name}}."},
-  "member_role_changed_manager": {"title": "Ваша роль изменена", "body": "Теперь вы менеджер команды {{.team_name}}."},
-  "member_role_changed_operator": {"title": "Ваша роль изменена", "body": "Теперь вы оператор команды {{.team_name}}."},
+  "org_admin_transferred_new": {"title": "Теперь вы администратор тенанта", "body": "Вы назначены администратором тенанта {{.tenant_name}}."},
+  "org_admin_transferred_old": {"title": "Права администратора переданы", "body": "Вы передали права администратора тенанта {{.tenant_name}}."},
+  "member_blocked": {"title": "Доступ временно ограничен", "body": "Ваш доступ к тенанте {{.tenant_name}} временно ограничен."},
+  "member_unblocked": {"title": "Доступ восстановлен", "body": "Ваш доступ к тенанте {{.tenant_name}} восстановлен."},
+  "member_removed": {"title": "Удалены из тенанта", "body": "Вы удалены из тенанта {{.tenant_name}}."},
+  "tenant_member_removed_admin": {"title": "{{.removed_member_name}} исключён из тенанта", "body": "{{.removed_member_name}} исключён из тенанта {{.tenant_name}}."},
+  "tenant_member_left": {"title": "{{.member_name}} покинул тенант", "body": "{{.member_name}} больше не состоит в тенанте {{.tenant_name}}."},
+  "member_role_changed_manager": {"title": "Ваша роль изменена", "body": "Теперь вы менеджер тенанта {{.tenant_name}}."},
+  "member_role_changed_operator": {"title": "Ваша роль изменена", "body": "Теперь вы оператор тенанта {{.tenant_name}}."},
   "order_request_created": {"title": "Новый запрос на заказ", "body": "У вас новый запрос по «{{.listing_title}}»."},
   "order_request_accepted": {"title": "Запрос принят", "body": "Ваш запрос по «{{.listing_title}}» принят."},
   "order_terms_agreed": {"title": "Условия согласованы", "body": "Обе стороны согласовали условия по «{{.listing_title}}»."},
@@ -135,11 +135,11 @@ func testRendererFull(t *testing.T) *Renderer {
   "order_receipt_confirmed": {"title": "Получение подтверждено", "body": "Получение подтверждено по «{{.listing_title}}»."},
   "order_auto_completed": {"title": "Заказ завершён автоматически", "body": "Заказ по «{{.listing_title}}» был автоматически завершён."},
   "order_review_window_ending": {"title": "Окно отзыва закрывается", "body": "Окно отзыва по «{{.listing_title}}» скоро закроется."},
-  "admin_transfer_initiated": {"title": "Предложение передать права администратора", "body": "{{.from_user_name}} хочет передать вам роль администратора организации {{.organization_name}}. Ответьте до истечения срока действия запроса."},
-  "admin_transfer_accepted": {"title": "Передача администратора принята", "body": "{{.to_user_name}} принял роль администратора организации {{.organization_name}}."},
-  "admin_transfer_rejected": {"title": "Передача администратора отклонена", "body": "{{.to_user_name}} отклонил передачу прав администратора для {{.organization_name}}."},
-  "admin_transfer_cancelled": {"title": "Передача администратора отменена", "body": "{{.from_user_name}} отменил передачу прав администратора для {{.organization_name}}."},
-  "admin_transfer_expired": {"title": "Передача администратора истекла", "body": "Передача прав администратора для {{.organization_name}} с {{.counterparty_name}} истекла без действий."}
+  "org_admin_transfer_initiated": {"title": "Предложение передать права администратора", "body": "{{.from_user_name}} хочет передать вам роль администратора организации {{.organization_name}}. Ответьте до истечения срока действия запроса."},
+  "org_admin_transfer_accepted": {"title": "Передача администратора принята", "body": "{{.to_user_name}} принял роль администратора организации {{.organization_name}}."},
+  "org_admin_transfer_rejected": {"title": "Передача администратора отклонена", "body": "{{.to_user_name}} отклонил передачу прав администратора для {{.organization_name}}."},
+  "org_admin_transfer_cancelled": {"title": "Передача администратора отменена", "body": "{{.from_user_name}} отменил передачу прав администратора для {{.organization_name}}."},
+  "org_admin_transfer_expired": {"title": "Передача администратора истекла", "body": "Передача прав администратора для {{.organization_name}} с {{.counterparty_name}} истекла без действий."}
 }`,
 	})
 }
@@ -308,7 +308,7 @@ func TestExtractParams_SendListingUnpublishedRenders(t *testing.T) {
 }
 
 // TestExtractAndRender_Slice2And4 locks the extract → render path for every
-// net-new IN_APP type added in slices 2 (tenant/team lifecycle) and 4 (member
+// net-new IN_APP type added in slices 2 (organisation/tenant lifecycle) and 4 (member
 // lifecycle): each payload must extract exactly the expected params and render
 // non-empty title/body in all three locales.
 func TestExtractAndRender_Slice2And4(t *testing.T) {
@@ -320,12 +320,12 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 		want map[string]string
 	}{
 		{
-			name: "tenant_rejected",
-			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_REJECTED,
+			name: "organisation_rejected",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_REJECTED,
 			env: &notificationv1.NotificationEnvelope{
-				Payload: &notificationv1.NotificationEnvelope_SendTenantRejected{
-					SendTenantRejected: &notificationv1.SendTenantRejected{
-						TenantId: "t-1", Reason: "missing docs",
+				Payload: &notificationv1.NotificationEnvelope_SendOrganisationRejected{
+					SendOrganisationRejected: &notificationv1.SendOrganisationRejected{
+						OrganisationId: "t-1", Reason: "missing docs",
 					},
 				},
 			},
@@ -354,66 +354,66 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 			want: map[string]string{"phone": "+77001234567"},
 		},
 		{
-			name: "admin_transferred_new",
-			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_NEW,
+			name: "org_admin_transferred_new",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFERRED_NEW,
 			env: &notificationv1.NotificationEnvelope{
-				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferredNew{
-					SendAdminTransferredNew: &notificationv1.SendAdminTransferredNew{TeamName: "Crew A"},
+				Payload: &notificationv1.NotificationEnvelope_SendOrgAdminTransferredNew{
+					SendOrgAdminTransferredNew: &notificationv1.SendOrgAdminTransferredNew{TenantName: "Crew A"},
 				},
 			},
-			want: map[string]string{"team_name": "Crew A"},
+			want: map[string]string{"tenant_name": "Crew A"},
 		},
 		{
-			name: "admin_transferred_old",
-			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_OLD,
+			name: "org_admin_transferred_old",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFERRED_OLD,
 			env: &notificationv1.NotificationEnvelope{
-				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferredOld{
-					SendAdminTransferredOld: &notificationv1.SendAdminTransferredOld{TeamName: "Crew A"},
+				Payload: &notificationv1.NotificationEnvelope_SendOrgAdminTransferredOld{
+					SendOrgAdminTransferredOld: &notificationv1.SendOrgAdminTransferredOld{TenantName: "Crew A"},
 				},
 			},
-			want: map[string]string{"team_name": "Crew A"},
+			want: map[string]string{"tenant_name": "Crew A"},
 		},
 		{
 			name: "member_blocked",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_BLOCKED,
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendMemberBlocked{
-					SendMemberBlocked: &notificationv1.SendMemberBlocked{TeamId: "tm-1", TeamName: "Crew A"},
+					SendMemberBlocked: &notificationv1.SendMemberBlocked{TenantId: "tm-1", TenantName: "Crew A"},
 				},
 			},
-			want: map[string]string{"team_name": "Crew A"},
+			want: map[string]string{"tenant_name": "Crew A"},
 		},
 		{
 			name: "member_unblocked",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_UNBLOCKED,
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendMemberUnblocked{
-					SendMemberUnblocked: &notificationv1.SendMemberUnblocked{TeamId: "tm-1", TeamName: "Crew A"},
+					SendMemberUnblocked: &notificationv1.SendMemberUnblocked{TenantId: "tm-1", TenantName: "Crew A"},
 				},
 			},
-			want: map[string]string{"team_name": "Crew A"},
+			want: map[string]string{"tenant_name": "Crew A"},
 		},
 		{
 			name: "member_removed",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_REMOVED,
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendMemberRemoved{
-					SendMemberRemoved: &notificationv1.SendMemberRemoved{TeamId: "tm-1", TeamName: "Crew A"},
+					SendMemberRemoved: &notificationv1.SendMemberRemoved{TenantId: "tm-1", TenantName: "Crew A"},
 				},
 			},
-			want: map[string]string{"team_name": "Crew A"},
+			want: map[string]string{"tenant_name": "Crew A"},
 		},
 		{
-			name: "team_member_removed_admin",
-			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_REMOVED_ADMIN,
+			name: "tenant_member_removed_admin",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_MEMBER_REMOVED_ADMIN,
 			env: &notificationv1.NotificationEnvelope{
-				Payload: &notificationv1.NotificationEnvelope_SendTeamMemberRemovedAdmin{
-					SendTeamMemberRemovedAdmin: &notificationv1.SendTeamMemberRemovedAdmin{
-						TeamId: "tm-1", TeamName: "Crew A", RemovedMemberName: "Ivan",
+				Payload: &notificationv1.NotificationEnvelope_SendTenantMemberRemovedAdmin{
+					SendTenantMemberRemovedAdmin: &notificationv1.SendTenantMemberRemovedAdmin{
+						TenantId: "tm-1", TenantName: "Crew A", RemovedMemberName: "Ivan",
 					},
 				},
 			},
-			want: map[string]string{"team_name": "Crew A", "removed_member_name": "Ivan"},
+			want: map[string]string{"tenant_name": "Crew A", "removed_member_name": "Ivan"},
 		},
 		{
 			name: "member_role_changed_manager",
@@ -421,13 +421,13 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendMemberRoleChanged{
 					SendMemberRoleChanged: &notificationv1.SendMemberRoleChanged{
-						TeamId: "tm-1", TeamName: "Crew A", NewRole: "MANAGER",
+						TenantId: "tm-1", TenantName: "Crew A", NewRole: "MANAGER",
 					},
 				},
 			},
 			// new_role is intentionally not extracted: the role word is
 			// localized via the per-role NotificationType, not a placeholder.
-			want: map[string]string{"team_name": "Crew A"},
+			want: map[string]string{"tenant_name": "Crew A"},
 		},
 		{
 			name: "member_role_changed_operator",
@@ -435,11 +435,11 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendMemberRoleChanged{
 					SendMemberRoleChanged: &notificationv1.SendMemberRoleChanged{
-						TeamId: "tm-1", TeamName: "Crew A", NewRole: "OPERATOR",
+						TenantId: "tm-1", TenantName: "Crew A", NewRole: "OPERATOR",
 					},
 				},
 			},
-			want: map[string]string{"team_name": "Crew A"},
+			want: map[string]string{"tenant_name": "Crew A"},
 		},
 	}
 	for _, tc := range cases {
@@ -469,7 +469,7 @@ func TestExtractAndRender_Slice2And4(t *testing.T) {
 	}
 }
 
-// TestExtractAndRender_AdminTransferLifecycle locks the five tenant
+// TestExtractAndRender_AdminTransferLifecycle locks the five organisation
 // admin-transfer directives: each payload extracts exactly its params and
 // renders non-empty title/body in en and ru. reason is extracted for the
 // rejected payload but is intentionally absent from the template and from
@@ -484,11 +484,11 @@ func TestExtractAndRender_AdminTransferLifecycle(t *testing.T) {
 		want map[string]string
 	}{
 		{
-			name: "admin_transfer_initiated",
-			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_INITIATED,
+			name: "org_admin_transfer_initiated",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_INITIATED,
 			env: &notificationv1.NotificationEnvelope{
-				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferInitiated{
-					SendAdminTransferInitiated: &notificationv1.SendAdminTransferInitiated{
+				Payload: &notificationv1.NotificationEnvelope_SendOrgAdminTransferInitiated{
+					SendOrgAdminTransferInitiated: &notificationv1.SendOrgAdminTransferInitiated{
 						OrganizationName: "Acme LLC", FromUserName: "Ivan",
 					},
 				},
@@ -496,11 +496,11 @@ func TestExtractAndRender_AdminTransferLifecycle(t *testing.T) {
 			want: map[string]string{"organization_name": "Acme LLC", "from_user_name": "Ivan"},
 		},
 		{
-			name: "admin_transfer_accepted",
-			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_ACCEPTED,
+			name: "org_admin_transfer_accepted",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_ACCEPTED,
 			env: &notificationv1.NotificationEnvelope{
-				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferAccepted{
-					SendAdminTransferAccepted: &notificationv1.SendAdminTransferAccepted{
+				Payload: &notificationv1.NotificationEnvelope_SendOrgAdminTransferAccepted{
+					SendOrgAdminTransferAccepted: &notificationv1.SendOrgAdminTransferAccepted{
 						OrganizationName: "Acme LLC", ToUserName: "Petr",
 					},
 				},
@@ -508,11 +508,11 @@ func TestExtractAndRender_AdminTransferLifecycle(t *testing.T) {
 			want: map[string]string{"organization_name": "Acme LLC", "to_user_name": "Petr"},
 		},
 		{
-			name: "admin_transfer_rejected",
-			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_REJECTED,
+			name: "org_admin_transfer_rejected",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_REJECTED,
 			env: &notificationv1.NotificationEnvelope{
-				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferRejected{
-					SendAdminTransferRejected: &notificationv1.SendAdminTransferRejected{
+				Payload: &notificationv1.NotificationEnvelope_SendOrgAdminTransferRejected{
+					SendOrgAdminTransferRejected: &notificationv1.SendOrgAdminTransferRejected{
 						OrganizationName: "Acme LLC", ToUserName: "Petr", Reason: "changed mind",
 					},
 				},
@@ -520,11 +520,11 @@ func TestExtractAndRender_AdminTransferLifecycle(t *testing.T) {
 			want: map[string]string{"organization_name": "Acme LLC", "to_user_name": "Petr", "reason": "changed mind"},
 		},
 		{
-			name: "admin_transfer_cancelled",
-			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_CANCELLED,
+			name: "org_admin_transfer_cancelled",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_CANCELLED,
 			env: &notificationv1.NotificationEnvelope{
-				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferCancelled{
-					SendAdminTransferCancelled: &notificationv1.SendAdminTransferCancelled{
+				Payload: &notificationv1.NotificationEnvelope_SendOrgAdminTransferCancelled{
+					SendOrgAdminTransferCancelled: &notificationv1.SendOrgAdminTransferCancelled{
 						OrganizationName: "Acme LLC", FromUserName: "Ivan",
 					},
 				},
@@ -532,11 +532,11 @@ func TestExtractAndRender_AdminTransferLifecycle(t *testing.T) {
 			want: map[string]string{"organization_name": "Acme LLC", "from_user_name": "Ivan"},
 		},
 		{
-			name: "admin_transfer_expired",
-			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_EXPIRED,
+			name: "org_admin_transfer_expired",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_EXPIRED,
 			env: &notificationv1.NotificationEnvelope{
-				Payload: &notificationv1.NotificationEnvelope_SendAdminTransferExpired{
-					SendAdminTransferExpired: &notificationv1.SendAdminTransferExpired{
+				Payload: &notificationv1.NotificationEnvelope_SendOrgAdminTransferExpired{
+					SendOrgAdminTransferExpired: &notificationv1.SendOrgAdminTransferExpired{
 						OrganizationName: "Acme LLC", CounterpartyName: "Petr",
 					},
 				},
@@ -571,13 +571,13 @@ func TestExtractAndRender_AdminTransferLifecycle(t *testing.T) {
 	}
 }
 
-// TestRenderTeamMemberRemovedAdmin_Interpolates proves the EN admin fan-out
-// template actually interpolates both removed_member_name and team_name into
+// TestRenderTenantMemberRemovedAdmin_Interpolates proves the EN admin fan-out
+// template actually interpolates both removed_member_name and tenant_name into
 // the rendered output (guards against a static body).
-func TestRenderTeamMemberRemovedAdmin_Interpolates(t *testing.T) {
+func TestRenderTenantMemberRemovedAdmin_Interpolates(t *testing.T) {
 	r := testRendererFull(t)
-	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_REMOVED_ADMIN
-	params := map[string]string{"team_name": "Crew A", "removed_member_name": "Ivan"}
+	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_MEMBER_REMOVED_ADMIN
+	params := map[string]string{"tenant_name": "Crew A", "removed_member_name": "Ivan"}
 	title, body, err := r.Render(nt, params, "en")
 	if err != nil {
 		t.Fatalf("Render err: %v", err)
@@ -826,17 +826,17 @@ func TestExtractParams_NilPayload(t *testing.T) {
 	assertReason(t, err, ReasonEmptyPayload)
 }
 
-// TestExtractParams_SendTenantDocumentsRequested locks the ExtractParams
-// mapping for the tenant-service EMAIL/SYSTEM directive: it must extract
-// tenant_id, comment, and the repeated reasons joined with ", " into a single
-// string value — and return a nil error so the caller does not dead-letter it.
-func TestExtractParams_SendTenantDocumentsRequested(t *testing.T) {
+// TestExtractParams_SendOrganisationDocumentsRequested locks the ExtractParams
+// mapping for the organisation-service EMAIL/SYSTEM directive: it must extract
+// organisation_id, comment, and the repeated reasons joined with ", " into a
+// single string value — and return a nil error so the caller does not dead-letter it.
+func TestExtractParams_SendOrganisationDocumentsRequested(t *testing.T) {
 	env := &notificationv1.NotificationEnvelope{
-		Payload: &notificationv1.NotificationEnvelope_SendTenantDocumentsRequested{
-			SendTenantDocumentsRequested: &notificationv1.SendTenantDocumentsRequested{
-				TenantId: "tenant-42",
-				Reasons:  []string{"blurry scan", "expired license"},
-				Comment:  "please resubmit clearer photos",
+		Payload: &notificationv1.NotificationEnvelope_SendOrganisationDocumentsRequested{
+			SendOrganisationDocumentsRequested: &notificationv1.SendOrganisationDocumentsRequested{
+				OrganisationId: "tenant-42",
+				Reasons:        []string{"blurry scan", "expired license"},
+				Comment:        "please resubmit clearer photos",
 			},
 		},
 	}
@@ -847,9 +847,9 @@ func TestExtractParams_SendTenantDocumentsRequested(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"tenant_id": "tenant-42",
-		"comment":   "please resubmit clearer photos",
-		"reasons":   "blurry scan, expired license",
+		"organisation_id": "tenant-42",
+		"comment":         "please resubmit clearer photos",
+		"reasons":         "blurry scan, expired license",
 	}
 	if len(params) != len(want) {
 		t.Fatalf("params = %v, want %v", params, want)

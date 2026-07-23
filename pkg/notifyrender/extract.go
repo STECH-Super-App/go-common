@@ -42,13 +42,13 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{}, nil
 	case *notificationv1.NotificationEnvelope_SendInviteExistingUser:
 		return map[string]string{
-			"team_name":    p.SendInviteExistingUser.GetTeamName(),
+			"tenant_name":  p.SendInviteExistingUser.GetTenantName(),
 			"inviter_name": p.SendInviteExistingUser.GetInviterName(),
 			"role":         p.SendInviteExistingUser.GetRole(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendInviteSms:
 		return map[string]string{
-			"team_name":    p.SendInviteSms.GetTeamName(),
+			"tenant_name":  p.SendInviteSms.GetTenantName(),
 			"inviter_name": p.SendInviteSms.GetInviterName(),
 			"role":         p.SendInviteSms.GetRole(),
 			"invite_url":   p.SendInviteSms.GetInviteUrl(),
@@ -68,68 +68,68 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendInviteUserRegistered:
 		return map[string]string{
-			"team_name": p.SendInviteUserRegistered.GetTeamName(),
-			"phone":     p.SendInviteUserRegistered.GetPhone(),
+			"tenant_name": p.SendInviteUserRegistered.GetTenantName(),
+			"phone":       p.SendInviteUserRegistered.GetPhone(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendAdminTransferredOld:
-		// team_name was added to the payload (slice 2) so the in-app body can
-		// name the team instead of rendering a static "you transferred the team".
+	case *notificationv1.NotificationEnvelope_SendOrgAdminTransferredOld:
+		// tenant_name was added to the payload (slice 2) so the in-app body can
+		// name the tenant instead of rendering a static "you transferred the tenant".
 		return map[string]string{
-			"team_name": p.SendAdminTransferredOld.GetTeamName(),
+			"tenant_name": p.SendOrgAdminTransferredOld.GetTenantName(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendAdminTransferredNew:
+	case *notificationv1.NotificationEnvelope_SendOrgAdminTransferredNew:
 		return map[string]string{
-			"team_name": p.SendAdminTransferredNew.GetTeamName(),
+			"tenant_name": p.SendOrgAdminTransferredNew.GetTenantName(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendTenantCreated:
+	case *notificationv1.NotificationEnvelope_SendOrganisationCreated:
 		return map[string]string{
-			"organization_name": p.SendTenantCreated.GetOrganizationName(),
+			"organization_name": p.SendOrganisationCreated.GetOrganizationName(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendTenantApproved:
+	case *notificationv1.NotificationEnvelope_SendOrganisationApproved:
 		return map[string]string{
-			"organization_name": p.SendTenantApproved.GetOrganizationName(),
+			"organization_name": p.SendOrganisationApproved.GetOrganizationName(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendTenantRejected:
-		// SendTenantRejected proto only carries tenant_id + reason; organization_name
-		// is not on the wire here (unlike SendTenantApproved/Created). Surface what's
+	case *notificationv1.NotificationEnvelope_SendOrganisationRejected:
+		// SendOrganisationRejected proto only carries organisation_id + reason; organization_name
+		// is not on the wire here (unlike SendOrganisationApproved/Created). Surface what's
 		// actually present so callers don't get a phantom empty key.
 		return map[string]string{
-			"reason": p.SendTenantRejected.GetReason(),
+			"reason": p.SendOrganisationRejected.GetReason(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendTenantDocumentsRequested:
-		// tenant-service EMAIL/SYSTEM directive: the org owner is asked to
-		// resubmit verification documents. reasons is a repeated field; join it
-		// into a single value since the params map is map[string]string.
+	case *notificationv1.NotificationEnvelope_SendOrganisationDocumentsRequested:
+		// organisation-service EMAIL/SYSTEM directive: the organisation owner is
+		// asked to resubmit verification documents. reasons is a repeated field;
+		// join it into a single value since the params map is map[string]string.
 		return map[string]string{
-			"tenant_id": p.SendTenantDocumentsRequested.GetTenantId(),
-			"comment":   p.SendTenantDocumentsRequested.GetComment(),
-			"reasons":   strings.Join(p.SendTenantDocumentsRequested.GetReasons(), ", "),
+			"organisation_id": p.SendOrganisationDocumentsRequested.GetOrganisationId(),
+			"comment":         p.SendOrganisationDocumentsRequested.GetComment(),
+			"reasons":         strings.Join(p.SendOrganisationDocumentsRequested.GetReasons(), ", "),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendAdminTransferInitiated:
+	case *notificationv1.NotificationEnvelope_SendOrgAdminTransferInitiated:
 		return map[string]string{
-			"organization_name": p.SendAdminTransferInitiated.GetOrganizationName(),
-			"from_user_name":    p.SendAdminTransferInitiated.GetFromUserName(),
+			"organization_name": p.SendOrgAdminTransferInitiated.GetOrganizationName(),
+			"from_user_name":    p.SendOrgAdminTransferInitiated.GetFromUserName(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendAdminTransferAccepted:
+	case *notificationv1.NotificationEnvelope_SendOrgAdminTransferAccepted:
 		return map[string]string{
-			"organization_name": p.SendAdminTransferAccepted.GetOrganizationName(),
-			"to_user_name":      p.SendAdminTransferAccepted.GetToUserName(),
+			"organization_name": p.SendOrgAdminTransferAccepted.GetOrganizationName(),
+			"to_user_name":      p.SendOrgAdminTransferAccepted.GetToUserName(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendAdminTransferRejected:
+	case *notificationv1.NotificationEnvelope_SendOrgAdminTransferRejected:
 		return map[string]string{
-			"organization_name": p.SendAdminTransferRejected.GetOrganizationName(),
-			"to_user_name":      p.SendAdminTransferRejected.GetToUserName(),
-			"reason":            p.SendAdminTransferRejected.GetReason(),
+			"organization_name": p.SendOrgAdminTransferRejected.GetOrganizationName(),
+			"to_user_name":      p.SendOrgAdminTransferRejected.GetToUserName(),
+			"reason":            p.SendOrgAdminTransferRejected.GetReason(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendAdminTransferCancelled:
+	case *notificationv1.NotificationEnvelope_SendOrgAdminTransferCancelled:
 		return map[string]string{
-			"organization_name": p.SendAdminTransferCancelled.GetOrganizationName(),
-			"from_user_name":    p.SendAdminTransferCancelled.GetFromUserName(),
+			"organization_name": p.SendOrgAdminTransferCancelled.GetOrganizationName(),
+			"from_user_name":    p.SendOrgAdminTransferCancelled.GetFromUserName(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendAdminTransferExpired:
+	case *notificationv1.NotificationEnvelope_SendOrgAdminTransferExpired:
 		return map[string]string{
-			"organization_name": p.SendAdminTransferExpired.GetOrganizationName(),
-			"counterparty_name": p.SendAdminTransferExpired.GetCounterpartyName(),
+			"organization_name": p.SendOrgAdminTransferExpired.GetOrganizationName(),
+			"counterparty_name": p.SendOrgAdminTransferExpired.GetCounterpartyName(),
 		}, nil
 
 	// ─── NEW payloads ───
@@ -163,9 +163,9 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"listing_title": p.SendListingUnpublished.GetListingTitle(),
 			"reason":        p.SendListingUnpublished.GetReason(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendTenantVerified:
+	case *notificationv1.NotificationEnvelope_SendOrganisationVerified:
 		return map[string]string{
-			"organization_name": p.SendTenantVerified.GetOrganizationName(),
+			"organization_name": p.SendOrganisationVerified.GetOrganizationName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendOperatorAssigned:
 		return map[string]string{
@@ -188,32 +188,32 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"decision": p.SendWalletOperationDecided.GetDecision(),
 		}, nil
 
-	// ─── team membership lifecycle payloads (slice 4) ───
+	// ─── tenant membership lifecycle payloads (slice 4) ───
 	case *notificationv1.NotificationEnvelope_SendMemberBlocked:
 		return map[string]string{
-			"team_name": p.SendMemberBlocked.GetTeamName(),
+			"tenant_name": p.SendMemberBlocked.GetTenantName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendMemberUnblocked:
 		return map[string]string{
-			"team_name": p.SendMemberUnblocked.GetTeamName(),
+			"tenant_name": p.SendMemberUnblocked.GetTenantName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendMemberRemoved:
 		return map[string]string{
-			"team_name": p.SendMemberRemoved.GetTeamName(),
+			"tenant_name": p.SendMemberRemoved.GetTenantName(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendTeamMemberRemovedAdmin:
+	case *notificationv1.NotificationEnvelope_SendTenantMemberRemovedAdmin:
 		return map[string]string{
-			"team_name":           p.SendTeamMemberRemovedAdmin.GetTeamName(),
-			"removed_member_name": p.SendTeamMemberRemovedAdmin.GetRemovedMemberName(),
+			"tenant_name":         p.SendTenantMemberRemovedAdmin.GetTenantName(),
+			"removed_member_name": p.SendTenantMemberRemovedAdmin.GetRemovedMemberName(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendTeamMemberLeft:
+	case *notificationv1.NotificationEnvelope_SendTenantMemberLeft:
 		return map[string]string{
-			"team_name":   p.SendTeamMemberLeft.GetTeamName(),
-			"member_name": p.SendTeamMemberLeft.GetMemberName(),
+			"tenant_name": p.SendTenantMemberLeft.GetTenantName(),
+			"member_name": p.SendTenantMemberLeft.GetMemberName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendMemberRoleChanged:
 		return map[string]string{
-			"team_name": p.SendMemberRoleChanged.GetTeamName(),
+			"tenant_name": p.SendMemberRoleChanged.GetTenantName(),
 		}, nil
 
 	// ─── free-text platform message (slice 5, verbatim) ───

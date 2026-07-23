@@ -84,7 +84,7 @@ func setContextValues(c echo.Context) {
 	c.Set(string(auth.ContextKeyUserRoles), c.Request().Header.Get(auth.HeaderUserRoles))
 	c.Set(string(auth.ContextKeyUserName), c.Request().Header.Get(auth.HeaderUserName))
 	c.Set(string(auth.ContextKeyUserType), c.Request().Header.Get(auth.HeaderUserType))
-	c.Set(string(auth.ContextKeyTeamMemberships), authz.Parse(c.Request().Header.Get(auth.HeaderTeamMemberships)))
+	c.Set(string(auth.ContextKeyTenantMemberships), authz.ParseTenantMemberships(c.Request().Header.Get(authz.HeaderTenantMemberships)))
 
 	c.Set(string(auth.ContextKeyScope), c.Request().Header.Get(auth.HeaderScope))
 	c.Set(string(auth.ContextKeyPhone), c.Request().Header.Get(auth.HeaderPhone))

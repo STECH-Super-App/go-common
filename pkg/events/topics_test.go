@@ -13,8 +13,8 @@ func TestTopicName(t *testing.T) {
 		want string
 	}{
 		{eventsv1.Topic_TOPIC_USER_EVENTS, "user.events"},
-		{eventsv1.Topic_TOPIC_TEAM_EVENTS, "team.events"},
 		{eventsv1.Topic_TOPIC_TENANT_EVENTS, "tenant.events"},
+		{eventsv1.Topic_TOPIC_ORGANISATION_EVENTS, "organisation.events"},
 		{eventsv1.Topic_TOPIC_MEDIA_EVENTS, "media.events"},
 		{eventsv1.Topic_TOPIC_NOTIFICATION_EVENTS, "notification.events"},
 		{eventsv1.Topic_TOPIC_SALE_EVENTS, "sale.events"},

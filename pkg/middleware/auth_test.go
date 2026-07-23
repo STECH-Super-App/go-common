@@ -159,20 +159,20 @@ func TestOptionalAuthMiddleware_RevokedToken(t *testing.T) {
 	assert.Nil(t, c.Get(string(auth.ContextKeyUserID)))
 }
 
-func TestAuthMiddleware_ParsesTeamMemberships(t *testing.T) {
+func TestAuthMiddleware_ParsesTenantMemberships(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set(auth.HeaderUserID, "user-xyz")
-	req.Header.Set(auth.HeaderTeamMemberships, "TENANT:tn-1=MANAGER,USER:u-1=ADMIN")
+	req.Header.Set(authz.HeaderTenantMemberships, "tn-1=MANAGER,tn-2=ADMIN")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
 	handler := AuthMiddleware(func(c echo.Context) error {
-		mems, ok := authz.MembershipsFromContext(c)
+		mems, ok := authz.TenantMembershipsFromContext(c)
 		assert.True(t, ok)
-		assert.Equal(t, authz.Memberships{
-			{OwnerType: authz.OwnerTenant, OwnerID: "tn-1", Role: authz.RoleManager},
-			{OwnerType: authz.OwnerUser, OwnerID: "u-1", Role: authz.RoleAdmin},
+		assert.Equal(t, []authz.TenantMembership{
+			{TenantID: "tn-1", Role: "MANAGER"},
+			{TenantID: "tn-2", Role: "ADMIN"},
 		}, mems)
 		return c.String(http.StatusOK, "OK")
 	})
@@ -249,7 +249,7 @@ func TestRequireUserUUID(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_NoTeamMembershipsHeaderYieldsNil(t *testing.T) {
+func TestAuthMiddleware_NoTenantMembershipsHeaderYieldsNil(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set(auth.HeaderUserID, "user-xyz")
@@ -257,7 +257,7 @@ func TestAuthMiddleware_NoTeamMembershipsHeaderYieldsNil(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	handler := AuthMiddleware(func(c echo.Context) error {
-		mems, ok := authz.MembershipsFromContext(c)
+		mems, ok := authz.TenantMembershipsFromContext(c)
 		// Nil slice stored; ok=true because the key exists, but the value is nil.
 		assert.True(t, ok || mems == nil)
 		assert.Nil(t, mems)

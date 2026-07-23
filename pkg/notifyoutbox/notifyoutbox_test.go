@@ -14,6 +14,10 @@ import (
 	"github.com/STECH-Super-App/go-common/pkg/outbox"
 )
 
+// testTenantID is a fixed tenant UUID used by the tenant-addressed
+// validation tests.
+const testTenantID = "22222222-2222-2222-2222-222222222222"
+
 // validEnvelope returns a minimally-valid IN_APP envelope. Tests mutate
 // fields to drive specific validation paths.
 func validEnvelope(t *testing.T) *notificationv1.NotificationEnvelope {
@@ -141,6 +145,63 @@ func TestValidate_PushRequiresRecipient(t *testing.T) {
 	assertReason(t, validate(e), ReasonEmptyRecipient)
 }
 
+// TestValidate_TenantAddressed: an IN_APP envelope addressed to a tenant
+// (recipient_tenant_id set, recipient_user_id empty) is valid — the
+// channel-owning consumer resolves it to the live member set at delivery time.
+func TestValidate_TenantAddressed(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = ""
+	e.Metadata.RecipientTenantId = testTenantID
+	if err := validate(e); err != nil {
+		t.Fatalf("tenant-addressed IN_APP must validate, got %v", err)
+	}
+}
+
+// TestValidate_TenantAddressedWithRoleFilter: the role filter is optional
+// delivery-time metadata and does not affect envelope validity.
+func TestValidate_TenantAddressedWithRoleFilter(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = ""
+	e.Metadata.RecipientTenantId = testTenantID
+	e.Metadata.RecipientRoleFilter = []string{"ADMIN", "MANAGER"}
+	if err := validate(e); err != nil {
+		t.Fatalf("tenant-addressed with role filter must validate, got %v", err)
+	}
+}
+
+// TestValidate_BothRecipientsRejected: setting BOTH recipient_user_id and
+// recipient_tenant_id is ambiguous addressing — rejected regardless of channels.
+func TestValidate_BothRecipientsRejected(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = "rcp-1"
+	e.Metadata.RecipientTenantId = testTenantID
+	assertReason(t, validate(e), ReasonAmbiguousRecipient)
+}
+
+// TestValidate_BothRecipientsRejectedSMS: the ambiguity check fires even on
+// SMS-only channels, where neither recipient would otherwise be required.
+func TestValidate_BothRecipientsRejectedSMS(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = "rcp-1"
+	e.Metadata.RecipientTenantId = testTenantID
+	e.Metadata.Channels = []notificationv1.Channel{notificationv1.Channel_CHANNEL_SMS}
+	e.Metadata.DeepLink = nil
+	assertReason(t, validate(e), ReasonAmbiguousRecipient)
+}
+
+// TestValidate_TenantAddressedSMS: a tenant-addressed SMS-only envelope is
+// valid (neither recipient required for SMS; recipient_tenant_id present).
+func TestValidate_TenantAddressedSMS(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = ""
+	e.Metadata.RecipientTenantId = testTenantID
+	e.Metadata.Channels = []notificationv1.Channel{notificationv1.Channel_CHANNEL_SMS}
+	e.Metadata.DeepLink = nil
+	if err := validate(e); err != nil {
+		t.Fatalf("tenant-addressed SMS-only must validate, got %v", err)
+	}
+}
+
 func TestValidate_MissingDeepLinkForInApp(t *testing.T) {
 	e := validEnvelope(t)
 	e.Metadata.DeepLink = nil
@@ -176,7 +237,7 @@ func platformMessageEnvelope(t *testing.T) *notificationv1.NotificationEnvelope 
 	e := validEnvelope(t)
 	e.Metadata.Type = notificationv1.NotificationType_NOTIFICATION_TYPE_PLATFORM_MESSAGE
 	e.Metadata.DeepLink = &notificationv1.DeepLinkTarget{
-		Screen: notificationv1.DeepLinkScreen_DEEP_LINK_SCREEN_TEAM,
+		Screen: notificationv1.DeepLinkScreen_DEEP_LINK_SCREEN_TENANT,
 	}
 	e.Payload = &notificationv1.NotificationEnvelope_SendPlatformMessage{
 		SendPlatformMessage: &notificationv1.SendPlatformMessage{

@@ -9,7 +9,7 @@ const (
 	ContextKeyUserRoles         ContextKey = "user_roles"
 	ContextKeyUserName          ContextKey = "user_name"
 	ContextKeyUserType          ContextKey = "user_type"
-	ContextKeyTeamMemberships   ContextKey = "team_memberships"
+	ContextKeyTenantMemberships ContextKey = "tenant_memberships"
 
 	ContextKeyScope  ContextKey = "scope"
 	ContextKeyPhone  ContextKey = "phone"

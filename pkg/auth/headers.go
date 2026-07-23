@@ -8,10 +8,10 @@ const (
 	HeaderUserType  = "X-User-Type"
 	HeaderAvatar    = "X-Avatar"
 
-	// HeaderTeamMemberships carries the caller's team roles as a comma-separated
-	// list like "TENANT:<uuid>=MANAGER,USER:<uuid>=ADMIN". Services read it via
-	// the go-common/pkg/authz package.
-	HeaderTeamMemberships = "X-Team-Memberships"
+	// The caller's tenant roles travel in the X-Tenant-Memberships header. Its
+	// name and codec live in go-common/pkg/authz (HeaderTenantMemberships,
+	// ParseTenantMemberships / FormatTenantMemberships) — the fleet-wide single
+	// parser/formatter — not here, to keep that concern in one package.
 
 	HeaderScope    = "X-Scope"
 	HeaderPhone    = "X-Phone"

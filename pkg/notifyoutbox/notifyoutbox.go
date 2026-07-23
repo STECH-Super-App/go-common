@@ -81,7 +81,20 @@ func validate(env *notificationv1.NotificationEnvelope) error {
 	if len(m.GetChannels()) == 0 {
 		return errEmptyChannels()
 	}
-	if m.GetRecipientUserId() == "" && requiresRecipient(m.GetChannels()) {
+	// Recipient addressing. An envelope is either person-addressed
+	// (recipient_user_id) or tenant-addressed (recipient_tenant_id, resolved
+	// to the live member set at delivery time by each channel-owning
+	// consumer) — never both. Setting both is ambiguous and always rejected,
+	// independent of channels. Channels that need a resolvable recipient
+	// (IN_APP writes an inbox row; PUSH looks up push tokens) require exactly
+	// one of the two; SMS/EMAIL-only directives carry their address in the
+	// payload and may set neither (the preserved SMS special case).
+	userID := m.GetRecipientUserId()
+	tenantID := m.GetRecipientTenantId()
+	if userID != "" && tenantID != "" {
+		return errAmbiguousRecipient()
+	}
+	if userID == "" && tenantID == "" && requiresRecipient(m.GetChannels()) {
 		return errEmptyRecipient()
 	}
 	if containsInApp(m.GetChannels()) {
