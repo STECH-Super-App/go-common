@@ -962,3 +962,316 @@ func TestExtractParams_SendPlatformMessage(t *testing.T) {
 	_, _, rerr := r.Render(notificationv1.NotificationType_NOTIFICATION_TYPE_PLATFORM_MESSAGE, params, "en")
 	assertReason(t, rerr, ReasonUnknownType)
 }
+
+// TestRenderDeliveryLifecycle_Baseline renders every one of the 18 delivery
+// catalog types (order-service delivery vertical, gen-go-lib NotificationType
+// 47-64) straight from the shipping BaselineEN (empty overlay dir → baseline is
+// the only layer). It asserts a non-empty title/body with no leftover "{{"/"}}"
+// template markers, and — for the three param-bearing types — that the param
+// value actually reaches the output (a real interpolation lock, not a
+// tautology). request_no is deliberately absent from every params map: it is not
+// declared required and not templated until numbering ships, so rendering must
+// succeed without it.
+func TestRenderDeliveryLifecycle_Baseline(t *testing.T) {
+	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
+	cases := []struct {
+		nt     notificationv1.NotificationType
+		params map[string]string
+		wantIn []string // substrings that MUST appear in title+body
+	}{
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_ACCEPTED, map[string]string{"final_price": "1 500 ₽", "currency": "RUB"}, []string{"1 500 ₽", "RUB"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_REJECTED, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_SENT, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_ACCEPTED, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_DECLINED, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_WITHDRAWN, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED, map[string]string{"cancelled_by": "The customer"}, []string{"The customer"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY, map[string]string{"route": "Almaty to Astana"}, []string{"Almaty to Astana"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_EXPIRED, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_IN_TRANSIT, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AWAITING_RECEIPT, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_RECEIPT_REMINDER, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AUTO_CONFIRMED, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_COMPLETED, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING, map[string]string{}, nil},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED, map[string]string{}, nil},
+	}
+	if len(cases) != 18 {
+		t.Fatalf("expected 18 delivery cases, got %d", len(cases))
+	}
+	for _, tc := range cases {
+		t.Run(tc.nt.String(), func(t *testing.T) {
+			title, body, err := r.Render(tc.nt, tc.params, "en")
+			if err != nil {
+				t.Fatalf("Render returned err: %v", err)
+			}
+			if title == "" || body == "" {
+				t.Fatalf("empty title/body (title=%q body=%q)", title, body)
+			}
+			for _, s := range []string{title, body} {
+				if strings.Contains(s, "{{") || strings.Contains(s, "}}") {
+					t.Errorf("leftover template marker in %q", s)
+				}
+			}
+			joined := title + " " + body
+			for _, want := range tc.wantIn {
+				if !strings.Contains(joined, want) {
+					t.Errorf("rendered output %q does not contain param value %q", joined, want)
+				}
+			}
+		})
+	}
+}
+
+// TestExtractAndRender_DeliveryLifecycle drives the FULL live inbox path
+// (envelope → ExtractParams → Render) for every one of the 18 delivery types
+// (order-service delivery vertical, gen-go-lib NotificationType 47-64). This is
+// the test that would have caught a missing ExtractParams case: without a switch
+// arm the typed payload falls through to the default and returns ErrUnknownType,
+// so inbox-service would dead-letter the directive. Each case asserts:
+//   - ExtractParams returns exactly the type's declared params (empty for the 15
+//     static types; request_no is dropped even when present on the payload),
+//   - Render lands a non-empty title/body with no leftover "{{"/"}}" markers,
+//   - the param-bearing types interpolate their value into the output (a real
+//     lock, not a tautology) — the accepted case asserts the pre-formatted price.
+func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
+	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
+	cases := []struct {
+		name   string
+		nt     notificationv1.NotificationType
+		env    *notificationv1.NotificationEnvelope
+		want   map[string]string
+		wantIn []string // substrings that MUST appear in title+body
+	}{
+		{
+			name: "request_created",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED,
+			// RequestNo is set to prove it is intentionally dropped from params.
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestCreated{
+					SendDeliveryRequestCreated: &notificationv1.SendDeliveryRequestCreated{RequestNo: "R-001"},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "request_accepted",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_ACCEPTED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestAccepted{
+					SendDeliveryRequestAccepted: &notificationv1.SendDeliveryRequestAccepted{
+						FinalPrice: "1 500 ₽", Currency: "RUB",
+					},
+				},
+			},
+			want:   map[string]string{"final_price": "1 500 ₽", "currency": "RUB"},
+			wantIn: []string{"1 500 ₽", "RUB"},
+		},
+		{
+			name: "request_rejected",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_REJECTED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestRejected{
+					SendDeliveryRequestRejected: &notificationv1.SendDeliveryRequestRejected{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "counter_offer_sent",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_SENT,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryCounterOfferSent{
+					SendDeliveryCounterOfferSent: &notificationv1.SendDeliveryCounterOfferSent{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "counter_offer_accepted",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_ACCEPTED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryCounterOfferAccepted{
+					SendDeliveryCounterOfferAccepted: &notificationv1.SendDeliveryCounterOfferAccepted{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "counter_offer_declined",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_DECLINED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryCounterOfferDeclined{
+					SendDeliveryCounterOfferDeclined: &notificationv1.SendDeliveryCounterOfferDeclined{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "counter_offer_withdrawn",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_WITHDRAWN,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryCounterOfferWithdrawn{
+					SendDeliveryCounterOfferWithdrawn: &notificationv1.SendDeliveryCounterOfferWithdrawn{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "request_cancelled",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED,
+			// CancelReason + RequestNo are set to prove neither leaks into params.
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestCancelled{
+					SendDeliveryRequestCancelled: &notificationv1.SendDeliveryRequestCancelled{
+						CancelledBy: "The customer", CancelReason: "changed plans", RequestNo: "R-002",
+					},
+				},
+			},
+			want:   map[string]string{"cancelled_by": "The customer"},
+			wantIn: []string{"The customer"},
+		},
+		{
+			name: "loading_today",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryLoadingToday{
+					SendDeliveryLoadingToday: &notificationv1.SendDeliveryLoadingToday{
+						Route: "Almaty to Astana", RequestNo: "R-003",
+					},
+				},
+			},
+			want:   map[string]string{"route": "Almaty to Astana"},
+			wantIn: []string{"Almaty to Astana"},
+		},
+		{
+			name: "request_expired",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_EXPIRED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestExpired{
+					SendDeliveryRequestExpired: &notificationv1.SendDeliveryRequestExpired{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "in_transit",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_IN_TRANSIT,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryInTransit{
+					SendDeliveryInTransit: &notificationv1.SendDeliveryInTransit{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "awaiting_receipt",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AWAITING_RECEIPT,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryAwaitingReceipt{
+					SendDeliveryAwaitingReceipt: &notificationv1.SendDeliveryAwaitingReceipt{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "receipt_reminder",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_RECEIPT_REMINDER,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryReceiptReminder{
+					SendDeliveryReceiptReminder: &notificationv1.SendDeliveryReceiptReminder{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "auto_confirmed",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AUTO_CONFIRMED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryAutoConfirmed{
+					SendDeliveryAutoConfirmed: &notificationv1.SendDeliveryAutoConfirmed{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "request_completed",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_COMPLETED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestCompleted{
+					SendDeliveryRequestCompleted: &notificationv1.SendDeliveryRequestCompleted{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "review_invite",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryReviewInvite{
+					SendDeliveryReviewInvite: &notificationv1.SendDeliveryReviewInvite{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "review_window_ending",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryReviewWindowEnding{
+					SendDeliveryReviewWindowEnding: &notificationv1.SendDeliveryReviewWindowEnding{},
+				},
+			},
+			want: map[string]string{},
+		},
+		{
+			name: "cascade_cancelled",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendDeliveryCascadeCancelled{
+					SendDeliveryCascadeCancelled: &notificationv1.SendDeliveryCascadeCancelled{},
+				},
+			},
+			want: map[string]string{},
+		},
+	}
+	if len(cases) != 18 {
+		t.Fatalf("expected 18 delivery cases, got %d", len(cases))
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := ExtractParams(tc.env)
+			if err != nil {
+				t.Fatalf("ExtractParams err: %v", err)
+			}
+			if len(params) != len(tc.want) {
+				t.Fatalf("params = %v, want %v", params, tc.want)
+			}
+			for k, v := range tc.want {
+				if params[k] != v {
+					t.Errorf("params[%q] = %q, want %q", k, params[k], v)
+				}
+			}
+			title, body, err := r.Render(tc.nt, params, "en")
+			if err != nil {
+				t.Fatalf("Render err: %v", err)
+			}
+			if title == "" || body == "" {
+				t.Fatalf("empty title/body (title=%q body=%q)", title, body)
+			}
+			for _, s := range []string{title, body} {
+				if strings.Contains(s, "{{") || strings.Contains(s, "}}") {
+					t.Errorf("leftover template marker in %q", s)
+				}
+			}
+			joined := title + " " + body
+			for _, want := range tc.wantIn {
+				if !strings.Contains(joined, want) {
+					t.Errorf("rendered output %q does not contain %q", joined, want)
+				}
+			}
+		})
+	}
+}

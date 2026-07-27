@@ -295,6 +295,61 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"listing_title": p.SendOrderReviewWindowEnding.GetListingTitle(),
 		}, nil
+
+	// ─── delivery lifecycle payloads (order-service delivery vertical) ───
+	// Only three payloads interpolate a param; the other 15 render static text
+	// and map to an empty map (their requiredParams entry is nil). request_no
+	// rides on several payloads but is intentionally NOT surfaced: numbering has
+	// not shipped, so it is always empty and never templated. Keeping it out of
+	// the map matches the catalog's requiredParams contract for these types.
+	case *notificationv1.NotificationEnvelope_SendDeliveryRequestCreated:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryRequestAccepted:
+		// The emitter pre-formats final_price into a display string; pass it
+		// through verbatim (notifyrender interpolates strings only).
+		return map[string]string{
+			"final_price": p.SendDeliveryRequestAccepted.GetFinalPrice(),
+			"currency":    p.SendDeliveryRequestAccepted.GetCurrency(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryRequestRejected:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryCounterOfferSent:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryCounterOfferAccepted:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryCounterOfferDeclined:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryCounterOfferWithdrawn:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryRequestCancelled:
+		// cancel_reason is optional (late-cancellation only) and not templated,
+		// mirroring admin_transfer_rejected's optional reason — surface only
+		// cancelled_by, the one declared param.
+		return map[string]string{
+			"cancelled_by": p.SendDeliveryRequestCancelled.GetCancelledBy(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryLoadingToday:
+		return map[string]string{
+			"route": p.SendDeliveryLoadingToday.GetRoute(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryRequestExpired:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryInTransit:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryAwaitingReceipt:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryReceiptReminder:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryAutoConfirmed:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryRequestCompleted:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryReviewInvite:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryReviewWindowEnding:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryCascadeCancelled:
+		return map[string]string{}, nil
 	default:
 		// A payload IS set (the nil case is caught by the guard at the top) but no
 		// case matched it — a directive variant that reached this package without a

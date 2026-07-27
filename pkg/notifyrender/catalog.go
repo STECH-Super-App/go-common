@@ -57,6 +57,25 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_REJECTED:  "admin_transfer_rejected",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_CANCELLED: "admin_transfer_cancelled",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_EXPIRED:   "admin_transfer_expired",
+	// delivery lifecycle (order-service delivery vertical, gen-go-lib NotificationType 47-64).
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED:         "delivery_request_created",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_ACCEPTED:        "delivery_request_accepted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_REJECTED:        "delivery_request_rejected",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_SENT:      "delivery_counter_offer_sent",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_ACCEPTED:  "delivery_counter_offer_accepted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_DECLINED:  "delivery_counter_offer_declined",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_WITHDRAWN: "delivery_counter_offer_withdrawn",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED:       "delivery_request_cancelled",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY:           "delivery_loading_today",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_EXPIRED:         "delivery_request_expired",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_IN_TRANSIT:              "delivery_in_transit",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AWAITING_RECEIPT:        "delivery_awaiting_receipt",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_RECEIPT_REMINDER:        "delivery_receipt_reminder",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AUTO_CONFIRMED:          "delivery_auto_confirmed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_COMPLETED:       "delivery_request_completed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE:           "delivery_review_invite",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING:    "delivery_review_window_ending",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED:       "delivery_cascade_cancelled",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -203,6 +222,29 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_EXPIRED: {
 		"organization_name", "counterparty_name",
+	},
+	// ─── delivery lifecycle (order-service delivery vertical) ───
+	// Only the three delivery types that interpolate a param are listed; the
+	// other 15 render static text and need no entry (the required-param loop and
+	// the baseline reverse-check both treat a nil entry as "no params").
+	// request_no rides on several delivery payloads but is intentionally NOT
+	// declared: numbering has not shipped, so it is always empty and never
+	// interpolated. A later change adds it to both the templates and this table
+	// once the field is populated.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_ACCEPTED: {
+		// final_price holds a DISPLAY-formatted money string, exactly as
+		// amount / old_price do today: notifyrender interpolates strings only.
+		// The emitter pre-formats the price and ships it as the payload's
+		// string final_price field; ExtractParams passes it through verbatim.
+		"final_price", "currency",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED: {
+		// cancel_reason is optional (late-cancellation only), so — mirroring
+		// admin_transfer_rejected's reason — it is neither templated nor declared.
+		"cancelled_by",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY: {
+		"route",
 	},
 }
 
