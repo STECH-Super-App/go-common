@@ -55,7 +55,7 @@ func errEmptyOccurredAt() *commonerr.AppError {
 func errEmptyRecipient() *commonerr.AppError {
 	return commonerr.New(http.StatusInternalServerError).
 		Reason(ReasonEmptyRecipient).
-		Message("metadata.recipient_user_id is empty (and channels contains IN_APP or PUSH)").
+		Message("neither metadata.recipient_user_id nor metadata.recipient_tenant_id is set (channels contains IN_APP or PUSH — set exactly one)").
 		Build()
 }
 

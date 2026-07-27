@@ -305,13 +305,15 @@ Typed consumer dispatcher. Registers proto-typed handlers keyed on the proto FQN
 ```go
 import (
     usersv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/users/v1"
-    teamsv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/teams/v1"
+    tenantsv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/tenants/v1"
+    eventsv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/v1"
     "github.com/STECH-Super-App/go-common/pkg/events"
     "github.com/STECH-Super-App/go-common/pkg/outbox"
 )
 
 reader := kafka.NewReader(/*...*/)
-dlqWriter := &kafka.Writer{Topic: "user-events-dlq", /*...*/}
+// DLQ names come from the registry helpers — never hardcode a topic string.
+dlqWriter := &kafka.Writer{Topic: events.DLQName(eventsv1.Topic_TOPIC_USER_EVENTS, "auth"), /*...*/}
 dedup := outbox.NewDeduplicator(pool)
 
 disp := events.NewDispatcher(reader, dlqWriter, events.WithDedup(dedup))
@@ -319,8 +321,8 @@ disp := events.NewDispatcher(reader, dlqWriter, events.WithDedup(dedup))
 events.Handle(disp, func(ctx context.Context, e *usersv1.UserUpdated) error {
     return sessionService.RevokeAllForUser(ctx, e.UserId)
 })
-events.Handle(disp, func(ctx context.Context, e *teamsv1.TeamSuspended) error {
-    return sessionService.RevokeAllForTeam(ctx, e.TeamId)
+events.Handle(disp, func(ctx context.Context, e *tenantsv1.TenantSuspended) error {
+    return sessionService.RevokeAllForTenant(ctx, e.TenantId)
 })
 
 return disp.Run(ctx)

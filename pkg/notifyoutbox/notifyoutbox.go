@@ -154,10 +154,10 @@ func containsInApp(channels []notificationv1.Channel) bool {
 }
 
 // requiresRecipient reports whether the channels list contains a channel
-// that needs metadata.recipient_user_id. IN_APP needs it to write the
-// inbox row; PUSH needs it to look up the user's registered push tokens.
-// SMS and EMAIL alone carry their address in the payload — no recipient
-// required.
+// that needs a resolvable recipient (exactly one of
+// metadata.recipient_user_id / metadata.recipient_tenant_id). IN_APP needs
+// it to write inbox rows; PUSH needs it to look up push tokens. SMS and
+// EMAIL alone carry their address in the payload — no recipient required.
 func requiresRecipient(channels []notificationv1.Channel) bool {
 	for _, c := range channels {
 		if c == notificationv1.Channel_CHANNEL_IN_APP ||
