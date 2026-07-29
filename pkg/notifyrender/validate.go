@@ -40,8 +40,12 @@ func readBundle(fsys fs.FS) (map[string]section, map[string]notificationv1.Notif
 
 // consistencyCheck validates the sections that are present in the bundle:
 //   - each section name maps to a known NotificationType (via byName),
-//   - every {{.placeholder}} used is declared in requiredParams for that type,
+//   - every {{.placeholder}} used is declared for that type (required OR optional),
 //   - every requiredParam appears in at least one placeholder.
+//
+// Optional params are deliberately NOT required to appear: a translation may
+// legitimately drop the delivery request number from a sentence, and the
+// baseline guards it behind an {{if}} anyway.
 //
 // Returns a (possibly empty) slice of problem strings. The caller aggregates
 // and formats them.
@@ -58,16 +62,16 @@ func consistencyCheck(sections map[string]section, byName map[string]notificatio
 		for _, m := range placeholderRe.FindAllStringSubmatch(sec.Title+" "+sec.Body, -1) {
 			used[m[1]] = true
 		}
-		declared := map[string]bool{}
-		for _, p := range requiredParams[t] {
-			declared[p] = true
+		allowed := map[string]bool{}
+		for _, p := range allowedParams(t) {
+			allowed[p] = true
 		}
 		for p := range used {
-			if !declared[p] {
+			if !allowed[p] {
 				problems = append(problems, fmt.Sprintf("section %q: undeclared placeholder {{.%s}}", name, p))
 			}
 		}
-		for p := range declared {
+		for _, p := range requiredParams[t] {
 			if !used[p] {
 				problems = append(problems, fmt.Sprintf("section %q: required param %q never used in a placeholder", name, p))
 			}

@@ -967,11 +967,15 @@ func TestExtractParams_SendPlatformMessage(t *testing.T) {
 // catalog types (order-service delivery vertical, gen-go-lib NotificationType
 // 47-64) straight from the shipping BaselineEN (empty overlay dir → baseline is
 // the only layer). It asserts a non-empty title/body with no leftover "{{"/"}}"
-// template markers, and — for the three param-bearing types — that the param
+// template markers, and — for the three required-param types — that the param
 // value actually reaches the output (a real interpolation lock, not a
-// tautology). request_no is deliberately absent from every params map: it is not
-// declared required and not templated until numbering ships, so rendering must
-// succeed without it.
+// tautology).
+//
+// request_no is deliberately absent from every params map here: it is an
+// OPTIONAL param, so a caller that never supplies the key must still render.
+// This exercises Render's absent-optional fill — without it the {{if}} guard
+// would trip missingkey=error and every delivery notification would 500. The
+// no-dangling-"#" assertion is the visible half of the same contract.
 func TestRenderDeliveryLifecycle_Baseline(t *testing.T) {
 	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
 	cases := []struct {
@@ -1014,6 +1018,11 @@ func TestRenderDeliveryLifecycle_Baseline(t *testing.T) {
 				if strings.Contains(s, "{{") || strings.Contains(s, "}}") {
 					t.Errorf("leftover template marker in %q", s)
 				}
+				// An unguarded {{.request_no}} would leave the literal "#" behind
+				// once the empty value interpolated.
+				if strings.Contains(s, "#") {
+					t.Errorf("dangling number marker in %q (request_no was not supplied)", s)
+				}
 			}
 			joined := title + " " + body
 			for _, want := range tc.wantIn {
@@ -1031,11 +1040,13 @@ func TestRenderDeliveryLifecycle_Baseline(t *testing.T) {
 // the test that would have caught a missing ExtractParams case: without a switch
 // arm the typed payload falls through to the default and returns ErrUnknownType,
 // so inbox-service would dead-letter the directive. Each case asserts:
-//   - ExtractParams returns exactly the type's declared params (empty for the 15
-//     static types; request_no is dropped even when present on the payload),
+//   - ExtractParams returns exactly the type's declared params (empty only for
+//     the payloads that carry no fields at all; the 9 that carry request_no
+//     surface it),
 //   - Render lands a non-empty title/body with no leftover "{{"/"}}" markers,
 //   - the param-bearing types interpolate their value into the output (a real
-//     lock, not a tautology) — the accepted case asserts the pre-formatted price.
+//     lock, not a tautology) — the accepted case asserts the pre-formatted price,
+//     and every request_no case asserts the "#<number>" reaches the text.
 func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
 	cases := []struct {
@@ -1048,13 +1059,13 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 		{
 			name: "request_created",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED,
-			// RequestNo is set to prove it is intentionally dropped from params.
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestCreated{
 					SendDeliveryRequestCreated: &notificationv1.SendDeliveryRequestCreated{RequestNo: "R-001"},
 				},
 			},
-			want: map[string]string{},
+			want:   map[string]string{"request_no": "R-001"},
+			wantIn: []string{"#R-001"},
 		},
 		{
 			name: "request_accepted",
@@ -1122,7 +1133,8 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 		{
 			name: "request_cancelled",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED,
-			// CancelReason + RequestNo are set to prove neither leaks into params.
+			// CancelReason is set to prove it does NOT leak into params (it is
+			// neither templated nor declared); RequestNo does reach the text.
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestCancelled{
 					SendDeliveryRequestCancelled: &notificationv1.SendDeliveryRequestCancelled{
@@ -1130,8 +1142,8 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 					},
 				},
 			},
-			want:   map[string]string{"cancelled_by": "The customer"},
-			wantIn: []string{"The customer"},
+			want:   map[string]string{"cancelled_by": "The customer", "request_no": "R-002"},
+			wantIn: []string{"The customer", "#R-002"},
 		},
 		{
 			name: "loading_today",
@@ -1143,18 +1155,19 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 					},
 				},
 			},
-			want:   map[string]string{"route": "Almaty to Astana"},
-			wantIn: []string{"Almaty to Astana"},
+			want:   map[string]string{"route": "Almaty to Astana", "request_no": "R-003"},
+			wantIn: []string{"Almaty to Astana", "#R-003"},
 		},
 		{
 			name: "request_expired",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_EXPIRED,
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestExpired{
-					SendDeliveryRequestExpired: &notificationv1.SendDeliveryRequestExpired{},
+					SendDeliveryRequestExpired: &notificationv1.SendDeliveryRequestExpired{RequestNo: "R-004"},
 				},
 			},
-			want: map[string]string{},
+			want:   map[string]string{"request_no": "R-004"},
+			wantIn: []string{"#R-004"},
 		},
 		{
 			name: "in_transit",
@@ -1181,20 +1194,22 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_RECEIPT_REMINDER,
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryReceiptReminder{
-					SendDeliveryReceiptReminder: &notificationv1.SendDeliveryReceiptReminder{},
+					SendDeliveryReceiptReminder: &notificationv1.SendDeliveryReceiptReminder{RequestNo: "R-005"},
 				},
 			},
-			want: map[string]string{},
+			want:   map[string]string{"request_no": "R-005"},
+			wantIn: []string{"#R-005"},
 		},
 		{
 			name: "auto_confirmed",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AUTO_CONFIRMED,
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryAutoConfirmed{
-					SendDeliveryAutoConfirmed: &notificationv1.SendDeliveryAutoConfirmed{},
+					SendDeliveryAutoConfirmed: &notificationv1.SendDeliveryAutoConfirmed{RequestNo: "R-006"},
 				},
 			},
-			want: map[string]string{},
+			want:   map[string]string{"request_no": "R-006"},
+			wantIn: []string{"#R-006"},
 		},
 		{
 			name: "request_completed",
@@ -1211,30 +1226,33 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE,
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryReviewInvite{
-					SendDeliveryReviewInvite: &notificationv1.SendDeliveryReviewInvite{},
+					SendDeliveryReviewInvite: &notificationv1.SendDeliveryReviewInvite{RequestNo: "R-007"},
 				},
 			},
-			want: map[string]string{},
+			want:   map[string]string{"request_no": "R-007"},
+			wantIn: []string{"#R-007"},
 		},
 		{
 			name: "review_window_ending",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING,
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryReviewWindowEnding{
-					SendDeliveryReviewWindowEnding: &notificationv1.SendDeliveryReviewWindowEnding{},
+					SendDeliveryReviewWindowEnding: &notificationv1.SendDeliveryReviewWindowEnding{RequestNo: "R-008"},
 				},
 			},
-			want: map[string]string{},
+			want:   map[string]string{"request_no": "R-008"},
+			wantIn: []string{"#R-008"},
 		},
 		{
 			name: "cascade_cancelled",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED,
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryCascadeCancelled{
-					SendDeliveryCascadeCancelled: &notificationv1.SendDeliveryCascadeCancelled{},
+					SendDeliveryCascadeCancelled: &notificationv1.SendDeliveryCascadeCancelled{RequestNo: "R-009"},
 				},
 			},
-			want: map[string]string{},
+			want:   map[string]string{"request_no": "R-009"},
+			wantIn: []string{"#R-009"},
 		},
 	}
 	if len(cases) != 18 {
@@ -1273,5 +1291,276 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// deliveryRequestNoCase pins the EXACT rendered body for one request_no-bearing
+// delivery type in both states. Exact strings (not substring probes) are the
+// point: they are the reviewable record of the shipped copy, and `without` is
+// byte-identical to what the type rendered before numbering shipped.
+type deliveryRequestNoCase struct {
+	name        string
+	nt          notificationv1.NotificationType
+	otherParams map[string]string // the type's REQUIRED params, if any
+	withNumber  string
+	without     string
+}
+
+// deliveryRequestNoCases covers all 9 delivery types whose payload carries
+// request_no (Д-13, «Заявка #N»). Placement follows the vault push-text matrix
+// («Уведомления перевозки» → "Тексты push-уведомлений"); the two types the
+// matrix gives no push line for (review_window_ending, cascade_cancelled) reuse
+// the «по заявке #N» / «Заявка #N» shape of their siblings.
+var deliveryRequestNoCases = []deliveryRequestNoCase{
+	{
+		name:       "request_created",
+		nt:         notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED,
+		withNumber: "You have a new delivery request #12345. Review it.",
+		without:    "You have a new delivery request. Review it.",
+	},
+	{
+		name:        "request_cancelled",
+		nt:          notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED,
+		otherParams: map[string]string{"cancelled_by": "The customer"},
+		withNumber:  "The customer cancelled request #12345.",
+		without:     "The customer cancelled the request.",
+	},
+	{
+		name:        "loading_today",
+		nt:          notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY,
+		otherParams: map[string]string{"route": "Almaty to Astana"},
+		withNumber:  "Loading is today for your request #12345 (Almaty to Astana).",
+		without:     "Loading is today for your request (Almaty to Astana).",
+	},
+	{
+		name:       "request_expired",
+		nt:         notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_EXPIRED,
+		withNumber: "Request #12345 expired — the loading date has passed. You can repeat the request.",
+		without:    "The request expired — the loading date has passed. You can repeat the request.",
+	},
+	{
+		name:       "receipt_reminder",
+		nt:         notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_RECEIPT_REMINDER,
+		withNumber: "Confirm receipt of the equipment for request #12345 — without a response the request auto-confirms in 24 hours.",
+		without:    "Confirm receipt of the equipment — without a response the request auto-confirms in 24 hours.",
+	},
+	{
+		name:       "auto_confirmed",
+		nt:         notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AUTO_CONFIRMED,
+		withNumber: "Request #12345 was auto-confirmed. You can leave a review within 14 days.",
+		without:    "The request was auto-confirmed. You can leave a review within 14 days.",
+	},
+	{
+		name:       "review_invite",
+		nt:         notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE,
+		withNumber: "Rate the carrier for request #12345 — you have 14 days.",
+		without:    "Rate the carrier — you have 14 days.",
+	},
+	{
+		name:       "review_window_ending",
+		nt:         notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING,
+		withNumber: "Your review window for request #12345 is closing — 2 days left.",
+		without:    "Your review window is closing — 2 days left.",
+	},
+	{
+		name:       "cascade_cancelled",
+		nt:         notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED,
+		withNumber: "Delivery request #12345 was cancelled because the linked rental was cancelled.",
+		without:    "The delivery was cancelled because the linked rental was cancelled.",
+	},
+}
+
+// paramsWith returns the case's required params plus the given request_no
+// binding. A nil extra leaves request_no out of the map entirely.
+func (c deliveryRequestNoCase) paramsWith(extra map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range c.otherParams {
+		out[k] = v
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
+}
+
+// TestRenderDelivery_RequestNumber is the copy lock for Д-13 request numbering.
+// For each of the 9 request_no-bearing delivery types it asserts the exact body
+// in three states:
+//
+//	populated — the number renders in the vault-specified position,
+//	empty     — an old event (numbering not yet stamped) renders the plain
+//	            sentence, no dangling "#",
+//	absent    — a caller that never supplies the key renders identically to
+//	            empty (Render's absent-optional fill), rather than 500ing on
+//	            missingkey=error.
+func TestRenderDelivery_RequestNumber(t *testing.T) {
+	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
+	if len(deliveryRequestNoCases) != 9 {
+		t.Fatalf("expected 9 request_no-bearing delivery cases, got %d", len(deliveryRequestNoCases))
+	}
+	for _, tc := range deliveryRequestNoCases {
+		t.Run(tc.name, func(t *testing.T) {
+			states := []struct {
+				state string
+				extra map[string]string
+				want  string
+			}{
+				{"populated", map[string]string{"request_no": "12345"}, tc.withNumber},
+				{"empty", map[string]string{"request_no": ""}, tc.without},
+				{"absent", nil, tc.without},
+			}
+			for _, st := range states {
+				t.Run(st.state, func(t *testing.T) {
+					_, body, err := r.Render(tc.nt, tc.paramsWith(st.extra), "en")
+					if err != nil {
+						t.Fatalf("Render err: %v", err)
+					}
+					if body != st.want {
+						t.Errorf("body =\n  %q\nwant\n  %q", body, st.want)
+					}
+					if st.state != "populated" && strings.Contains(body, "#") {
+						t.Errorf("dangling number marker in %q", body)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestDeliveryRequestNoIsOptionalNotRequired locks the producer-side contract:
+// request_no must be declared OPTIONAL, never required. notifyoutbox rejects a
+// directive whose REQUIRED param is empty (empty == missing there), so promoting
+// request_no would make every legacy or not-yet-numbered delivery directive fail
+// to publish — the opposite of graceful absence.
+func TestDeliveryRequestNoIsOptionalNotRequired(t *testing.T) {
+	for _, tc := range deliveryRequestNoCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !contains(OptionalParams(tc.nt), "request_no") {
+				t.Errorf("%v: request_no missing from OptionalParams", tc.nt)
+			}
+			if contains(RequiredParams(tc.nt), "request_no") {
+				t.Errorf("%v: request_no must NOT be a required param", tc.nt)
+			}
+			// The overlay allow-list must admit it, or an i18n-catalog translation
+			// carrying the number would be silently rejected at load.
+			allowed, ok := AllowedParamsByKey(typeKeyForTest()[tc.nt] + ".body")
+			if !ok || !contains(allowed, "request_no") {
+				t.Errorf("%v: AllowedParamsByKey does not admit request_no (allowed=%v)", tc.nt, allowed)
+			}
+		})
+	}
+}
+
+// TestOptionalParamsScopedToDelivery asserts the optional tier did not leak
+// beyond the 9 delivery types: no other catalog type declares an optional param,
+// and no other baseline string mentions request_no. The rent vertical (order_*)
+// and every platform type must be untouched by this change.
+func TestOptionalParamsScopedToDelivery(t *testing.T) {
+	declared := map[notificationv1.NotificationType]bool{}
+	for _, tc := range deliveryRequestNoCases {
+		declared[tc.nt] = true
+	}
+	for typ, params := range optionalParams {
+		if !declared[typ] {
+			t.Errorf("unexpected optional params %v on type %v", params, typ)
+		}
+	}
+	if len(optionalParams) != len(declared) {
+		t.Errorf("optionalParams has %d entries, want %d", len(optionalParams), len(declared))
+	}
+
+	for key, tmpl := range BaselineEN {
+		if !strings.Contains(tmpl, "request_no") {
+			continue
+		}
+		section := strings.TrimSuffix(strings.TrimSuffix(key, ".title"), ".body")
+		if !declared[sectionToType[section]] {
+			t.Errorf("baseline %q references request_no but its type does not declare it", key)
+		}
+	}
+}
+
+// TestRenderRentLifecycle_UnaffectedByRequestNumber renders the rent vertical
+// (order-service's order_* types) and asserts the shipped bodies are exactly
+// what they were before request numbering — no optional fill, no stray "#".
+// The two verticals share the catalog, so a regression here would be invisible
+// in the delivery tests.
+func TestRenderRentLifecycle_UnaffectedByRequestNumber(t *testing.T) {
+	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
+	cases := []struct {
+		nt     notificationv1.NotificationType
+		params map[string]string
+		want   string
+	}{
+		{
+			notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED,
+			map[string]string{"listing_title": "Excavator XL"},
+			"You have a new rental request for 'Excavator XL'.",
+		},
+		{
+			notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED,
+			map[string]string{"listing_title": "Excavator XL", "cancelled_by": "The owner"},
+			"The order for 'Excavator XL' was cancelled by The owner.",
+		},
+		{
+			notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED,
+			map[string]string{"listing_title": "Excavator XL"},
+			"The order for 'Excavator XL' was completed automatically.",
+		},
+		{
+			notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING,
+			map[string]string{"listing_title": "Excavator XL"},
+			"Your review window for 'Excavator XL' ends in 2 days.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.nt.String(), func(t *testing.T) {
+			if len(OptionalParams(tc.nt)) != 0 {
+				t.Fatalf("rent type %v unexpectedly declares optional params", tc.nt)
+			}
+			_, body, err := r.Render(tc.nt, tc.params, "en")
+			if err != nil {
+				t.Fatalf("Render err: %v", err)
+			}
+			if body != tc.want {
+				t.Errorf("body = %q, want %q", body, tc.want)
+			}
+			if strings.Contains(body, "#") {
+				t.Errorf("rent body %q unexpectedly contains a number marker", body)
+			}
+		})
+	}
+}
+
+// TestOverlayMayTranslateRequestNumber proves the i18n-catalog path: a ru overlay
+// value that guards request_no exactly like the baseline survives the
+// WithAllowedParams policy and renders through. Without request_no in
+// AllowedParamsByKey the overlay value would be dropped at load and the reader
+// would silently fall back to English.
+func TestOverlayMayTranslateRequestNumber(t *testing.T) {
+	r := newTestRenderer(t, map[string]string{
+		"ru.json": `{
+  "delivery_request_created": {
+    "title": "Новая заявка на перевозку",
+    "body": "Новая заявка на перевозку{{if .request_no}} #{{.request_no}}{{end}}. Рассмотрите заявку."
+  }
+}`,
+	})
+	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED
+
+	_, body, err := r.Render(nt, map[string]string{"request_no": "12345"}, "ru")
+	if err != nil {
+		t.Fatalf("Render ru err: %v", err)
+	}
+	if want := "Новая заявка на перевозку #12345. Рассмотрите заявку."; body != want {
+		t.Errorf("ru body = %q, want %q", body, want)
+	}
+
+	_, body, err = r.Render(nt, map[string]string{"request_no": ""}, "ru")
+	if err != nil {
+		t.Fatalf("Render ru (empty number) err: %v", err)
+	}
+	if want := "Новая заявка на перевозку. Рассмотрите заявку."; body != want {
+		t.Errorf("ru body (empty number) = %q, want %q", body, want)
 	}
 }

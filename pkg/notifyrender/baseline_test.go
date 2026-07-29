@@ -1,6 +1,7 @@
 package notifyrender
 
 import (
+	"strings"
 	"testing"
 
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
@@ -31,9 +32,13 @@ func contains(list []string, v string) bool {
 // TestBaselineMatchesCatalogContract is the in-Go successor to the old
 // ValidateBundleComplete run against a shipped en.json. It asserts, for every
 // catalog type, that BaselineEN carries both a .title and .body entry, that
-// every placeholder used is declared in requiredParams (forward), and that
-// every declared param is actually used in title or body (reverse — this is
-// the unused-param check ValidateBundleComplete performed).
+// every placeholder used is declared — required or optional — (forward), and
+// that every REQUIRED param is actually used in title or body (reverse — this
+// is the unused-param check ValidateBundleComplete performed).
+//
+// Optional params are exempt from the reverse check by design: they are a
+// may-be-empty tier, so a template is free to omit one. TestBaselineGuardsOptionalParams
+// covers the shape they must take when a template DOES use one.
 func TestBaselineMatchesCatalogContract(t *testing.T) {
 	for typ, key := range typeKeyForTest() {
 		title, okTitle := BaselineEN[key+".title"]
@@ -45,20 +50,42 @@ func TestBaselineMatchesCatalogContract(t *testing.T) {
 			t.Errorf("type %v: baseline missing %s.body", typ, key)
 		}
 
-		// forward: every placeholder used is a declared param.
+		// forward: every placeholder used is a declared param (required or optional).
 		for _, part := range []string{title, body} {
 			for _, ph := range extractPlaceholders(part) {
-				if !contains(requiredParams[typ], ph) {
+				if !contains(allowedParams(typ), ph) {
 					t.Errorf("%s uses undeclared {{.%s}}", key, ph)
 				}
 			}
 		}
 
-		// reverse: every declared param appears in title or body.
+		// reverse: every REQUIRED param appears in title or body.
 		used := append(extractPlaceholders(title), extractPlaceholders(body)...)
 		for _, req := range requiredParams[typ] {
 			if !contains(used, req) {
 				t.Errorf("%s: declared param %q never used in title or body", key, req)
+			}
+		}
+	}
+}
+
+// TestBaselineGuardsOptionalParams asserts every baseline string that references
+// an OPTIONAL param reads it behind an {{if}} guard on that same param. Without
+// the guard an empty value would render a dangling fragment ("Request # expired")
+// — the exact defect the guard exists to prevent. This is a structural lock on
+// the copy; TestRenderDelivery_RequestNumber locks the rendered strings.
+func TestBaselineGuardsOptionalParams(t *testing.T) {
+	for typ, key := range typeKeyForTest() {
+		for _, opt := range optionalParams[typ] {
+			for _, part := range []string{key + ".title", key + ".body"} {
+				tmpl := BaselineEN[part]
+				if !contains(extractPlaceholders(tmpl), opt) {
+					continue // this half does not use the optional param at all.
+				}
+				if !strings.Contains(tmpl, "{{if ."+opt+"}}") {
+					t.Errorf("%s references optional {{.%s}} without an {{if .%s}} guard: %q",
+						part, opt, opt, tmpl)
+				}
 			}
 		}
 	}

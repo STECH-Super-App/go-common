@@ -224,13 +224,12 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 		"organization_name", "counterparty_name",
 	},
 	// ─── delivery lifecycle (order-service delivery vertical) ───
-	// Only the three delivery types that interpolate a param are listed; the
-	// other 15 render static text and need no entry (the required-param loop and
-	// the baseline reverse-check both treat a nil entry as "no params").
-	// request_no rides on several delivery payloads but is intentionally NOT
-	// declared: numbering has not shipped, so it is always empty and never
-	// interpolated. A later change adds it to both the templates and this table
-	// once the field is populated.
+	// Only the three delivery types that interpolate a REQUIRED param are listed;
+	// the other 15 need no entry (the required-param loop and the baseline
+	// reverse-check both treat a nil entry as "no required params"). The
+	// human-facing request number rides on 9 of the 18 delivery payloads and is
+	// declared in optionalParams instead — see the note there for why it must not
+	// be a required param.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_ACCEPTED: {
 		// final_price holds a DISPLAY-formatted money string, exactly as
 		// amount / old_price do today: notifyrender interpolates strings only.
@@ -248,10 +247,56 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	},
 }
 
-// RequiredParams returns the param names required for type t. Returns
+// optionalParams declares params that MAY arrive empty (or absent) and are
+// therefore templated behind a conditional. They are a second, weaker tier of
+// the same param contract and differ from requiredParams in three ways:
+//
+//   - notifyoutbox's producer-side validator only walks RequiredParams, so an
+//     empty optional value does NOT reject the directive at publish time
+//     (for a required param, empty means missing).
+//   - Render fills an absent optional key with "" before templating, so the
+//     baseline's {{if}} guard cannot trip missingkey=error.
+//   - The baseline MUST reference an optional param behind that guard, so an
+//     empty value renders the plain sentence and never a dangling "#".
+//
+// request_no — the human-facing delivery request number (Д-13, «Заявка #12345»)
+// — is the first of these. order-service stamps it into 9 of the 18 SendDelivery*
+// payloads, but directives emitted before numbering shipped carry it empty, and
+// a delivery request may be notified about before a number is assigned. Those
+// must still render, minus the number.
+var optionalParams = map[notificationv1.NotificationType][]string{
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED:      {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED:    {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY:        {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_EXPIRED:      {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_RECEIPT_REMINDER:     {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AUTO_CONFIRMED:       {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE:        {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING: {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED:    {"request_no"},
+}
+
+// RequiredParams returns the param names required for type t — the contract
+// producers are held to (an empty value is rejected at publish time). Returns
 // nil for unknown / reserved types.
 func RequiredParams(t notificationv1.NotificationType) []string {
 	return requiredParams[t]
+}
+
+// OptionalParams returns the param names type t may render but may also leave
+// empty. Returns nil for types with no optional params.
+func OptionalParams(t notificationv1.NotificationType) []string {
+	return optionalParams[t]
+}
+
+// allowedParams returns the full set of params a template for type t may
+// reference: the required ones plus the optional ones. Always a fresh slice —
+// callers must not observe (or mutate) the catalog's backing arrays.
+func allowedParams(t notificationv1.NotificationType) []string {
+	req, opt := requiredParams[t], optionalParams[t]
+	out := make([]string, 0, len(req)+len(opt))
+	out = append(out, req...)
+	return append(out, opt...)
 }
 
 // sectionToType is the reverse of typeKey: catalog section name →
@@ -265,8 +310,9 @@ var sectionToType = func() map[string]notificationv1.NotificationType {
 }()
 
 // AllowedParamsByKey maps a dotted catalog key ("<section>.title" or
-// "<section>.body") to the required param names declared for that section's
-// NotificationType. It is the reverse of typeKey plus a suffix strip.
+// "<section>.body") to the param names declared for that section's
+// NotificationType — required AND optional, since a translation may legitimately
+// reference either. It is the reverse of typeKey plus a suffix strip.
 //
 // Returns (nil, false) for a key without a .title/.body suffix or one whose
 // section maps to no known NotificationType. Task 5 wires this into
@@ -286,5 +332,5 @@ func AllowedParamsByKey(key string) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	return requiredParams[t], true
+	return allowedParams(t), true
 }

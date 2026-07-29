@@ -297,13 +297,17 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 
 	// ─── delivery lifecycle payloads (order-service delivery vertical) ───
-	// Only three payloads interpolate a param; the other 15 render static text
-	// and map to an empty map (their requiredParams entry is nil). request_no
-	// rides on several payloads but is intentionally NOT surfaced: numbering has
-	// not shipped, so it is always empty and never templated. Keeping it out of
-	// the map matches the catalog's requiredParams contract for these types.
+	// 9 of the 18 payloads carry request_no — the human-facing delivery request
+	// number (Д-13). It is a catalog OPTIONAL param: the proto getter returns ""
+	// for a directive emitted before numbering shipped, and the baseline renders
+	// it behind an {{if}} guard, so an empty value degrades to the plain sentence
+	// instead of a dangling "#". Surface it unconditionally — Render decides
+	// whether it reaches the text. The remaining payloads carry no fields at all
+	// and map to an empty map.
 	case *notificationv1.NotificationEnvelope_SendDeliveryRequestCreated:
-		return map[string]string{}, nil
+		return map[string]string{
+			"request_no": p.SendDeliveryRequestCreated.GetRequestNo(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryRequestAccepted:
 		// The emitter pre-formats final_price into a display string; pass it
 		// through verbatim (notifyrender interpolates strings only).
@@ -324,32 +328,46 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	case *notificationv1.NotificationEnvelope_SendDeliveryRequestCancelled:
 		// cancel_reason is optional (late-cancellation only) and not templated,
 		// mirroring admin_transfer_rejected's optional reason — surface only
-		// cancelled_by, the one declared param.
+		// cancelled_by and request_no, the two declared params.
 		return map[string]string{
 			"cancelled_by": p.SendDeliveryRequestCancelled.GetCancelledBy(),
+			"request_no":   p.SendDeliveryRequestCancelled.GetRequestNo(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryLoadingToday:
 		return map[string]string{
-			"route": p.SendDeliveryLoadingToday.GetRoute(),
+			"route":      p.SendDeliveryLoadingToday.GetRoute(),
+			"request_no": p.SendDeliveryLoadingToday.GetRequestNo(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryRequestExpired:
-		return map[string]string{}, nil
+		return map[string]string{
+			"request_no": p.SendDeliveryRequestExpired.GetRequestNo(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryInTransit:
 		return map[string]string{}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryAwaitingReceipt:
 		return map[string]string{}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryReceiptReminder:
-		return map[string]string{}, nil
+		return map[string]string{
+			"request_no": p.SendDeliveryReceiptReminder.GetRequestNo(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryAutoConfirmed:
-		return map[string]string{}, nil
+		return map[string]string{
+			"request_no": p.SendDeliveryAutoConfirmed.GetRequestNo(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryRequestCompleted:
 		return map[string]string{}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryReviewInvite:
-		return map[string]string{}, nil
+		return map[string]string{
+			"request_no": p.SendDeliveryReviewInvite.GetRequestNo(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryReviewWindowEnding:
-		return map[string]string{}, nil
+		return map[string]string{
+			"request_no": p.SendDeliveryReviewWindowEnding.GetRequestNo(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryCascadeCancelled:
-		return map[string]string{}, nil
+		return map[string]string{
+			"request_no": p.SendDeliveryCascadeCancelled.GetRequestNo(),
+		}, nil
 	default:
 		// A payload IS set (the nil case is caught by the guard at the top) but no
 		// case matched it — a directive variant that reached this package without a
