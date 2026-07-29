@@ -54,6 +54,17 @@ func (r *Renderer) Render(
 	bodyKey := key + ".body"
 	asAny := toAny(params)
 
+	// Optional params are read behind a {{if}} guard in the template, and the
+	// resolver runs with missingkey=error — which trips on an ABSENT key even
+	// inside the guard. Normalize absent to empty so a legacy caller that never
+	// learned about the param renders the same fallback text as a live directive
+	// carrying it empty, instead of a 500.
+	for _, optional := range optionalParams[t] {
+		if _, present := asAny[optional]; !present {
+			asAny[optional] = ""
+		}
+	}
+
 	// Resolve title and body against ONE snapshot so a concurrent overlay
 	// Reload cannot tear the title/body pair (spec F4).
 	snap := r.res.Snapshot()
