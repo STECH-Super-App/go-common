@@ -236,6 +236,81 @@ func TestValidateParams_MissingRequired(t *testing.T) {
 	}
 }
 
+// TestValidateParams_OrganisationChangeRequests covers the four organisation
+// change-request directives on the real producer path. Each was previously
+// unmapped in notifyrender.ExtractParams, so validateParams returned
+// ErrUnknownType and took the publishing transaction down with it.
+//
+// The blank-comment cases are the load-bearing ones: validateParams treats an
+// empty required param as missing, so the optional moderator comment must never
+// be declared required.
+func TestValidateParams_OrganisationChangeRequests(t *testing.T) {
+	// setPayload is a func because the oneof wrapper interface
+	// (isNotificationEnvelope_Payload) is unexported and cannot be a struct field.
+	cases := []struct {
+		name       string
+		typ        notificationv1.NotificationType
+		setPayload func(e *notificationv1.NotificationEnvelope)
+	}{
+		{
+			name: "approved",
+			typ:  notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_APPROVED,
+			setPayload: func(e *notificationv1.NotificationEnvelope) {
+				e.Payload = &notificationv1.NotificationEnvelope_SendOrganisationChangeApproved{
+					SendOrganisationChangeApproved: &notificationv1.SendOrganisationChangeApproved{
+						OrganizationName: "Acme LLC", SubmittedAt: "2026-07-29",
+					},
+				}
+			},
+		},
+		{
+			name: "rejected_blank_comment",
+			typ:  notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED,
+			setPayload: func(e *notificationv1.NotificationEnvelope) {
+				e.Payload = &notificationv1.NotificationEnvelope_SendOrganisationChangeRejected{
+					SendOrganisationChangeRejected: &notificationv1.SendOrganisationChangeRejected{
+						OrganizationName: "Acme LLC", SubmittedAt: "2026-07-29",
+						Reasons: []string{"name mismatch"}, Comment: "",
+					},
+				}
+			},
+		},
+		{
+			name: "documents_requested_blank_comment",
+			typ:  notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_DOCUMENTS_REQUESTED,
+			setPayload: func(e *notificationv1.NotificationEnvelope) {
+				e.Payload = &notificationv1.NotificationEnvelope_SendOrganisationChangeDocumentsRequested{
+					SendOrganisationChangeDocumentsRequested: &notificationv1.SendOrganisationChangeDocumentsRequested{
+						OrganizationName: "Acme LLC", SubmittedAt: "2026-07-29",
+						Reasons: []string{"blurry scan"}, Comment: "",
+					},
+				}
+			},
+		},
+		{
+			name: "contacts_changed",
+			typ:  notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED,
+			setPayload: func(e *notificationv1.NotificationEnvelope) {
+				e.Payload = &notificationv1.NotificationEnvelope_SendOrganisationContactsChanged{
+					SendOrganisationContactsChanged: &notificationv1.SendOrganisationContactsChanged{
+						OrganizationName: "Acme LLC",
+					},
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := validEnvelope(t)
+			e.Metadata.Type = tc.typ
+			tc.setPayload(e)
+			if err := validateParams(e); err != nil {
+				t.Fatalf("validateParams: %v", err)
+			}
+		})
+	}
+}
+
 // platformMessageEnvelope returns a valid verbatim PLATFORM_MESSAGE IN_APP
 // envelope. Tests mutate the payload to drive the verbatim validation branch.
 func platformMessageEnvelope(t *testing.T) *notificationv1.NotificationEnvelope {

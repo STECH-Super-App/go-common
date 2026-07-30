@@ -1564,3 +1564,177 @@ func TestOverlayMayTranslateRequestNumber(t *testing.T) {
 		t.Errorf("ru body (empty number) = %q, want %q", body, want)
 	}
 }
+
+// TestExtractAndRender_OrganisationChangeRequests locks the four organisation
+// change-request directives (NotificationType 65-68) end to end: ExtractParams
+// must map each payload (no ErrUnknownType fall-through), repeated `reasons`
+// must be joined with ", ", `submitted_at` must pass through verbatim as the
+// ISO-8601 date the producer sent, and Render must produce non-empty
+// title/body in every locale.
+func TestExtractAndRender_OrganisationChangeRequests(t *testing.T) {
+	r := testRendererFull(t)
+	cases := []struct {
+		name string
+		nt   notificationv1.NotificationType
+		env  *notificationv1.NotificationEnvelope
+		want map[string]string
+	}{
+		{
+			name: "organisation_change_approved",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_APPROVED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrganisationChangeApproved{
+					SendOrganisationChangeApproved: &notificationv1.SendOrganisationChangeApproved{
+						OrganisationId:   "org-42",
+						ChangeRequestId:  "cr-1",
+						OrganizationName: "Acme LLC",
+						SubmittedAt:      "2026-07-29",
+					},
+				},
+			},
+			want: map[string]string{
+				"organization_name": "Acme LLC",
+				"submitted_at":      "2026-07-29",
+			},
+		},
+		{
+			name: "organisation_change_rejected",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrganisationChangeRejected{
+					SendOrganisationChangeRejected: &notificationv1.SendOrganisationChangeRejected{
+						OrganisationId:   "org-42",
+						ChangeRequestId:  "cr-2",
+						OrganizationName: "Acme LLC",
+						SubmittedAt:      "2026-07-29",
+						Reasons:          []string{"name mismatch", "stale registry extract"},
+						Comment:          "resubmit with the fresh extract",
+					},
+				},
+			},
+			want: map[string]string{
+				"organization_name": "Acme LLC",
+				"submitted_at":      "2026-07-29",
+				"reasons":           "name mismatch, stale registry extract",
+				"comment":           "resubmit with the fresh extract",
+			},
+		},
+		{
+			name: "organisation_change_documents_requested",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_DOCUMENTS_REQUESTED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrganisationChangeDocumentsRequested{
+					SendOrganisationChangeDocumentsRequested: &notificationv1.SendOrganisationChangeDocumentsRequested{
+						OrganisationId:   "org-42",
+						ChangeRequestId:  "cr-3",
+						OrganizationName: "Acme LLC",
+						SubmittedAt:      "2026-07-29",
+						Reasons:          []string{"blurry scan", "expired license"},
+						Comment:          "please resubmit clearer photos",
+					},
+				},
+			},
+			want: map[string]string{
+				"organization_name": "Acme LLC",
+				"submitted_at":      "2026-07-29",
+				"reasons":           "blurry scan, expired license",
+				"comment":           "please resubmit clearer photos",
+			},
+		},
+		{
+			name: "organisation_contacts_changed",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrganisationContactsChanged{
+					SendOrganisationContactsChanged: &notificationv1.SendOrganisationContactsChanged{
+						OrganisationId:   "org-42",
+						OrganizationName: "Acme LLC",
+					},
+				},
+			},
+			want: map[string]string{
+				"organization_name": "Acme LLC",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := ExtractParams(tc.env)
+			if err != nil {
+				t.Fatalf("ExtractParams err: %v", err)
+			}
+			if len(params) != len(tc.want) {
+				t.Fatalf("params = %v, want %v", params, tc.want)
+			}
+			for k, v := range tc.want {
+				if params[k] != v {
+					t.Errorf("params[%q] = %q, want %q", k, params[k], v)
+				}
+			}
+			for _, loc := range []string{"en", "ru"} {
+				title, body, rerr := r.Render(tc.nt, params, loc)
+				if rerr != nil {
+					t.Fatalf("Render(%s): %v", loc, rerr)
+				}
+				if title == "" || body == "" {
+					t.Errorf("Render(%s) returned empty title/body", loc)
+				}
+			}
+		})
+	}
+}
+
+// TestOrganisationChangeRequests_CommentNeverRequired locks the contract that
+// the optional moderator comment is never a required render param. notifyoutbox
+// treats an empty required param as missing, so declaring `comment` required
+// would fail the whole directive (and its transaction) whenever a moderator
+// leaves the comment blank.
+
+// TestOrganisationChangeRequests_CommentNeverRequired locks the contract that
+// the optional moderator comment is never a required render param. notifyoutbox
+// treats an empty required param as missing, so declaring `comment` required
+// would fail the whole directive (and its transaction) whenever a moderator
+// leaves the comment blank.
+func TestOrganisationChangeRequests_CommentNeverRequired(t *testing.T) {
+	for _, nt := range []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_APPROVED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_DOCUMENTS_REQUESTED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED,
+	} {
+		if contains(RequiredParams(nt), "comment") {
+			t.Errorf("%v: comment must never be a required param", nt)
+		}
+	}
+}
+
+// TestRenderOrganisationChangeRejected_Interpolates proves the EN body actually
+// interpolates the organisation name, the submitted date, and the joined
+// reasons, and that a blank moderator comment still renders (comment is not a
+// template placeholder in this catalog).
+
+// TestRenderOrganisationChangeRejected_Interpolates proves the EN body actually
+// interpolates the organisation name, the submitted date, and the joined
+// reasons, and that a blank moderator comment still renders (comment is not a
+// template placeholder in this catalog).
+func TestRenderOrganisationChangeRejected_Interpolates(t *testing.T) {
+	r := testRendererFull(t)
+	params := map[string]string{
+		"organization_name": "Acme LLC",
+		"submitted_at":      "2026-07-29",
+		"reasons":           "name mismatch, stale registry extract",
+		"comment":           "",
+	}
+	_, body, err := r.Render(
+		notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED,
+		params, "en",
+	)
+	if err != nil {
+		t.Fatalf("Render err: %v", err)
+	}
+	for _, want := range []string{"Acme LLC", "2026-07-29", "name mismatch, stale registry extract"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body %q does not contain %q", body, want)
+		}
+	}
+}

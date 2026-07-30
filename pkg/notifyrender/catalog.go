@@ -76,6 +76,12 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE:           "delivery_review_invite",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING:    "delivery_review_window_ending",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED:       "delivery_cascade_cancelled",
+	// organisation change-request moderation (NotificationType 65-68): the three
+	// submitter-facing outcomes plus the admin-facing contacts-changed notice.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_APPROVED:            "organisation_change_approved",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED:            "organisation_change_rejected",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_DOCUMENTS_REQUESTED: "organisation_change_documents_requested",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED:           "organisation_contacts_changed",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -244,6 +250,22 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY: {
 		"route",
+	},
+	// ─── organisation change-request moderation ───
+	// `comment` is deliberately absent from every entry below: the moderator
+	// comment is optional, and notifyoutbox treats an empty required param as
+	// missing — declaring it would fail the render whenever it is left blank.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_APPROVED: {
+		"organization_name", "submitted_at",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED: {
+		"organization_name", "submitted_at", "reasons",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_DOCUMENTS_REQUESTED: {
+		"organization_name", "submitted_at", "reasons",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED: {
+		"organization_name",
 	},
 }
 

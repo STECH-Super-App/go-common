@@ -105,6 +105,38 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"comment":         p.SendOrganisationDocumentsRequested.GetComment(),
 			"reasons":         strings.Join(p.SendOrganisationDocumentsRequested.GetReasons(), ", "),
 		}, nil
+
+	// ─── organisation change-request moderation (organisation-service) ───
+	// The four directives that close a change request. submitted_at arrives as an
+	// already-formatted ISO-8601 date (YYYY-MM-DD) and is passed through verbatim;
+	// reasons is a repeated field joined into one value since params is
+	// map[string]string. comment is surfaced for the EMAIL templates that want it
+	// but is deliberately NOT a required param — a moderator may leave it blank,
+	// and notifyoutbox treats an empty required param as missing.
+	case *notificationv1.NotificationEnvelope_SendOrganisationChangeApproved:
+		return map[string]string{
+			"organization_name": p.SendOrganisationChangeApproved.GetOrganizationName(),
+			"submitted_at":      p.SendOrganisationChangeApproved.GetSubmittedAt(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrganisationChangeRejected:
+		return map[string]string{
+			"organization_name": p.SendOrganisationChangeRejected.GetOrganizationName(),
+			"submitted_at":      p.SendOrganisationChangeRejected.GetSubmittedAt(),
+			"reasons":           strings.Join(p.SendOrganisationChangeRejected.GetReasons(), ", "),
+			"comment":           p.SendOrganisationChangeRejected.GetComment(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrganisationChangeDocumentsRequested:
+		return map[string]string{
+			"organization_name": p.SendOrganisationChangeDocumentsRequested.GetOrganizationName(),
+			"submitted_at":      p.SendOrganisationChangeDocumentsRequested.GetSubmittedAt(),
+			"reasons":           strings.Join(p.SendOrganisationChangeDocumentsRequested.GetReasons(), ", "),
+			"comment":           p.SendOrganisationChangeDocumentsRequested.GetComment(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrganisationContactsChanged:
+		return map[string]string{
+			"organization_name": p.SendOrganisationContactsChanged.GetOrganizationName(),
+		}, nil
+
 	case *notificationv1.NotificationEnvelope_SendOrgAdminTransferInitiated:
 		return map[string]string{
 			"organization_name": p.SendOrgAdminTransferInitiated.GetOrganizationName(),
