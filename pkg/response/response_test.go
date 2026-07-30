@@ -12,6 +12,7 @@ import (
 	"github.com/STECH-Super-App/go-common/pkg/response"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSuccess(t *testing.T) {
@@ -53,6 +54,18 @@ func TestCreated(t *testing.T) {
 	err = json.Unmarshal(rec.Body.Bytes(), &res)
 	assert.NoError(t, err)
 	assert.True(t, res.Success)
+}
+
+func TestAccepted_Writes202(t *testing.T) {
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest(http.MethodPut, "/", nil), rec)
+
+	err := response.Accepted(c, map[string]string{"id": "abc"})
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	require.Contains(t, rec.Body.String(), `"abc"`)
 }
 
 func TestJSONError_AppError(t *testing.T) {
