@@ -49,6 +49,14 @@ func Created(c echo.Context, data interface{}) error {
 	return c.JSON(http.StatusCreated, Response{Success: true, Data: data}) //nolint:forbidigo
 }
 
+// Accepted writes HTTP 202 with the standard envelope. Use it when a request
+// was recorded for later processing rather than applied — e.g. a change request
+// filed against an already-approved organisation, where a 200 would falsely
+// imply the resource now holds what was sent.
+func Accepted(c echo.Context, data interface{}) error {
+	return c.JSON(http.StatusAccepted, Response{Success: true, Data: data}) //nolint:forbidigo
+}
+
 // JSONError writes the given error as a JSON Response. If err is an *AppError,
 // Reason, Params, and Details are forwarded into the wire response. If err is
 // any other error, a generic 500 envelope is sent and the error is logged.
