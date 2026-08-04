@@ -72,16 +72,32 @@ func validate(env *notificationv1.NotificationEnvelope) error {
 	if m.GetOccurredAt() == nil || m.GetOccurredAt().GetSeconds() == 0 {
 		return errEmptyOccurredAt()
 	}
-	if m.GetLocale() == "" {
-		return errEmptyLocale()
-	}
+	// Locale is OPTIONAL. Every channel-owning consumer resolves the real
+	// per-recipient locale (envelope hint -> user preference -> platform
+	// default); a producer that pins a locale here overrides recipient
+	// preference for every recipient — the exact bug the tenant-unification
+	// pivot removed from order-service. Producers with genuine per-request
+	// locale context may still set it as a hint.
 	if m.GetType() == notificationv1.NotificationType_NOTIFICATION_TYPE_UNSPECIFIED {
 		return errUnspecifiedType()
 	}
 	if len(m.GetChannels()) == 0 {
 		return errEmptyChannels()
 	}
-	if m.GetRecipientUserId() == "" && requiresRecipient(m.GetChannels()) {
+	// Recipient addressing. An envelope is either person-addressed
+	// (recipient_user_id) or tenant-addressed (recipient_tenant_id, resolved
+	// to the live member set at delivery time by each channel-owning
+	// consumer) — never both. Setting both is ambiguous and always rejected,
+	// independent of channels. Channels that need a resolvable recipient
+	// (IN_APP writes an inbox row; PUSH looks up push tokens) require exactly
+	// one of the two; SMS/EMAIL-only directives carry their address in the
+	// payload and may set neither (the preserved SMS special case).
+	userID := m.GetRecipientUserId()
+	tenantID := m.GetRecipientTenantId()
+	if userID != "" && tenantID != "" {
+		return errAmbiguousRecipient()
+	}
+	if userID == "" && tenantID == "" && requiresRecipient(m.GetChannels()) {
 		return errEmptyRecipient()
 	}
 	if containsInApp(m.GetChannels()) {
@@ -138,10 +154,10 @@ func containsInApp(channels []notificationv1.Channel) bool {
 }
 
 // requiresRecipient reports whether the channels list contains a channel
-// that needs metadata.recipient_user_id. IN_APP needs it to write the
-// inbox row; PUSH needs it to look up the user's registered push tokens.
-// SMS and EMAIL alone carry their address in the payload — no recipient
-// required.
+// that needs a resolvable recipient (exactly one of
+// metadata.recipient_user_id / metadata.recipient_tenant_id). IN_APP needs
+// it to write inbox rows; PUSH needs it to look up push tokens. SMS and
+// EMAIL alone carry their address in the payload — no recipient required.
 func requiresRecipient(channels []notificationv1.Channel) bool {
 	for _, c := range channels {
 		if c == notificationv1.Channel_CHANNEL_IN_APP ||

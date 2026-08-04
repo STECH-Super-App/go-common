@@ -14,6 +14,10 @@ import (
 	"github.com/STECH-Super-App/go-common/pkg/outbox"
 )
 
+// testTenantID is a fixed tenant UUID used by the tenant-addressed
+// validation tests.
+const testTenantID = "22222222-2222-2222-2222-222222222222"
+
 // validEnvelope returns a minimally-valid IN_APP envelope. Tests mutate
 // fields to drive specific validation paths.
 func validEnvelope(t *testing.T) *notificationv1.NotificationEnvelope {
@@ -77,10 +81,16 @@ func TestValidate_EmptyOccurredAt(t *testing.T) {
 	assertReason(t, validate(e), ReasonEmptyOccurredAt)
 }
 
-func TestValidate_EmptyLocale(t *testing.T) {
+func TestValidate_EmptyLocaleIsAllowed(t *testing.T) {
+	// Locale is an optional hint: consumers resolve the real per-recipient
+	// locale (envelope -> user preference -> platform default). Producers
+	// without per-request locale context (order-service transitions/sweeps)
+	// publish with it empty.
 	e := validEnvelope(t)
 	e.Metadata.Locale = ""
-	assertReason(t, validate(e), ReasonEmptyLocale)
+	if err := validate(e); err != nil {
+		t.Fatalf("empty locale must validate, got %v", err)
+	}
 }
 
 func TestValidate_UnspecifiedType(t *testing.T) {
@@ -141,6 +151,63 @@ func TestValidate_PushRequiresRecipient(t *testing.T) {
 	assertReason(t, validate(e), ReasonEmptyRecipient)
 }
 
+// TestValidate_TenantAddressed: an IN_APP envelope addressed to a tenant
+// (recipient_tenant_id set, recipient_user_id empty) is valid — the
+// channel-owning consumer resolves it to the live member set at delivery time.
+func TestValidate_TenantAddressed(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = ""
+	e.Metadata.RecipientTenantId = testTenantID
+	if err := validate(e); err != nil {
+		t.Fatalf("tenant-addressed IN_APP must validate, got %v", err)
+	}
+}
+
+// TestValidate_TenantAddressedWithRoleFilter: the role filter is optional
+// delivery-time metadata and does not affect envelope validity.
+func TestValidate_TenantAddressedWithRoleFilter(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = ""
+	e.Metadata.RecipientTenantId = testTenantID
+	e.Metadata.RecipientRoleFilter = []string{"ADMIN", "MANAGER"}
+	if err := validate(e); err != nil {
+		t.Fatalf("tenant-addressed with role filter must validate, got %v", err)
+	}
+}
+
+// TestValidate_BothRecipientsRejected: setting BOTH recipient_user_id and
+// recipient_tenant_id is ambiguous addressing — rejected regardless of channels.
+func TestValidate_BothRecipientsRejected(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = "rcp-1"
+	e.Metadata.RecipientTenantId = testTenantID
+	assertReason(t, validate(e), ReasonAmbiguousRecipient)
+}
+
+// TestValidate_BothRecipientsRejectedSMS: the ambiguity check fires even on
+// SMS-only channels, where neither recipient would otherwise be required.
+func TestValidate_BothRecipientsRejectedSMS(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = "rcp-1"
+	e.Metadata.RecipientTenantId = testTenantID
+	e.Metadata.Channels = []notificationv1.Channel{notificationv1.Channel_CHANNEL_SMS}
+	e.Metadata.DeepLink = nil
+	assertReason(t, validate(e), ReasonAmbiguousRecipient)
+}
+
+// TestValidate_TenantAddressedSMS: a tenant-addressed SMS-only envelope is
+// valid (neither recipient required for SMS; recipient_tenant_id present).
+func TestValidate_TenantAddressedSMS(t *testing.T) {
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = ""
+	e.Metadata.RecipientTenantId = testTenantID
+	e.Metadata.Channels = []notificationv1.Channel{notificationv1.Channel_CHANNEL_SMS}
+	e.Metadata.DeepLink = nil
+	if err := validate(e); err != nil {
+		t.Fatalf("tenant-addressed SMS-only must validate, got %v", err)
+	}
+}
+
 func TestValidate_MissingDeepLinkForInApp(t *testing.T) {
 	e := validEnvelope(t)
 	e.Metadata.DeepLink = nil
@@ -169,6 +236,81 @@ func TestValidateParams_MissingRequired(t *testing.T) {
 	}
 }
 
+// TestValidateParams_OrganisationChangeRequests covers the four organisation
+// change-request directives on the real producer path. Each was previously
+// unmapped in notifyrender.ExtractParams, so validateParams returned
+// ErrUnknownType and took the publishing transaction down with it.
+//
+// The blank-comment cases are the load-bearing ones: validateParams treats an
+// empty required param as missing, so the optional moderator comment must never
+// be declared required.
+func TestValidateParams_OrganisationChangeRequests(t *testing.T) {
+	// setPayload is a func because the oneof wrapper interface
+	// (isNotificationEnvelope_Payload) is unexported and cannot be a struct field.
+	cases := []struct {
+		name       string
+		typ        notificationv1.NotificationType
+		setPayload func(e *notificationv1.NotificationEnvelope)
+	}{
+		{
+			name: "approved",
+			typ:  notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_APPROVED,
+			setPayload: func(e *notificationv1.NotificationEnvelope) {
+				e.Payload = &notificationv1.NotificationEnvelope_SendOrganisationChangeApproved{
+					SendOrganisationChangeApproved: &notificationv1.SendOrganisationChangeApproved{
+						OrganizationName: "Acme LLC", SubmittedAt: "2026-07-29",
+					},
+				}
+			},
+		},
+		{
+			name: "rejected_blank_comment",
+			typ:  notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED,
+			setPayload: func(e *notificationv1.NotificationEnvelope) {
+				e.Payload = &notificationv1.NotificationEnvelope_SendOrganisationChangeRejected{
+					SendOrganisationChangeRejected: &notificationv1.SendOrganisationChangeRejected{
+						OrganizationName: "Acme LLC", SubmittedAt: "2026-07-29",
+						Reasons: []string{"name mismatch"}, Comment: "",
+					},
+				}
+			},
+		},
+		{
+			name: "documents_requested_blank_comment",
+			typ:  notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_DOCUMENTS_REQUESTED,
+			setPayload: func(e *notificationv1.NotificationEnvelope) {
+				e.Payload = &notificationv1.NotificationEnvelope_SendOrganisationChangeDocumentsRequested{
+					SendOrganisationChangeDocumentsRequested: &notificationv1.SendOrganisationChangeDocumentsRequested{
+						OrganizationName: "Acme LLC", SubmittedAt: "2026-07-29",
+						Reasons: []string{"blurry scan"}, Comment: "",
+					},
+				}
+			},
+		},
+		{
+			name: "contacts_changed",
+			typ:  notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED,
+			setPayload: func(e *notificationv1.NotificationEnvelope) {
+				e.Payload = &notificationv1.NotificationEnvelope_SendOrganisationContactsChanged{
+					SendOrganisationContactsChanged: &notificationv1.SendOrganisationContactsChanged{
+						OrganizationName: "Acme LLC",
+					},
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := validEnvelope(t)
+			e.Metadata.Type = tc.typ
+			tc.setPayload(e)
+			if err := validateParams(e); err != nil {
+				t.Fatalf("validateParams: %v", err)
+			}
+		})
+	}
+}
+
 // platformMessageEnvelope returns a valid verbatim PLATFORM_MESSAGE IN_APP
 // envelope. Tests mutate the payload to drive the verbatim validation branch.
 func platformMessageEnvelope(t *testing.T) *notificationv1.NotificationEnvelope {
@@ -176,7 +318,7 @@ func platformMessageEnvelope(t *testing.T) *notificationv1.NotificationEnvelope 
 	e := validEnvelope(t)
 	e.Metadata.Type = notificationv1.NotificationType_NOTIFICATION_TYPE_PLATFORM_MESSAGE
 	e.Metadata.DeepLink = &notificationv1.DeepLinkTarget{
-		Screen: notificationv1.DeepLinkScreen_DEEP_LINK_SCREEN_TEAM,
+		Screen: notificationv1.DeepLinkScreen_DEEP_LINK_SCREEN_TENANT,
 	}
 	e.Payload = &notificationv1.NotificationEnvelope_SendPlatformMessage{
 		SendPlatformMessage: &notificationv1.SendPlatformMessage{

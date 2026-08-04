@@ -9,33 +9,33 @@ import (
 // typeKey maps NotificationType to the TOML section name used in the
 // translation files (lowercased without the NOTIFICATION_TYPE_ prefix).
 var typeKey = map[notificationv1.NotificationType]string{
-	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:                "chat_message",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED:            "listing_approved",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED:            "listing_rejected",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED:         "listing_unpublished",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_FAVORITE_PRICE_CHANGED:      "favorite_price_changed",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_FAVORITE_LISTING_REMOVED:    "favorite_listing_removed",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_MANAGER:  "team_invite_tenant_manager",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_OPERATOR: "team_invite_tenant_operator",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_USER_MANAGER:    "team_invite_user_manager",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_USER_OPERATOR:   "team_invite_user_operator",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_VERIFIED:             "tenant_verified",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_OPERATOR_ASSIGNED:           "operator_assigned",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_OPERATOR_RELEASED:           "operator_released",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_WALLET_OPERATION_REQUESTED:  "wallet_operation_requested",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_WALLET_OPERATION_DECIDED:    "wallet_operation_decided",
-	// tenant + team lifecycle (slice 2): EMAIL-only flows now also render IN_APP.
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_REJECTED:       "tenant_rejected",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_ACCEPTED:       "invite_accepted",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_DECLINED:       "invite_declined",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_NEW: "admin_transferred_new",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_OLD: "admin_transferred_old",
-	// team membership lifecycle (slice 4): block / unblock / remove / leave.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:                        "chat_message",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED:                    "listing_approved",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED:                    "listing_rejected",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED:                 "listing_unpublished",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_FAVORITE_PRICE_CHANGED:              "favorite_price_changed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_FAVORITE_LISTING_REMOVED:            "favorite_listing_removed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_INVITE_ORGANISATION_MANAGER:  "tenant_invite_organisation_manager",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_INVITE_ORGANISATION_OPERATOR: "tenant_invite_organisation_operator",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_INVITE_PERSONAL_MANAGER:      "tenant_invite_personal_manager",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_INVITE_PERSONAL_OPERATOR:     "tenant_invite_personal_operator",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_VERIFIED:               "organisation_verified",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_OPERATOR_ASSIGNED:                   "operator_assigned",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_OPERATOR_RELEASED:                   "operator_released",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_WALLET_OPERATION_REQUESTED:          "wallet_operation_requested",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_WALLET_OPERATION_DECIDED:            "wallet_operation_decided",
+	// organisation + tenant lifecycle (slice 2): EMAIL-only flows now also render IN_APP.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_REJECTED:     "organisation_rejected",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_ACCEPTED:           "invite_accepted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_DECLINED:           "invite_declined",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFERRED_NEW: "org_admin_transferred_new",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFERRED_OLD: "org_admin_transferred_old",
+	// tenant membership lifecycle (slice 4): block / unblock / remove / leave.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_BLOCKED:               "member_blocked",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_UNBLOCKED:             "member_unblocked",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_REMOVED:               "member_removed",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_REMOVED_ADMIN:    "team_member_removed_admin",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_LEFT:             "team_member_left",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_MEMBER_REMOVED_ADMIN:  "tenant_member_removed_admin",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_MEMBER_LEFT:           "tenant_member_left",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_MANAGER:  "member_role_changed_manager",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_OPERATOR: "member_role_changed_operator",
 	// order lifecycle (order-service contracts, gen-go-lib NotificationType 27-38).
@@ -51,12 +51,12 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_RECEIPT_CONFIRMED:       "order_receipt_confirmed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED:          "order_auto_completed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING:    "order_review_window_ending",
-	// tenant admin-transfer lifecycle (handoff): in-app + email + push.
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_INITIATED: "admin_transfer_initiated",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_ACCEPTED:  "admin_transfer_accepted",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_REJECTED:  "admin_transfer_rejected",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_CANCELLED: "admin_transfer_cancelled",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_EXPIRED:   "admin_transfer_expired",
+	// organisation admin-transfer lifecycle (handoff): in-app + email + push.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_INITIATED: "org_admin_transfer_initiated",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_ACCEPTED:  "org_admin_transfer_accepted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_REJECTED:  "org_admin_transfer_rejected",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_CANCELLED: "org_admin_transfer_cancelled",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_EXPIRED:   "org_admin_transfer_expired",
 	// delivery lifecycle (order-service delivery vertical, gen-go-lib NotificationType 47-64).
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED:         "delivery_request_created",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_ACCEPTED:        "delivery_request_accepted",
@@ -76,6 +76,12 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE:           "delivery_review_invite",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING:    "delivery_review_window_ending",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED:       "delivery_cascade_cancelled",
+	// organisation change-request moderation (NotificationType 65-68): the three
+	// submitter-facing outcomes plus the admin-facing contacts-changed notice.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_APPROVED:            "organisation_change_approved",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED:            "organisation_change_rejected",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_DOCUMENTS_REQUESTED: "organisation_change_documents_requested",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED:           "organisation_contacts_changed",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -105,19 +111,19 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_FAVORITE_LISTING_REMOVED: {
 		"listing_title",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_MANAGER: {
-		"team_name", "inviter_name",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_INVITE_ORGANISATION_MANAGER: {
+		"tenant_name", "inviter_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_TENANT_OPERATOR: {
-		"team_name", "inviter_name",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_INVITE_ORGANISATION_OPERATOR: {
+		"tenant_name", "inviter_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_USER_MANAGER: {
-		"team_name", "inviter_name",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_INVITE_PERSONAL_MANAGER: {
+		"tenant_name", "inviter_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_INVITE_USER_OPERATOR: {
-		"team_name", "inviter_name",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_INVITE_PERSONAL_OPERATOR: {
+		"tenant_name", "inviter_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_VERIFIED: {
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_VERIFIED: {
 		"organization_name",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_OPERATOR_ASSIGNED: {
@@ -132,8 +138,8 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_WALLET_OPERATION_DECIDED: {
 		"amount", "currency", "decision",
 	},
-	// ─── tenant + team lifecycle (slice 2) ───
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_REJECTED: {
+	// ─── organisation + tenant lifecycle (slice 2) ───
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_REJECTED: {
 		"reason",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_ACCEPTED: {
@@ -142,33 +148,33 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_DECLINED: {
 		"phone",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_NEW: {
-		"team_name",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFERRED_NEW: {
+		"tenant_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFERRED_OLD: {
-		"team_name",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFERRED_OLD: {
+		"tenant_name",
 	},
-	// ─── team membership lifecycle (slice 4) ───
+	// ─── tenant membership lifecycle (slice 4) ───
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_BLOCKED: {
-		"team_name",
+		"tenant_name",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_UNBLOCKED: {
-		"team_name",
+		"tenant_name",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_REMOVED: {
-		"team_name",
+		"tenant_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_REMOVED_ADMIN: {
-		"team_name", "removed_member_name",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_MEMBER_REMOVED_ADMIN: {
+		"tenant_name", "removed_member_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_TEAM_MEMBER_LEFT: {
-		"team_name", "member_name",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_MEMBER_LEFT: {
+		"tenant_name", "member_name",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_MANAGER: {
-		"team_name",
+		"tenant_name",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_OPERATOR: {
-		"team_name",
+		"tenant_name",
 	},
 	// ─── order lifecycle (order-service) ───
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED: {
@@ -207,20 +213,20 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING: {
 		"listing_title",
 	},
-	// ─── tenant admin-transfer lifecycle (handoff) ───
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_INITIATED: {
+	// ─── organisation admin-transfer lifecycle (handoff) ───
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_INITIATED: {
 		"organization_name", "from_user_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_ACCEPTED: {
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_ACCEPTED: {
 		"organization_name", "to_user_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_REJECTED: {
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_REJECTED: {
 		"organization_name", "to_user_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_CANCELLED: {
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_CANCELLED: {
 		"organization_name", "from_user_name",
 	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ADMIN_TRANSFER_EXPIRED: {
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_EXPIRED: {
 		"organization_name", "counterparty_name",
 	},
 	// ─── delivery lifecycle (order-service delivery vertical) ───
@@ -244,6 +250,22 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY: {
 		"route",
+	},
+	// ─── organisation change-request moderation ───
+	// `comment` is deliberately absent from every entry below: the moderator
+	// comment is optional, and notifyoutbox treats an empty required param as
+	// missing — declaring it would fail the render whenever it is left blank.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_APPROVED: {
+		"organization_name", "submitted_at",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED: {
+		"organization_name", "submitted_at", "reasons",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_DOCUMENTS_REQUESTED: {
+		"organization_name", "submitted_at", "reasons",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED: {
+		"organization_name",
 	},
 }
 
