@@ -82,6 +82,9 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED:            "organisation_change_rejected",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_DOCUMENTS_REQUESTED: "organisation_change_documents_requested",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED:           "organisation_contacts_changed",
+	// organisation deactivated after its leading user deleted their account
+	// (П-14). Tenant-addressed fan-out to the org's ADMIN + MANAGER members.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DEACTIVATED: "organisation_deactivated",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -265,6 +268,15 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 		"organization_name", "submitted_at", "reasons",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CONTACTS_CHANGED: {
+		"organization_name",
+	},
+	// ─── organisation deactivated (П-14, account deletion) ───
+	// organisation_name only. The payload also carries organisation_id, but that
+	// is a routing id with no template use — the same treatment
+	// organisation_contacts_changed gives its own id. The name is denormalized
+	// onto the directive precisely so this row renders without a read-path
+	// lookup to an organisation that is now INACTIVE.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DEACTIVATED: {
 		"organization_name",
 	},
 }

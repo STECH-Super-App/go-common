@@ -137,6 +137,15 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"organization_name": p.SendOrganisationContactsChanged.GetOrganizationName(),
 		}, nil
 
+	// ─── organisation deactivated (П-14) ───
+	// The org's managers are told it was deactivated because its leading user
+	// deleted their account. organisation_id is on the wire but deliberately not
+	// surfaced: it routes the deep link, it does not fill a template.
+	case *notificationv1.NotificationEnvelope_SendOrganisationDeactivated:
+		return map[string]string{
+			"organization_name": p.SendOrganisationDeactivated.GetOrganizationName(),
+		}, nil
+
 	case *notificationv1.NotificationEnvelope_SendOrgAdminTransferInitiated:
 		return map[string]string{
 			"organization_name": p.SendOrgAdminTransferInitiated.GetOrganizationName(),

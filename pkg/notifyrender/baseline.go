@@ -121,6 +121,8 @@ var BaselineEN = map[string]string{
 	"organisation_change_rejected.title":            "Organization changes rejected",
 	"organisation_contacts_changed.body":            "The contact details of {{.organization_name}} have been updated.",
 	"organisation_contacts_changed.title":           "Organization contacts updated",
+	"organisation_deactivated.body":                 "{{.organization_name}} was deactivated because its owner deleted their account. Contact support to restore access.",
+	"organisation_deactivated.title":                "Organization deactivated",
 	"organisation_rejected.body":                    "Your organization was rejected: {{.reason}}",
 	"organisation_rejected.title":                   "Organization rejected",
 	"organisation_verified.body":                    "{{.organization_name}} has been verified.",
