@@ -1738,3 +1738,55 @@ func TestRenderOrganisationChangeRejected_Interpolates(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractAndRender_OrganisationDeactivated covers the П-14 manager notice:
+// an organisation is deactivated because its leading user deleted their account.
+// Mirrors the organisation_contacts_changed case above — the payload carries
+// organisation_id AND organization_name, but only the name is a render param.
+func TestExtractAndRender_OrganisationDeactivated(t *testing.T) {
+	r := testRendererFull(t)
+	env := &notificationv1.NotificationEnvelope{
+		Payload: &notificationv1.NotificationEnvelope_SendOrganisationDeactivated{
+			SendOrganisationDeactivated: &notificationv1.SendOrganisationDeactivated{
+				OrganisationId:   "org-42",
+				OrganizationName: "Acme LLC",
+			},
+		},
+	}
+
+	params, err := ExtractParams(env)
+	if err != nil {
+		t.Fatalf("ExtractParams err: %v", err)
+	}
+	want := map[string]string{"organization_name": "Acme LLC"}
+	if len(params) != len(want) {
+		// organisation_id is deliberately NOT surfaced: it is a routing id with no
+		// template use, exactly as SendOrganisationApproved / ContactsChanged treat
+		// their own organisation_id.
+		t.Fatalf("params = %v, want exactly %v", params, want)
+	}
+	for k, v := range want {
+		if params[k] != v {
+			t.Errorf("params[%q] = %q, want %q", k, params[k], v)
+		}
+	}
+
+	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DEACTIVATED
+	for _, loc := range []string{"en", "ru"} {
+		title, body, rerr := r.Render(nt, params, loc)
+		if rerr != nil {
+			t.Fatalf("Render(%s): %v", loc, rerr)
+		}
+		if title == "" || body == "" {
+			t.Errorf("Render(%s) returned empty title/body", loc)
+		}
+	}
+
+	_, body, err := r.Render(nt, params, "en")
+	if err != nil {
+		t.Fatalf("Render err: %v", err)
+	}
+	if !strings.Contains(body, "Acme LLC") {
+		t.Errorf("body %q does not name the organisation — the row must render without a read-path lookup to a now-INACTIVE org", body)
+	}
+}
