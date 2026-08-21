@@ -38,6 +38,37 @@ func TestResponseForOutcome_UnknownIsNotOK(t *testing.T) {
 	}
 }
 
+func TestOutcomeForRevokeReason_AccountDeleted(t *testing.T) {
+	got := OutcomeForRevokeReason(RevokeReasonAccountDeleted)
+	if got == OutcomeRevoked {
+		t.Fatalf("account deletion must not map to OutcomeRevoked (that tells the client to log in again, producing a login loop); got %v", got)
+	}
+	if got != OutcomeAccountDeleted {
+		t.Fatalf("OutcomeForRevokeReason(RevokeReasonAccountDeleted) = %v, want OutcomeAccountDeleted", got)
+	}
+}
+
+// TestResponseForOutcome_AccountDeleted is the other half of the same contract.
+// OutcomeForRevokeReason mapping to a value that outcomeResponses does not know
+// is worse than useless: AuthMiddleware fails an unrecognized outcome safe to
+// (reauth, COMMON_AUTH_REQUIRED), which is precisely the "log in again" loop the
+// terminal outcome exists to avoid. The distinguishing signal is the Reason.
+func TestResponseForOutcome_AccountDeleted(t *testing.T) {
+	got, ok := ResponseForOutcome(OutcomeAccountDeleted)
+	if !ok {
+		t.Fatal("OutcomeAccountDeleted must be a recognized outcome, otherwise the middleware falls back to the generic auth-required failure")
+	}
+	if got.Reason == "COMMON_AUTH_REQUIRED" || got.Reason == "COMMON_SESSION_REVOKED" {
+		t.Fatalf("a deleted account needs its own Reason so the client can route to onboarding instead of the login screen; got %q", got.Reason)
+	}
+	if got.Action == ActionRefresh {
+		t.Fatal("a deleted account must never be offered a refresh — the refresh would be revoked too, looping the client")
+	}
+	if got.Message == "" {
+		t.Fatal("expected a non-empty English fallback message")
+	}
+}
+
 func TestOutcomeForRevokeReason(t *testing.T) {
 	cases := map[string]string{
 		RevokeReasonUserUpdated:  OutcomeStale,

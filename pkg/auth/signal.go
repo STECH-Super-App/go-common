@@ -19,6 +19,12 @@ const (
 	OutcomeSuspended   = "suspended"     // revoked by admin ban
 	OutcomeUntrusted   = "untrusted"     // malformed / bad signature / wrong alg
 	OutcomeNotYetValid = "not_yet_valid" // signature valid, nbf in the future
+
+	// OutcomeAccountDeleted tells the client the account is gone and it should
+	// return to onboarding rather than the login screen. Terminal: unlike
+	// OutcomeStale there is nothing to refresh, and unlike OutcomeRevoked there
+	// is nothing to sign back in to.
+	OutcomeAccountDeleted = "account_deleted"
 )
 
 // Revocation reason constants stored in the blacklist by auth-service. The
@@ -30,6 +36,11 @@ const (
 	RevokeReasonLogout       = "logout"
 	RevokeReasonTheft        = "theft"
 	RevokeReasonAdminBan     = "admin_ban"
+
+	// RevokeReasonAccountDeleted marks tokens killed because the account was
+	// self-deleted. It is terminal: unlike RevokeReasonUserUpdated, the client
+	// must NOT be told to log in again — that account no longer exists.
+	RevokeReasonAccountDeleted = "account_deleted"
 )
 
 // ReasonAuthRequired is the i18n key for "no usable credential" — emitted for
@@ -59,6 +70,12 @@ var outcomeResponses = map[string]Failure{
 	OutcomeSuspended:   {Action: ActionReauth, Reason: "COMMON_ACCOUNT_SUSPENDED", Message: "account suspended, please contact support"},
 	OutcomeUntrusted:   {Action: ActionReauth, Reason: ReasonAuthRequired, Message: "authentication required"},
 	OutcomeNotYetValid: {Action: ActionReauth, Reason: ReasonAuthRequired, Message: "authentication required"},
+	// Action is reauth because the client must leave the authenticated shell and
+	// there is no third action value to express "go to onboarding" — the Reason is
+	// what distinguishes a deleted account from a merely-ended session, and it is
+	// the key clients branch on. Never ActionRefresh: the refresh token was
+	// revoked in the same sweep, so refreshing would loop.
+	OutcomeAccountDeleted: {Action: ActionReauth, Reason: "COMMON_ACCOUNT_DELETED", Message: "this account has been deleted"},
 }
 
 // ResponseForOutcome maps an X-Auth-Outcome value to its client-facing failure.
@@ -81,6 +98,8 @@ func OutcomeForRevokeReason(reason string) string {
 		return OutcomeRevoked
 	case RevokeReasonAdminBan:
 		return OutcomeSuspended
+	case RevokeReasonAccountDeleted:
+		return OutcomeAccountDeleted
 	default:
 		return OutcomeRevoked
 	}
