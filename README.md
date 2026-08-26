@@ -168,30 +168,56 @@ Package-level helpers: `ExtractParams`, `RequiredParams`, `OptionalParams`, `IsV
 The `Missing` field on `LoadSummary` is the load-time backstop for this flow: a baseline key with no matching overlay `en` entry means step 2 was skipped or hasn't merged yet.
 
 ### `pkg/logger`
-Structured logging using `uber-go/zap`.
+Structured logging using `uber-go/zap`. **JSON encoder unconditionally** — a container's log stream is not a developer's terminal, and a console line is unparseable by Loki's `| json`, which would take out the `level` label, the `request_id` filter and the `trace_id`→Tempo join in one stroke.
 
-- `New(level)` — returns a configured `*zap.Logger` for application code that owns a logger instance.
+- `New(level, service)` — returns a configured `*zap.Logger` tagged with `service`, for application code that owns a logger instance. Pass a literal equal to the workload's scrape identity (`"order-service"`, `"api-gateway"`); the same string must be the Prometheus `job` and the Loki stream label, or a metrics panel and a log stream cannot be pivoted between. Sampling is off, so access lines are never silently dropped under load.
+- `IntoContext(ctx, l) context.Context` / `FromContext(ctx) *zap.Logger` — the request-scoped logging spine. `middleware.RequestLogger` stores a child logger carrying `request_id` (+ `trace_id`/`span_id`); every layer below reads it with `FromContext(ctx)`. The signature is `context.Context`, not `echo.Context`, because repositories, gRPC clients and Kafka consumers only ever hold the former. `FromContext` never returns nil: it falls back to the last logger built by `New`, then to a no-op.
 - Package-level `Warn(msg, fields...)`, `Info(msg, fields...)`, `Error(msg, fields...)` — for cross-cutting library code in go-common that emits diagnostics without holding a logger of its own. Backed by a lazily-initialized package logger driven by `LOG_LEVEL`.
 - `String(key, value)`, `Int(key, value)` — field constructors re-exported from zap so callers don't need to import zap directly.
 
-Application code: prefer `New(level)` for an injected logger. Library code in go-common: use the package-level helpers.
+Application code: prefer `New(level, service)` for an injected logger, and `FromContext(ctx)` on the request path. Library code in go-common: use the package-level helpers.
 
 ### `pkg/middleware`
 Common HTTP middleware.
-- `Logger`: Logs HTTP requests (status, latency, path, etc.).
+
+Observability trio — wire in this order (`Tracing` → `RequestLogger` → `Metrics`), so the logger sees the span and the histogram measures the handler:
+- `Tracing()`: server span per request, named `METHOD route-template` (`unmatched` when the router matched nothing), extracts the inbound W3C `traceparent`, records `http.status_code`. Costs nothing when `tracing.Init` found no endpoint.
+- `RequestLogger(base, opts...)`: builds the request-scoped child logger (`request_id` from `X-Request-ID`, plus `trace_id`/`span_id` when a span is active), stores it on `c.Request().Context()`, and emits **exactly one** INFO access line per request (`route`, `method`, `status`, `duration_ms`). `WithUpstream(fn)` adds the gateway-only `upstream` field. It **replaces** `Logger` at call sites — running both doubles log volume.
+- `Metrics()`: observes `http_request_duration_seconds{method, route, status_class}`. Native Echo shape, never `WrapMiddleware`: `c.Path()` exists only on the Echo context, and wrapping `http.ResponseWriter` would drop `http.Flusher` and break the SSE endpoints.
+- `MetricsUnaryServerInterceptor()`: observes `grpc_server_handling_seconds{grpc_service, grpc_method, grpc_code}`. Attach with `grpc.ChainUnaryInterceptor`, never `grpc.UnaryInterceptor` (grpc-go allows the latter only once per server).
+
+All three skip the operational routes `/metrics`, `/health`, `/livez`, `/readyz`, and clamp an unmatched route to `unmatched` — otherwise probe traffic and vulnerability scanners mint series and log lines forever.
+
+- `Logger`: **deprecated** — logs HTTP requests with no `request_id`, so its lines cannot be correlated across the gateway hop. Use `RequestLogger`.
 - `CORS`: Handles Cross-Origin Resource Sharing.
 - `AuthMiddleware`, `OptionalAuthMiddleware`, `RegistrationAuthMiddleware`, `AdminMiddleware`, `ClientMiddleware`: emit `COMMON_*` reasons via `pkg/errors` + `pkg/response` on rejection.
 - `ParseUUIDParam(c, paramName, reason)`: validates an Echo path parameter as a UUID. On parse failure returns a 400 `*AppError` with the supplied reason and a message derived from `paramName`. Stops malformed UUIDs at the handler boundary so they never reach the repository layer (where Postgres would reject them with SQLSTATE 22P02 and leak as a 500).
 
 ### `pkg/metrics`
-Prometheus metrics helpers.
-- `NewCounter`, `NewGauge`, `NewHistogram`.
-- Registers a default Prometheus registry.
+Prometheus instruments and exposition. `Registry` is the **only** registry anything serves — never `promauto` or the prometheus default registerer, which nothing scrapes.
+
+- `MountOn(e *echo.Echo)`: wires `GET /metrics` on an Echo instance. Idempotent — safe across two Echo instances, and safe to call twice on one.
+- `StartServer(addr) (stop func(context.Context) error)`: standalone `net/http` listener for services with no public Echo, and the uniform mechanism when metrics live on their own port.
+- `HTTPRequestDuration`, `GRPCServerHandling`: the two labelled families, **registered at package init** — never inside a middleware factory or a server constructor, because service tests rebuild those repeatedly in one process and `MustRegister` panics on the second call.
+- `DefaultBuckets` (`0.005 … 10`), `StatusClass(code)`, `RouteUnmatched`: the shared label contract. Allowed label keys fleet-wide: `method, route, status_class, grpc_service, grpc_method, grpc_code, topic, group, reason, vertical`. Never ids, raw paths, emails or tokens.
+- `NewCounter`, `NewGauge`, `NewHistogram`: constructors for **unlabelled** instruments. Labelled families are built with `prometheus.New*Vec` directly.
 
 ### `pkg/tracing`
-OpenTelemetry tracing setup.
-- `Init`: Initializes the global tracer provider.
-- `Start`: Starts a new trace span.
+OpenTelemetry tracing setup — one call configures the process.
+
+- `Init(serviceName) (shutdown func(context.Context) error, err error)`: sets the global tracer provider and the W3C propagator.
+
+With `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) **unset it installs a no-op provider and returns a nil error** — a service must boot identically with no Tempo present. The propagator is installed either way, because propagation is independent of exporting. Sampling honours `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG`, defaulting to `parentbased_traceidratio` at `1.0`. The exporter dials lazily, so an unreachable collector drops spans instead of failing requests. `shutdown` is never nil.
+
+```go
+shutdown, err := tracing.Init("order-service")
+if err != nil {
+    return err
+}
+defer func() { _ = shutdown(context.Background()) }()
+```
+
+Span names obey the same cardinality law as metric labels: route templates and topic names, never raw URLs or ids.
 
 ### `pkg/utils`
 Generic utility functions.
@@ -224,9 +250,10 @@ Async events across STECH services flow through three cooperating packages — *
 ### `pkg/envelope`
 Single source of truth for the Kafka message envelope carried on every event.
 
-- **Header constants**: `HeaderEventID`, `HeaderEventType`, `HeaderAggregateType`, `HeaderAggregateID`, `HeaderOccurredAt`, `HeaderSchemaVersion`, `HeaderContentType`, `HeaderRetryCount`, plus legacy `HeaderOutboxID` for rolling-migration compat.
-- **Value constants**: `ContentTypeProtoJSON`, `ContentTypeJSON`, `SchemaVersionV1`.
-- **`Headers` type** (`map[string]string`) with typed accessors: `EventID()`, `EventType()`, `AggregateType()`, `AggregateID()`, `OccurredAt() (time.Time, error)`, `SchemaVersion()`, `ContentType()`, `RetryCount() int`.
+- **Header constants**: `HeaderEventID`, `HeaderEventType`, `HeaderAggregateType`, `HeaderAggregateID`, `HeaderOccurredAt`, `HeaderSchemaVersion`, `HeaderContentType`, `HeaderRetryCount`, `HeaderTraceparent`, plus legacy `HeaderOutboxID` for rolling-migration compat.
+- **`traceparent`** carries W3C trace context across the async hop, so one trace spans request → outbox → relay → consumer. It is injected by `PublishProto` from the **producing request's** context and read back by the Dispatcher as a remote parent. No migration was needed: the outbox row already had `headers JSONB`, and the relay copies every entry verbatim.
+- **Value constants**: `ContentTypeProtoJSON`, `SchemaVersionV1`.
+- **`Headers` type** (`map[string]string`) with typed accessors: `EventID()`, `EventType()`, `AggregateType()`, `AggregateID()`, `OccurredAt() (time.Time, error)`, `SchemaVersion()`, `ContentType()`, `RetryCount() int`, `Traceparent()`.
 - **`FromKafka([]kafka.Header) Headers`** — build typed view from raw Kafka headers.
 - **Extractors**: `ExtractEventID` (reads `event_id`, falls back to legacy `outbox_id`), `ExtractOutboxID` (deprecated alias), `ExtractEventType`.
 
@@ -234,7 +261,8 @@ Single source of truth for the Kafka message envelope carried on every event.
 Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafka, plus consumer-side idempotency.
 
 - `New(pool, kafkaWriter, logger, cfg)`: Creates the full outbox subsystem.
-- `Start(ctx)`: Launches background relay (poll → Kafka) and reaper (cleanup) goroutines.
+- `Start(ctx)`: Launches three background goroutines — relay (poll → Kafka), reaper (cleanup) and the metrics sampler — and returns one `stop()` that shuts all three down. There is no separate `StartMetrics` a repo could forget to call.
+- `Store.PendingStats(ctx) (count int64, oldestAgeSeconds float64, err error)`: the single-round-trip aggregate behind the backlog gauges.
 - `Migrate(postgresURL)`: Runs the embedded goose migrations (outbox + dedup tables).
 - `RunInTx(ctx, pool, fn)`: Executes a function within a Postgres transaction.
 
@@ -253,6 +281,20 @@ Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafk
 | `OUTBOX_BATCH_SIZE` | `100` | Messages per poll cycle |
 | `OUTBOX_REAPER_INTERVAL` | `5m` | Cleanup schedule |
 | `OUTBOX_RETENTION` | `72h` | Sent message retention before deletion |
+| `OUTBOX_METRICS_INTERVAL` | `15s` | Backlog gauge sampling (deliberately far slower than the poll interval) |
+
+**Metrics** (on `metrics.Registry`, all unlabelled so one panel covers both the Go fleet and sale-service's PHP relay):
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `outbox_pending_messages` | gauge | Rows in `status='pending'` |
+| `outbox_oldest_pending_age_seconds` | gauge | Age of the oldest pending row — **the** stall signal, immune to load bursts |
+| `outbox_last_success_timestamp_seconds` | gauge | Last error-free relay poll; pairs with `up` so a dead relay goroutine is visible despite frozen gauges |
+| `outbox_relayed_events_total` | counter | Rows forwarded to Kafka and marked sent |
+| `outbox_relay_errors_total` | counter | Relay poll cycles that ended in an error |
+| `outbox_reaped_events_total` | counter | Sent rows deleted after retention |
+
+Both gauges are published **from process start, including on an empty table** (`MIN(created_at)` over zero rows is SQL NULL → reported as `0`): a series that only appears once a row exists makes an alert unevaluable exactly while a service is idle. The freshness gauge is set at relay start and on every error-free poll **including zero-row cycles** — "success" means `err == nil`, not `processed > 0`.
 
 **Quick Start (producer):**
 ```go
@@ -287,7 +329,8 @@ outbox.RunInTx(ctx, pool, func(tx outbox.Tx) error {
 ### `pkg/events`
 Typed consumer dispatcher. Registers proto-typed handlers keyed on the proto FQN (`event_type` header), routes each Kafka message via `protojson` decode, and handles retry / DLQ / dedup.
 
-- `NewDispatcher(reader, dlq, opts ...)` — DLQ is a **required** positional arg; no code path drops a failed message. Options: `WithRetry(w)`, `WithDedup(d)` (takes any value satisfying `Process(ctx, id, fn) error` — typically `*outbox.Deduplicator`), `WithMaxRetries(n)` (default 3), `WithLogger(l)`.
+- `NewDispatcher(reader, dlq, opts ...)` — DLQ is a **required** positional arg; no code path drops a failed message. Options: `WithRetry(w)`, `WithDedup(d)` (takes any value satisfying `Process(ctx, id, fn) error` — typically `*outbox.Deduplicator`), `WithMaxRetries(n)` (default 3), `WithLogger(l)`, `WithGroup(id)`.
+- `WithGroup(id)` — the consumer group id used as the `group` label on every consumer metric. Pass the Kafka `GroupID` **verbatim**, exactly the string the `kafka.ReaderConfig` got: only that value matches kafka-exporter's `consumergroup` label, which is what lets a lag panel and a dead-letter counter sit on the same dashboard row. Do not pass the DLQ short name — a repo can have both and they differ (`order-review-events-consumer` vs `order`). Unset means `GroupUnknown` (`"unknown"`).
 - `Handle[T proto.Message](d *Dispatcher, fn func(ctx, T) error)` — register a typed handler. Routing key is derived from `proto.MessageName(*new(T))`; protojson-unmarshal into a fresh `T` per message.
 - `d.Run(ctx) error` — poll loop; returns `ctx.Err()` on cancel.
 - `TopicName(eventsv1.Topic) string` — converts the proto `Topic` enum to its wire name (e.g. `TOPIC_USER_EVENTS` → `"user-events"`).
@@ -300,6 +343,19 @@ Typed consumer dispatcher. Registers proto-typed handlers keyed on the proto FQN
 - Any other error → `max_retries` after the retry budget is exhausted; forwarded to retry topic (if configured) otherwise
 
 **Every DLQ message carries:** `x-dlq-reason`, `x-dlq-error` (truncated), `x-dlq-first-seen-at`, `x-dlq-last-seen-at`, plus the original envelope.
+
+**Metrics** (on `metrics.Registry`; `topic` is read per message off `kafka.Message.Topic`, since one dispatcher legitimately spans a base topic and its retry tier):
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `events_consumer_processed_total` | `topic`, `group` | Handler ran and the offset was committed |
+| `events_consumer_handler_failures_total` | `topic`, `group` | Handler errored, panicked, or the payload failed to unmarshal |
+| `events_consumer_retried_total` | `topic`, `group` | Forwarded to the retry topic |
+| `events_consumer_dead_lettered_total` | `topic`, `group`, `reason` | Written to the DLQ, by failure reason |
+| `events_consumer_dedup_hits_total` | `topic`, `group` | Redelivery skipped because the `event_id` was already processed |
+| `events_consumer_failurepath_errors_total` | `topic`, `group` | **The DLQ/retry write itself failed** and the offset was left uncommitted — the group is wedged, not merely poisoned |
+
+**Tracing + logging:** each message is handled inside a consumer span that continues the producer's trace (extracted from the `traceparent` envelope header as a **remote parent**), and the dispatcher's log lines carry `event_id`, `topic` and — when a span is active — `trace_id`/`span_id`. The same child logger is put on the handler's context, so `logger.FromContext(ctx)` works on the consumer path exactly as it does on the HTTP path.
 
 **Quick Start (consumer):**
 ```go

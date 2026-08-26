@@ -16,16 +16,25 @@ github.com/STECH-Super-App/go-common
 | `pkg/config` | `Init()`, `GetEnv()`, `GetEnvInt/Bool/Duration()` | Env var loading from `.env` |
 | `pkg/db` | `NewPostgres(ctx, cfg)`, `NewRedis(ctx, cfg)` | DB connection factories |
 | `pkg/errors` | `AppError`, `BadRequest/NotFound/Unauthorized/Forbidden/InternalServerError()` | Standardized HTTP errors |
-| `pkg/logger` | `New(level) (*zap.Logger, error)` | Structured JSON logging |
-| `pkg/metrics` | `Registry`, `NewCounter/Gauge/Histogram()` | Prometheus metrics |
-| `pkg/middleware` | `CORS()`, `Logger()`, `AuthMiddleware()`, `UserIDFromContext()` | HTTP middlewares, context helpers |
+| `pkg/logger` | `New(level, service) (*zap.Logger, error)`, `IntoContext`/`FromContext` | Structured JSON logging (JSON encoder unconditional) + request-scoped logger on `context.Context` |
+| `pkg/metrics` | `Registry`, `MountOn(e)`, `StartServer(addr)`, `HTTPRequestDuration`, `GRPCServerHandling`, `DefaultBuckets`, `StatusClass`, `NewCounter/Gauge/Histogram()` | Prometheus instruments + `/metrics` exposition |
+| `pkg/middleware` | `CORS()`, `Tracing()`, `RequestLogger()`, `Metrics()`, `MetricsUnaryServerInterceptor()`, `AuthMiddleware()`, `UserIDFromContext()` | HTTP middlewares, gRPC interceptors, context helpers (`Logger()` deprecated → `RequestLogger()`) |
 | `pkg/utils` | `Ptr()`, `ToVal()`, `Contains()`, `Map()`, `Filter()` | Generic utilities |
 | `pkg/health` | Health check endpoint | Service health monitoring |
 | `pkg/client` | gRPC client utilities | Service-to-service communication |
-| `pkg/outbox` | `New()`, `Start()`, `Publish()`, `RunInTx()`, `DBTX`, `Migrate()`, `Deduplicator`, `ExtractOutboxID()`, `ExtractEventType()` | Transactional outbox pattern (at-least-once Kafka delivery + consumer dedup) |
+| `pkg/outbox` | `New()`, `Start()`, `PublishProto()`, `RunInTx()`, `DBTX`, `Migrate()`, `Deduplicator`, `Store.PendingStats()`, `ExtractOutboxID()`, `ExtractEventType()` | Transactional outbox pattern (at-least-once Kafka delivery + consumer dedup), backlog metrics, `traceparent` capture |
+| `pkg/tracing` | `Init(serviceName) (shutdown, error)` | OpenTelemetry setup; no-op + nil error when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset |
 
 ## Context Keys (pkg/middleware)
 `ContextKeyUserID`, `ContextKeyUserRole`, `ContextKeyUserName`, `ContextKeyUserType`, `ContextKeyTenantID`
+
+## Observability contract (Wave 0, 2026-08-25)
+- Every instrument registers on `metrics.Registry` **at package init**, never inside a middleware factory or server constructor — service tests rebuild those repeatedly in one process and `MustRegister` panics on the second call. `promauto` and the prometheus default registerer are forbidden: nothing serves them.
+- Allowed metric label keys fleet-wide: `method, route, status_class, grpc_service, grpc_method, grpc_code, topic, group, reason, vertical`. Never ids, raw paths, emails or tokens. The same law governs span names.
+- Duration buckets are fixed at `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]`.
+- Operational routes `/metrics`, `/health`, `/livez`, `/readyz` are skipped by every observability middleware; an unmatched route clamps to `unmatched`.
+- Tracing must be absence-tolerant: no OTLP endpoint means a no-op provider and a nil error. Observability must never be able to take a service down.
+- The outbox `traceparent` is captured at insert time from the producing request's context — never at relay time, which would root every trace at the relay process.
 
 ## Critical Rules
 - This is a PUBLIC repo — never add secrets, credentials, or internal URLs

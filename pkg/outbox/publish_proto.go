@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -70,6 +72,17 @@ func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOp
 	headers[envelope.HeaderOccurredAt] = occurred
 	headers[envelope.HeaderSchemaVersion] = envelope.SchemaVersionV1
 	headers[envelope.HeaderContentType] = envelope.ContentTypeProtoJSON
+
+	// Capture the trace context HERE — at insert time, in the producing
+	// request's context — not at relay time. The relay stamping its own
+	// context would root every event's trace at the relay process:
+	// technically a trace, semantically garbage (trap §9.17). The relay is
+	// already transparent to it (toKafkaMessage copies every header entry
+	// verbatim), and the consumer picks it up as a remote parent.
+	//
+	// Injects nothing when no span is active, so this is a no-op for services
+	// that never call tracing.Init.
+	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(headers))
 
 	msg := &Message{
 		ID:            eventID,
