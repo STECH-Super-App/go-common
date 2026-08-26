@@ -7,11 +7,16 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/STECH-Super-App/go-common/pkg/envelope"
+	"github.com/STECH-Super-App/go-common/pkg/logger"
 )
 
 // Reader is the subset of kafka.Reader the dispatcher consumes from.
@@ -50,8 +55,23 @@ type Dispatcher struct {
 	dedup      Deduplicator
 	maxRetries int
 	log        *zap.Logger
-	handlers   map[string]handlerFn
+	// logProvided records whether WithLogger supplied a real logger. It gates
+	// seeding the handler context: a Nop-derived child placed on the context
+	// would be FOUND by logger.FromContext and would silently swallow every
+	// handler log line, shadowing the process-logger fallback.
+	logProvided bool
+	group       string
+	handlers    map[string]handlerFn
 }
+
+// GroupUnknown is the group label value used when WithGroup was not supplied.
+// It is deliberately a real value rather than an empty label: a metric that
+// silently drops its group dimension is harder to notice than one that says
+// "unknown".
+const GroupUnknown = "unknown"
+
+// tracerName identifies the instrumentation library in consumer spans.
+const tracerName = "github.com/STECH-Super-App/go-common/pkg/events"
 
 // DispatcherOption configures optional dispatcher fields.
 type DispatcherOption func(*Dispatcher)
@@ -74,8 +94,36 @@ func WithMaxRetries(n int) DispatcherOption {
 }
 
 // WithLogger supplies a zap logger. Default: zap.NewNop().
+//
+// Supplying one also enables the request-scoped logger on the handler context
+// (see handleOne): without it, the dispatcher has no base logger to derive a
+// child from, and handlers fall back to the process logger instead.
 func WithLogger(l *zap.Logger) DispatcherOption {
-	return func(d *Dispatcher) { d.log = l }
+	return func(d *Dispatcher) {
+		if l == nil {
+			return
+		}
+		d.log = l
+		d.logProvided = true
+	}
+}
+
+// WithGroup supplies the consumer group id used as the "group" label on every
+// §3.4 consumer metric. Unset means GroupUnknown.
+//
+// Pass the Kafka GroupID VERBATIM — the exact string the kafka.ReaderConfig
+// got, whether it came from env or a literal. It is a contract, not a naming
+// choice: only the Kafka GroupID matches what kafka-exporter reports in its
+// consumergroup label, which is what lets a lag panel and a dead-letter
+// counter sit on the same dashboard row. Do not pass the DLQ short name (a
+// repo can have both, and they differ: "order-review-events-consumer" vs
+// "order").
+func WithGroup(id string) DispatcherOption {
+	return func(d *Dispatcher) {
+		if id != "" {
+			d.group = id
+		}
+	}
 }
 
 // NewDispatcher constructs a Dispatcher. reader and dlq are required — no code
@@ -89,6 +137,7 @@ func NewDispatcher(reader Reader, dlq Writer, opts ...DispatcherOption) *Dispatc
 		dlq:        dlq,
 		maxRetries: 3,
 		log:        zap.NewNop(),
+		group:      GroupUnknown,
 		handlers:   make(map[string]handlerFn),
 	}
 	for _, o := range opts {
@@ -152,11 +201,18 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) {
 	h := envelope.FromKafka(msg.Headers)
 	fqn := h.EventType()
 
+	// event_id and topic are the two fields that make a consumer log line
+	// searchable — the consumer-path equivalent of the request_id an HTTP line
+	// carries.
+	msgLog := d.log.With(
+		zap.String("event_id", h.EventID()),
+		zap.String("topic", msg.Topic),
+	)
+
 	handler, ok := d.handlers[fqn]
 	if !ok {
-		d.log.Debug("no handler for event type; skipping",
-			zap.String("event_type", fqn),
-			zap.String("event_id", h.EventID()))
+		msgLog.Debug("no handler for event type; skipping",
+			zap.String("event_type", fqn))
 		_ = d.reader.CommitMessages(ctx, msg)
 		return
 	}
@@ -167,35 +223,97 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) {
 	// headers out via envelope.HeadersFromContext when they need them.
 	ctx = envelope.WithHeaders(ctx, h)
 
+	ctx, span := d.startConsumerSpan(ctx, msg, h, fqn)
+	defer span.End()
+
+	if sc := span.SpanContext(); sc.IsValid() {
+		msgLog = msgLog.With(
+			zap.String("trace_id", sc.TraceID().String()),
+			zap.String("span_id", sc.SpanID().String()),
+		)
+	}
+	// Only seed the context logger when there is a real base logger to derive
+	// from. With no WithLogger, storing the Nop-derived child would make
+	// logger.FromContext return it — swallowing handler logs — instead of
+	// resolving to the process logger built by logger.New.
+	if d.logProvided {
+		ctx = logger.IntoContext(ctx, msgLog)
+	}
+
 	// Invoke through the deduplicator when one is configured. The handler runs
 	// inside the same atomic unit that checks+records the event_id — so two
 	// concurrent deliveries of the same message across pods can't both run the
 	// handler. If dedup is not configured, run the handler directly.
+	//
+	// Process returns nil both when the handler ran and when the event_id was
+	// already claimed, so handlerRan is the only way to tell a real completion
+	// from a deduplicated redelivery.
+	handlerRan := false
+	invoke := func() error {
+		handlerRan = true
+		return d.safelyInvoke(ctx, handler, msg.Value, h)
+	}
+
 	var err error
 	if d.dedup != nil {
-		err = d.dedup.Process(ctx, h.EventID(), func() error {
-			return d.safelyInvoke(ctx, handler, msg.Value, h)
-		})
+		err = d.dedup.Process(ctx, h.EventID(), invoke)
 	} else {
-		err = d.safelyInvoke(ctx, handler, msg.Value, h)
+		err = invoke()
 	}
+
 	if err == nil {
+		if handlerRan {
+			processedTotal.WithLabelValues(msg.Topic, d.group).Inc()
+		} else {
+			dedupHitsTotal.WithLabelValues(msg.Topic, d.group).Inc()
+		}
 		_ = d.reader.CommitMessages(ctx, msg)
 		return
 	}
+
+	span.RecordError(err)
+	handlerFailuresTotal.WithLabelValues(msg.Topic, d.group).Inc()
 
 	reason := classify(err)
 	// If the failure-path write (retry or DLQ) itself fails, do NOT commit the
 	// offset — leave the message uncommitted so Kafka redelivers it instead of
 	// losing it. The success path above commits unchanged.
 	if werr := d.routeFailure(ctx, msg, h, err, reason); werr != nil {
-		d.log.Error("failure-path write failed; leaving offset uncommitted for redelivery",
-			zap.String("event_id", h.EventID()),
+		failurePathErrorsTotal.WithLabelValues(msg.Topic, d.group).Inc()
+		msgLog.Error("failure-path write failed; leaving offset uncommitted for redelivery",
 			zap.String("dlq_reason", string(reason)),
 			zap.Error(werr))
 		return
 	}
 	_ = d.reader.CommitMessages(ctx, msg)
+}
+
+// startConsumerSpan continues the producing request's trace across the Kafka
+// hop: the traceparent header was injected at PublishProto time from the
+// context that caused the event, so the handler span becomes a child of that
+// request rather than a disconnected root.
+//
+// The span name is the topic, never the event id — span names obey the same
+// cardinality law as metric labels (trap §9.18).
+func (d *Dispatcher) startConsumerSpan(
+	ctx context.Context,
+	msg kafka.Message,
+	h envelope.Headers,
+	eventType string,
+) (context.Context, trace.Span) {
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(h))
+
+	return otel.Tracer(tracerName).Start(ctx,
+		"consume "+msg.Topic,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "kafka"),
+			attribute.String("messaging.destination.name", msg.Topic),
+			attribute.String("messaging.consumer.group.name", d.group),
+			attribute.String("event_type", eventType),
+			attribute.String("event_id", h.EventID()),
+		),
+	)
 }
 
 func (d *Dispatcher) safelyInvoke(ctx context.Context, h handlerFn, raw []byte, hdr envelope.Headers) (err error) {
@@ -244,9 +362,11 @@ func (d *Dispatcher) routeFailure(ctx context.Context, msg kafka.Message, h enve
 	if werr := d.retry.WriteMessages(ctx, next); werr != nil {
 		d.log.Error("retry write failed",
 			zap.String("event_id", h.EventID()),
+			zap.String("topic", msg.Topic),
 			zap.Error(werr))
 		return werr
 	}
+	retriedTotal.WithLabelValues(msg.Topic, d.group).Inc()
 	return nil
 }
 
@@ -291,9 +411,13 @@ func (d *Dispatcher) writeDLQ(ctx context.Context, src kafka.Message, err error,
 	if werr := d.dlq.WriteMessages(ctx, dlqMsg); werr != nil {
 		d.log.Error("dlq write failed",
 			zap.String("event_id", string(findHeader(src.Headers, envelope.HeaderEventID))),
+			zap.String("topic", src.Topic),
 			zap.Error(werr))
 		return werr
 	}
+	// The topic label is the SOURCE topic the message failed on, which is what
+	// pairs this counter with the consumer-lag panel for the same topic.
+	deadLetteredTotal.WithLabelValues(src.Topic, d.group, string(reason)).Inc()
 	return nil
 }
 
@@ -329,4 +453,3 @@ func findHeader(headers []kafka.Header, key string) []byte {
 	}
 	return nil
 }
-

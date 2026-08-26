@@ -59,6 +59,8 @@ func (r *Reaper) cleanup(ctx context.Context) {
 		return
 	}
 
+	recordReaped(deleted)
+
 	if deleted > 0 {
 		r.logger.Info("outbox reaper: cleaned up messages",
 			zap.Int64("deleted", deleted),

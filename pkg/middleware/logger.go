@@ -8,6 +8,13 @@ import (
 )
 
 // Logger is a middleware that logs request details.
+//
+// Deprecated: use RequestLogger instead. This one logs no request_id, so its
+// lines cannot be correlated across the gateway hop, and it is the
+// echo.WrapMiddleware-wrapped stdlib shape whose responseWriter has to
+// hand-implement Flush/Unwrap to keep the SSE endpoints alive. Running both
+// emits two access lines per request. It stays exported only until every
+// service has migrated its wiring.
 func Logger(logger *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -15,18 +15,34 @@ type RelayConfig struct {
 	BatchSize    int           // Max messages per poll cycle (default: 100)
 }
 
+// relayStore is the slice of *Store the relay actually uses. It exists so the
+// poll loop — and the metric wiring hanging off its outcomes — can be unit
+// tested without Postgres. *Store satisfies it.
+type relayStore interface {
+	FetchPending(ctx context.Context, batchSize int) ([]*Message, error)
+	MarkSentBatch(ctx context.Context, ids []string) error
+}
+
+// relayWriter is the slice of *kafka.Writer the relay actually uses, for the
+// same reason. *kafka.Writer satisfies it.
+type relayWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+}
+
 // Relay polls the outbox_messages table and forwards pending messages to Kafka.
 // It uses SELECT … FOR UPDATE SKIP LOCKED for zero-contention concurrent access.
 //
 // TODO: CDC (Debezium) relay for real-time propagation.
 type Relay struct {
-	store  *Store
-	writer *kafka.Writer
+	store  relayStore
+	writer relayWriter
 	logger *zap.Logger
 	cfg    RelayConfig
 }
 
-// NewRelay creates a new polling relay.
+// NewRelay creates a new polling relay. The concrete parameter types are kept
+// so every existing call site compiles unchanged; the fields behind them are
+// interfaces purely for testability.
 func NewRelay(store *Store, writer *kafka.Writer, logger *zap.Logger, cfg RelayConfig) *Relay {
 	return &Relay{
 		store:  store,
@@ -45,6 +61,11 @@ func (r *Relay) Run(ctx context.Context) error {
 		zap.Int("batch_size", r.cfg.BatchSize),
 	)
 
+	// Seed the freshness gauge at start: an unset Prometheus gauge reads 0,
+	// which would make the "relay stalled" alert fire on every fresh deploy
+	// before the first poll completes.
+	recordRelaySuccess(0)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -55,7 +76,11 @@ func (r *Relay) Run(ctx context.Context) error {
 
 		processed, err := r.pollAndForward(ctx)
 		if err != nil {
+			recordRelayError()
 			r.logger.Error("outbox relay poll error", zap.Error(err))
+		} else {
+			// Error-free means successful, whether or not any row was found.
+			recordRelaySuccess(processed)
 		}
 
 		// If we got a full batch, there might be more — poll immediately.
@@ -121,7 +146,25 @@ func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
 				)
 			}
 			if len(succeededIDs) == 0 {
-				return 0, nil
+				// EVERY message in the batch failed. Propagate the error
+				// instead of reporting an error-free poll: returning nil here
+				// would refresh outbox_last_success_timestamp_seconds and leave
+				// outbox_relay_errors_total flat while zero messages were
+				// delivered — a wedged relay that looks perfectly healthy on
+				// every panel. That is exactly the shape a missing Kafka topic
+				// produces (Critical Rule 13 — Kafka topic naming and
+				// provisioning), which is a live condition in prod.
+				//
+				// Return semantics for the caller are unchanged: the rows stay
+				// pending and the next poll retries them, as before.
+				return 0, err
+			}
+			if failed > 0 {
+				// Partial delivery. The succeeded half is real progress and is
+				// recorded by the caller off the nil error; the failed half is
+				// a genuine error and must move the error counter, or a relay
+				// losing a steady fraction of every batch reports as clean.
+				recordRelayError()
 			}
 			if err := r.store.MarkSentBatch(ctx, succeededIDs); err != nil {
 				r.logger.Error("outbox relay: mark sent batch failed",

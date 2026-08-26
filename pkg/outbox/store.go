@@ -96,6 +96,34 @@ func (s *Store) FetchPending(ctx context.Context, batchSize int) ([]*Message, er
 	return messages, nil
 }
 
+// PendingStats returns the number of pending outbox rows and the age in
+// seconds of the oldest one, in a single round trip. It backs the
+// outbox_pending_messages and outbox_oldest_pending_age_seconds gauges (§3.3).
+//
+// There is no `published` column: the schema is status VARCHAR(16) ∈
+// {pending,sent} plus sent_at, and the partial index idx_outbox_pending makes
+// both aggregates cheap.
+//
+// MIN(created_at) over zero rows is SQL NULL, so the age is COALESCEd to 0 —
+// both numbers must be reportable on an empty table, or the gauges only appear
+// once a backlog exists.
+//
+// Big O: O(log n) via the partial index idx_outbox_pending.
+func (s *Store) PendingStats(ctx context.Context) (count int64, oldestAgeSeconds float64, err error) {
+	const query = `
+		SELECT
+			COUNT(*),
+			COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(created_at)))::float8, 0.0)
+		FROM outbox_messages
+		WHERE status = 'pending'`
+
+	if err := s.pool.QueryRow(ctx, query).Scan(&count, &oldestAgeSeconds); err != nil {
+		return 0, 0, fmt.Errorf("outbox: pending stats: %w", err)
+	}
+
+	return count, oldestAgeSeconds, nil
+}
+
 // MarkSent updates a message status to 'sent' with a timestamp.
 func (s *Store) MarkSent(ctx context.Context, id string) error {
 	const query = `

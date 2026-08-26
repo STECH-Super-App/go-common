@@ -19,17 +19,19 @@ import (
 //	stopOutbox := ob.Start(ctx)
 //	defer stopOutbox()
 //
-// TODO: Add Prometheus metrics (pending gauge, relay counter, reaper counter)
-// when metric collection infrastructure matures.
+// Start also runs the metrics sampler, so a service gets the §3.3 outbox
+// families by wiring nothing extra — there is no separate StartMetrics a repo
+// could forget to call.
 type Outbox struct {
 	// Publisher is the public API for transactional event publishing.
 	// Services use this within RunInTx to atomically write events.
 	Publisher *Publisher
 
-	store  *Store
-	relay  *Relay
-	reaper *Reaper
-	logger *zap.Logger
+	store   *Store
+	relay   *Relay
+	reaper  *Reaper
+	sampler *sampler
+	logger  *zap.Logger
 }
 
 // New creates the full outbox subsystem.
@@ -43,23 +45,26 @@ func New(pool *pgxpool.Pool, kafkaWriter *kafka.Writer, logger *zap.Logger, cfg 
 		store:     store,
 		relay:     NewRelay(store, kafkaWriter, logger, cfg.Relay),
 		reaper:    NewReaper(store, logger, cfg.Reaper),
+		sampler:   newSampler(store.PendingStats, cfg.MetricsInterval, logger),
 		logger:    logger,
 	}
 }
 
-// Start launches the relay and reaper as background goroutines.
-// Returns a stop function that cancels both goroutines and waits for them to exit.
+// Start launches the relay, the reaper and the metrics sampler as background
+// goroutines. Returns a stop function that cancels all three and waits for
+// them to exit.
 //
 // Call pattern:
 //
 //	stop := ob.Start(ctx)
-//	defer stop() // blocks until relay and reaper are fully stopped
+//	defer stop() // blocks until relay, reaper and sampler are fully stopped
 func (o *Outbox) Start(ctx context.Context) (stop func()) {
 	relayCtx, relayCancel := context.WithCancel(ctx)
 	reaperCtx, reaperCancel := context.WithCancel(ctx)
+	samplerCtx, samplerCancel := context.WithCancel(ctx)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
@@ -75,11 +80,17 @@ func (o *Outbox) Start(ctx context.Context) (stop func()) {
 		}
 	}()
 
-	o.logger.Info("outbox subsystem started (relay + reaper)")
+	go func() {
+		defer wg.Done()
+		o.sampler.run(samplerCtx)
+	}()
+
+	o.logger.Info("outbox subsystem started (relay + reaper + metrics sampler)")
 
 	return func() {
 		relayCancel()
 		reaperCancel()
+		samplerCancel()
 		wg.Wait()
 		o.logger.Info("outbox subsystem stopped")
 	}

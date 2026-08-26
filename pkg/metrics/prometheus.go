@@ -6,13 +6,19 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
-var (
-	// Registry is the default prometheus registry.
-	Registry *prometheus.Registry
-)
+// Registry is the shared prometheus registry every STECH instrument is
+// registered on, and the only registry MountOn/StartServer expose. It is a
+// package-level variable initializer rather than an init() assignment on
+// purpose: package-level variables are initialized before ANY init() function
+// runs, so the instruments declared in this package's other files (http.go,
+// grpc.go) — and in pkg/outbox / pkg/events, which register at their own init
+// time — can register against it without depending on init-function ordering.
+//
+// Never use promauto or prometheus.DefaultRegisterer: nothing serves that
+// registry (trap §9.11).
+var Registry = prometheus.NewRegistry()
 
 func init() {
-	Registry = prometheus.NewRegistry()
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 }

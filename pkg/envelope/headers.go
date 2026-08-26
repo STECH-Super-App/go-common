@@ -27,6 +27,15 @@ const (
 	HeaderSchemaVersion = "schema_version"
 	HeaderContentType   = "content_type"
 	HeaderRetryCount    = "x-retry-count"
+
+	// HeaderTraceparent carries the W3C trace context across the async hop, so
+	// one trace spans request → outbox → relay → consumer. It is injected by
+	// outbox.Publisher.PublishProto from the PRODUCING request's context
+	// (never by the relay, which would root every event's trace at the relay
+	// process) and extracted by the events Dispatcher as a remote parent.
+	//
+	// Lowercase by W3C definition, unlike the x-dlq-* diagnostics.
+	HeaderTraceparent = "traceparent"
 )
 
 // Values for well-known header keys.
@@ -65,6 +74,10 @@ func (h Headers) SchemaVersion() string { return h[HeaderSchemaVersion] }
 
 // ContentType returns the content_type header value (e.g. application/protobuf+json).
 func (h Headers) ContentType() string { return h[HeaderContentType] }
+
+// Traceparent returns the W3C traceparent header value, or empty when the
+// message was produced without an active trace.
+func (h Headers) Traceparent() string { return h[HeaderTraceparent] }
 
 // OccurredAt parses the occurred_at header as RFC3339Nano UTC.
 // Returns an error if the header is missing or malformed.
