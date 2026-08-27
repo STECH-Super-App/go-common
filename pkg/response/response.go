@@ -8,11 +8,13 @@
 package response
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 
 	commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
 	"github.com/STECH-Super-App/go-common/pkg/logger"
@@ -59,14 +61,18 @@ func Accepted(c echo.Context, data interface{}) error {
 
 // JSONError writes the given error as a JSON Response. If err is an *AppError,
 // Reason, Params, and Details are forwarded into the wire response. If err is
-// any other error, a generic 500 envelope is sent and the error is logged.
+// any other error, a generic 500 envelope is sent.
+//
+// The diagnostic log line is written through the request-scoped logger (see
+// logError), so it carries service, request_id, and trace_id/span_id and is
+// findable by request id and joinable to its trace — and its level follows the
+// HTTP status class (5xx→Error, 4xx→Warn) so a routine 401/404 does not inflate
+// the error-rate sparkline.
 //
 // When LOG_EMPTY_REASON_WARN=true, a warn log is emitted whenever an *AppError
 // with empty Reason is serialized. Used during the migration sweep to catch
 // throw sites that haven't been updated yet.
 func JSONError(c echo.Context, err error) error {
-	c.Logger().Error(err)
-
 	out := &Error{Code: http.StatusInternalServerError, Message: "internal server error"}
 
 	var appErr *commonErrors.AppError
@@ -78,12 +84,45 @@ func JSONError(c echo.Context, err error) error {
 		out.Details = appErr.Details
 
 		if appErr.Reason == "" && os.Getenv("LOG_EMPTY_REASON_WARN") == "true" {
-			logger.Warn("AppError serialized with empty Reason",
-				logger.Int("code", appErr.Code),
-				logger.String("message", appErr.Message),
+			logger.FromContext(c.Request().Context()).Warn("AppError serialized with empty Reason",
+				zap.Int("code", appErr.Code),
+				zap.String("message", appErr.Message),
 			)
 		}
 	}
 
+	logError(c.Request().Context(), out.Code, out.Reason, err)
+
 	return c.JSON(out.Code, Response{Success: false, Error: out}) //nolint:forbidigo
+}
+
+// logError writes the error-envelope's diagnostic line through the
+// request-scoped logger stored on ctx by middleware.RequestLogger, so the line
+// that says WHAT went wrong carries service, request_id, and trace_id/span_id
+// and can be found by request id and joined to its trace. logger.FromContext
+// never returns nil: with no request logger present it falls back to a logger
+// still carrying the service identity, and to a no-op when logging was never
+// configured.
+//
+// The level is derived from the HTTP status class: a 5xx is a server fault
+// worth an Error, a 4xx is a client error worth a Warn (seen but not paged, and
+// kept off the {level="error"} error-rate sparkline). Anything else (a 2xx/3xx
+// reached here defensively) is not logged. The free-text error is preserved in
+// the "error" field and the typed AppError Reason, when present, in "reason".
+func logError(ctx context.Context, code int, reason string, err error) {
+	fields := []zap.Field{
+		zap.Int("status", code),
+		zap.Error(err),
+	}
+	if reason != "" {
+		fields = append(fields, zap.String("reason", reason))
+	}
+
+	log := logger.FromContext(ctx)
+	switch {
+	case code >= http.StatusInternalServerError:
+		log.Error("request failed", fields...)
+	case code >= http.StatusBadRequest:
+		log.Warn("request rejected", fields...)
+	}
 }
