@@ -1451,14 +1451,41 @@ func TestDeliveryRequestNoIsOptionalNotRequired(t *testing.T) {
 	}
 }
 
-// TestOptionalParamsScopedToDelivery asserts the optional tier did not leak
-// beyond the 9 delivery types: no other catalog type declares an optional param,
-// and no other baseline string mentions request_no. The rent vertical (order_*)
-// and every platform type must be untouched by this change.
-func TestOptionalParamsScopedToDelivery(t *testing.T) {
+// TestOptionalParamsScopedToDeclaredTypes asserts the optional tier has not
+// leaked: only the types named below declare an optional param, and no other
+// baseline string mentions request_no. The rent vertical (order_*) and every
+// platform type must stay untouched.
+//
+// It was TestOptionalParamsScopedToDelivery, a delivery-only whitelist, until
+// parts' new_address_count became the first optional param outside that
+// vertical. The test is still a whitelist — a new optional param must be
+// declared HERE as well as in optionalParams, deliberately, so the tier cannot
+// grow silently.
+func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	declared := map[notificationv1.NotificationType]bool{}
 	for _, tc := range deliveryRequestNoCases {
 		declared[tc.nt] = true
+	}
+	// parts — nine types carry an optional param, and each is listed by hand so
+	// the tier cannot grow silently:
+	//   • product_name — an UNMATCHED позиция has no card to take a name from, so
+	//     the builder sends "" rather than echoing the артикул;
+	//   • price / price_from — a позиция with no ladder rung has no price;
+	//   • remaining_causes — Р56·В-54's conditional lift text, where EMPTY is the
+	//     good case («предложения вернулись в каталог»);
+	//   • new_address_count — Р31's SECOND EDITION of «Прайс обработан».
+	for _, nt := range []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_HIDDEN_BY_ADMIN,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_SANCTION_LIFTED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_BACK_IN_STOCK,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_FAVORITE_PRICE_DROPPED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_OFFER_APPEARED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_EXPIRING,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED,
+	} {
+		declared[nt] = true
 	}
 	for typ, params := range optionalParams {
 		if !declared[typ] {
@@ -1788,5 +1815,141 @@ func TestExtractAndRender_OrganisationDeactivated(t *testing.T) {
 	}
 	if !strings.Contains(body, "Acme LLC") {
 		t.Errorf("body %q does not name the organisation — the row must render without a read-path lookup to a now-INACTIVE org", body)
+	}
+}
+
+// --- Маркетплейс запчастей (parts) — the price-file import pair ---
+//
+// These two types are the ONLY parts directives with a producer, and they are a
+// GATE rather than coverage: without a case in ExtractParams a parts directive
+// fails at PUBLISH time, inside the importer's own swap transaction, and rolls
+// back the import it was reporting on. A red test here is that failure, caught
+// one repo earlier.
+
+func TestExtractAndRender_PartsPriceListProcessed(t *testing.T) {
+	r := testRendererFull(t)
+	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED
+
+	cases := []struct {
+		name            string
+		newAddressCount int32
+		wantCountParam  string
+		wantSecondEd    bool
+	}{
+		{
+			// Р31's FIRST edition. The zero must reach the template as "" — as "0"
+			// it is a non-empty string, Go's template truth test says TRUE, and
+			// every import would claim it introduced new warehouses.
+			name:            "no new addresses renders the first edition only",
+			newAddressCount: 0,
+			wantCountParam:  "",
+			wantSecondEd:    false,
+		},
+		{
+			name:            "new addresses append the second edition",
+			newAddressCount: 4,
+			wantCountParam:  "4",
+			wantSecondEd:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendPartsPriceListProcessed{
+					SendPartsPriceListProcessed: &notificationv1.SendPartsPriceListProcessed{
+						// NO ShopName. The field is `reserved` on all 53 SendParts*
+						// messages (OWNER-ANSWERS-2026-08-31 B-5); the generated
+						// struct at the pinned gen-go-lib still HAS it, which is
+						// exactly why a test must refuse to set it — a green test
+						// that populates a removed field is how the removal gets
+						// quietly undone at the next regeneration.
+						PublishedCount:  120,
+						MatchingCount:   7,
+						ErrorCount:      0,
+						NewAddressCount: tc.newAddressCount,
+					},
+				},
+			}
+			params, err := ExtractParams(env)
+			if err != nil {
+				t.Fatalf("ExtractParams: %v", err)
+			}
+			// A zero REQUIRED count must stay "0": notifyoutbox treats an empty
+			// required param as missing and rejects the directive at publish time.
+			if params["error_count"] != "0" {
+				t.Errorf("error_count = %q, want \"0\" — a required zero must not be blanked", params["error_count"])
+			}
+			if params["published_count"] != "120" || params["matching_count"] != "7" {
+				t.Errorf("counts = %q/%q, want \"120\"/\"7\"", params["published_count"], params["matching_count"])
+			}
+			if params["new_address_count"] != tc.wantCountParam {
+				t.Errorf("new_address_count = %q, want %q", params["new_address_count"], tc.wantCountParam)
+			}
+
+			for _, loc := range []string{"en", "ru"} {
+				title, body, err := r.Render(nt, params, loc)
+				if err != nil {
+					t.Fatalf("Render(%s): %v", loc, err)
+				}
+				if title == "" || body == "" {
+					t.Fatalf("%s: empty title/body (title=%q body=%q)", loc, title, body)
+				}
+				gotSecondEd := strings.Contains(body, "New warehouse addresses")
+				if gotSecondEd != tc.wantSecondEd {
+					t.Errorf("%s: second edition present = %v, want %v\n  body = %q",
+						loc, gotSecondEd, tc.wantSecondEd, body)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractAndRender_PartsPriceListFileFailed(t *testing.T) {
+	r := testRendererFull(t)
+	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED
+	env := &notificationv1.NotificationEnvelope{
+		Payload: &notificationv1.NotificationEnvelope_SendPartsPriceListFileFailed{
+			SendPartsPriceListFileFailed: &notificationv1.SendPartsPriceListFileFailed{
+				// NO ShopName — see the sibling test above.
+				FileName: "price-08-2026.xlsx",
+			},
+		},
+	}
+	params, err := ExtractParams(env)
+	if err != nil {
+		t.Fatalf("ExtractParams: %v", err)
+	}
+	if len(params) != 1 || params["file_name"] == "" {
+		t.Fatalf("params = %v, want exactly file_name", params)
+	}
+	// This is one of exactly two parts types that also go by EMAIL, and the email
+	// body IS this rendered body — internal/i18n is not on that path.
+	for _, loc := range []string{"en", "ru"} {
+		title, body, err := r.Render(nt, params, loc)
+		if err != nil {
+			t.Fatalf("Render(%s): %v", loc, err)
+		}
+		if title == "" || body == "" {
+			t.Fatalf("%s: empty title/body", loc)
+		}
+		if !strings.Contains(body, "price-08-2026.xlsx") {
+			t.Errorf("%s: body does not name the file the seller uploaded: %q", loc, body)
+		}
+	}
+}
+
+// TestPartsUnmappedTypeStillFailsClosed pins the property the gate rests on: a
+// parts type WITHOUT an ExtractParams case must error rather than render empty.
+// If this ever passes silently, the publish-time gate has been removed and a
+// missing directive becomes a silent no-op instead of a rolled-back import.
+func TestPartsUnmappedTypeStillFailsClosed(t *testing.T) {
+	env := &notificationv1.NotificationEnvelope{
+		Payload: &notificationv1.NotificationEnvelope_SendPartsSourcingNoQuotesYet{
+			SendPartsSourcingNoQuotesYet: &notificationv1.SendPartsSourcingNoQuotesYet{},
+		},
+	}
+	if _, err := ExtractParams(env); err == nil {
+		t.Fatal("ExtractParams accepted a parts type with no case — the publish-time gate is gone")
 	}
 }
