@@ -1,6 +1,7 @@
 package notifyrender
 
 import (
+	"strconv"
 	"strings"
 
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
@@ -409,6 +410,94 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"request_no": p.SendDeliveryCascadeCancelled.GetRequestNo(),
 		}, nil
+
+	// ─── Маркетплейс запчастей (parts) ───
+	//
+	// The first payloads in this package carrying NUMERIC fields. notifyrender
+	// interpolates strings only, so a REQUIRED count goes through strconv.Itoa — a
+	// zero becomes "0", which renders and, unlike an empty string, satisfies
+	// notifyoutbox's required-param check. An OPTIONAL count goes through
+	// countOrEmpty instead; see its doc comment for why the two cannot share a
+	// formatter.
+	//
+	// NO ARM READS A SHOP NAME. `shop_name` is `reserved` on all 53 SendParts*
+	// messages (OWNER-ANSWERS-2026-08-31 B-5) because М-01 makes the shop's name
+	// the company's name and every payload already carries the tenant a client
+	// resolves it from. Re-adding one here is foreclosed, not merely unnecessary.
+	//
+	// NO ARM READS A CURRENT-PRICE `currency` EITHER. DECISIONS §30.2 removed
+	// currency everywhere; three of these payloads still DECLARE the field because
+	// the proto predates the ruling, and the PHP builder never sets it — so
+	// reading it would put an empty string on a template that has one currency.
+	// The «₽» in the baseline is a rendering, which is exactly what §30.2 says it
+	// is.
+	//
+	// NO ARM READS AN OFFER ID. Every one of these directives carries its anchor
+	// in `metadata.deep_link`, which is where a client reads it; the payload id is
+	// not display copy. That also sidesteps a live drift: the pinned gen-go-lib
+	// still generates `OfferRef` while sale-service already emits `offer_id`, so
+	// the field arrives as "" under DiscardUnknown. Recorded in
+	// docs/parts-part2/OPEN-DURING-BUILD.md; nothing here depends on it.
+	case *notificationv1.NotificationEnvelope_SendPartsOfferHiddenByAdmin:
+		return map[string]string{
+			"product_name": p.SendPartsOfferHiddenByAdmin.GetProductName(),
+			"reason":       p.SendPartsOfferHiddenByAdmin.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOfferSanctionLifted:
+		return map[string]string{
+			"product_name": p.SendPartsOfferSanctionLifted.GetProductName(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsShopSanctionLifted:
+		return map[string]string{
+			"remaining_causes": causesOrEmpty(p.SendPartsShopSanctionLifted.GetRemainingCauses()),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsShopVerificationRestored:
+		return map[string]string{
+			"remaining_causes": causesOrEmpty(p.SendPartsShopVerificationRestored.GetRemainingCauses()),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOfferBackInStock:
+		return map[string]string{
+			"product_name": p.SendPartsOfferBackInStock.GetProductName(),
+			"price":        p.SendPartsOfferBackInStock.GetPrice(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsFavoritePriceDropped:
+		return map[string]string{
+			"product_name": p.SendPartsFavoritePriceDropped.GetProductName(),
+			"old_price":    p.SendPartsFavoritePriceDropped.GetOldPrice(),
+			"new_price":    p.SendPartsFavoritePriceDropped.GetNewPrice(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSubscriptionOfferAppeared:
+		return map[string]string{
+			"product_name": p.SendPartsSubscriptionOfferAppeared.GetProductName(),
+			"price_from":   p.SendPartsSubscriptionOfferAppeared.GetPriceFrom(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSubscriptionExpiring:
+		return map[string]string{
+			"product_name": p.SendPartsSubscriptionExpiring.GetProductName(),
+			// REQUIRED, so strconv.Itoa and never countOrEmpty: a subscription
+			// swept on its last day legitimately carries 0, and blanking it would
+			// reject the directive at publish time.
+			"days_left": strconv.Itoa(int(p.SendPartsSubscriptionExpiring.GetDaysLeft())),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsPriceListStaleWarning:
+		return map[string]string{
+			"days_since_upload": strconv.Itoa(int(p.SendPartsPriceListStaleWarning.GetDaysSinceUpload())),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOffersHiddenPriceListStale:
+		return map[string]string{
+			"days_since_upload": strconv.Itoa(int(p.SendPartsOffersHiddenPriceListStale.GetDaysSinceUpload())),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsPriceListProcessed:
+		return map[string]string{
+			"published_count":   strconv.Itoa(int(p.SendPartsPriceListProcessed.GetPublishedCount())),
+			"matching_count":    strconv.Itoa(int(p.SendPartsPriceListProcessed.GetMatchingCount())),
+			"error_count":       strconv.Itoa(int(p.SendPartsPriceListProcessed.GetErrorCount())),
+			"new_address_count": countOrEmpty(p.SendPartsPriceListProcessed.GetNewAddressCount()),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsPriceListFileFailed:
+		return map[string]string{
+			"file_name": p.SendPartsPriceListFileFailed.GetFileName(),
+		}, nil
 	default:
 		// A payload IS set (the nil case is caught by the guard at the top) but no
 		// case matched it — a directive variant that reached this package without a
@@ -417,4 +506,40 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		// and dead-letter it. GetMetadata()/GetType() are nil-safe.
 		return nil, ErrUnknownType(env.GetMetadata().GetType())
 	}
+}
+
+// countOrEmpty formats an OPTIONAL int32 count for a baseline that reads it
+// behind an {{if}} guard. A zero becomes "" rather than "0" because Go's template
+// truth test runs on the STRING: "0" is non-empty and therefore TRUE, so a guard
+// over "0" renders its clause every time. Empty is the only value that switches
+// the guard off.
+//
+// A REQUIRED count must NOT use this — notifyoutbox treats an empty required
+// param as missing and rejects the directive at publish time, inside the
+// producer's transaction.
+func countOrEmpty(n int32) string {
+	if n == 0 {
+		return ""
+	}
+	return strconv.Itoa(int(n))
+}
+
+// causesOrEmpty renders Р56·В-54's `remaining_causes` list for a template that
+// reads it behind an {{if}} guard.
+//
+// EMPTY IS THE LOAD-BEARING VALUE, not a degenerate one: an empty list is the
+// rule's good case — «Магазин снова доступен покупателям. Предложения вернулись
+// в каталог.» may be claimed only then — and a non-empty list is what switches
+// the second edition on. `strings.Join(nil, ", ")` is already "", so this
+// function exists to SAY that rather than to compute it, and to give the one
+// caller a place to change if the vocabulary ever needs mapping.
+//
+// It joins the raw arm names (SHOP_PAUSED | PRICE_STALE | SHOP_ADMIN_HIDDEN |
+// SHOP_VERIFICATION_REVOKED), and the baseline deliberately does NOT print them:
+// they are enum literals, not seller-facing copy, and the vault already routes a
+// seller to PRT-10's «Почему магазин не виден покупателям» block for the full
+// list. A locale that wants to name the cause needs a per-cause phrase, which
+// belongs in the translation catalog and not in a Join.
+func causesOrEmpty(causes []string) string {
+	return strings.Join(causes, ", ")
 }

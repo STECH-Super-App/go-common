@@ -85,6 +85,44 @@ var typeKey = map[notificationv1.NotificationType]string{
 	// organisation deactivated after its leading user deleted their account
 	// (П-14). Tenant-addressed fan-out to the org's ADMIN + MANAGER members.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DEACTIVATED: "organisation_deactivated",
+
+	// ─── Маркетплейс запчастей (parts) ───
+	//
+	// A type absent from this map CANNOT RENDER: ExtractParams' default arm
+	// returns ErrUnknownType, and inbox-service wraps that error raw
+	// (internal/application/ingestion/service.go) with no retry tier wired — so a
+	// parts directive of an unmapped type is dead-lettered onto
+	// notification.events.dlq.inbox on FIRST delivery. That was the live state of
+	// every parts directive until these entries landed, reproduced in
+	// parts_liveproof_test.go.
+	//
+	// Sixty-three SendParts* directives are declared in directives.proto. The
+	// twelve below are the ones a producer can actually emit: the TEN written by
+	// sale-service's PartsNotificationDirectiveBuilder (eight from the storefront
+	// clock and the admin sanction pair; two of the ten — the shop-level lifts —
+	// are built and unit-tested with their route still pending), plus the price-file
+	// importer's PAIR, which has no producer yet and is here because its patch was
+	// already written and verified. The other 51 land the same way, one at a time,
+	// when their producer does.
+	//
+	// NO PARTS TEMPLATE NAMES THE SHOP. OWNER-ANSWERS-2026-08-31 B-5 removed
+	// `shop_name` from all 53 SendParts* messages (reserved, not blanked): М-01
+	// makes the shop's name the COMPANY's name, and every payload already carries
+	// the tenant the client resolves it from. A push has no client to hydrate it,
+	// and the owner ruled removal knowing that — so these strings address the
+	// recipient's own shop as «your shop» rather than re-adding a field.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_HIDDEN_BY_ADMIN:          "parts_offer_hidden_by_admin",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_SANCTION_LIFTED:          "parts_offer_sanction_lifted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED:           "parts_shop_sanction_lifted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED:     "parts_shop_verification_restored",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_BACK_IN_STOCK:            "parts_offer_back_in_stock",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_FAVORITE_PRICE_DROPPED:         "parts_favorite_price_dropped",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_OFFER_APPEARED:    "parts_subscription_offer_appeared",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_EXPIRING:          "parts_subscription_expiring",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_STALE_WARNING:       "parts_price_list_stale_warning",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFERS_HIDDEN_PRICE_LIST_STALE: "parts_offers_hidden_price_list_stale",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED:           "parts_price_list_processed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED:         "parts_price_list_file_failed",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -279,6 +317,61 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DEACTIVATED: {
 		"organization_name",
 	},
+
+	// ─── Маркетплейс запчастей (parts) ───
+	//
+	// WHAT IS REQUIRED HERE IS DECIDED BY THE PHP PRODUCER, NOT BY THE COPY.
+	// PartsNotificationDirectiveBuilder passes `$productName ?? ''` and
+	// `$price === null ? '' : …` — an unmatched позиция has no card to take a name
+	// from and a позиция with no ladder rung has no price — so every one of those
+	// is OPTIONAL below and guarded in the baseline. Declaring one required would
+	// make notifyoutbox reject the directive at publish time, inside the very
+	// transaction the sweep is reporting on.
+	//
+	// Int32 counts go the other way. ExtractParams formats them with strconv.Itoa,
+	// so a zero arrives as the non-empty string "0" — it renders, and it satisfies
+	// the empty-means-missing check — which is why every count that always has a
+	// meaning is required. The one exception is new_address_count; see optionalParams.
+	//
+	// The admin's `reason` is required by Р40-№15, which makes the text mandatory
+	// on the sanction itself, so it can never arrive blank.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_HIDDEN_BY_ADMIN: {
+		"reason",
+	},
+	// Nothing required: a lift is fully described by the позиция being visible
+	// again, and the only variable — its name — may legitimately be absent.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_SANCTION_LIFTED: nil,
+	// Р56·В-54's conditional lift text keys entirely on `remaining_causes`, which
+	// is EMPTY in the good case, so it cannot be required either.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED:       nil,
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED: nil,
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_BACK_IN_STOCK:        nil,
+	// Both prices are non-nullable ints in the builder — Р43 measures a fall
+	// between two known numbers, so neither can be absent.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_FAVORITE_PRICE_DROPPED: {
+		"old_price", "new_price",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_OFFER_APPEARED: nil,
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_EXPIRING: {
+		"days_left",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_STALE_WARNING: {
+		"days_since_upload",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFERS_HIDDEN_PRICE_LIST_STALE: {
+		"days_since_upload",
+	},
+	// Р31's three counters. new_address_count is deliberately NOT required: the
+	// row gets a SECOND EDITION only when the file introduced new shipping
+	// addresses, so it lives in optionalParams.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED: {
+		"published_count", "matching_count", "error_count",
+	},
+	// No counters: the whole file was rejected and nothing was published, so the
+	// cause lives in the PRT-12 import report rather than in row counts.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED: {
+		"file_name",
+	},
 }
 
 // optionalParams declares params that MAY arrive empty (or absent) and are
@@ -308,6 +401,41 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE:        {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING: {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED:    {"request_no"},
+
+	// ─── parts ───
+	//
+	// `product_name` is optional on every parts row that carries one, and that is
+	// a PROTO-LEVEL fact rather than defensive coding: a позиция the administrator
+	// has not yet matched to a card has no name anywhere in the storefront — the
+	// file's «Наименование» cell is stored on no table — so the builder sends
+	// `''` and protojson omits it. The alternative the builder rejects, in its own
+	// words, is «echoing the артикул as if it were a name the seller wrote».
+	//
+	// `price` / `price_from` are optional for the same reason one step further
+	// down: a позиция whose ladder has no rung has no price to quote.
+	//
+	// `remaining_causes` is Р56·В-54's whole mechanism. EMPTY means the storefront
+	// really is back, which is the only case the first-edition text may claim; a
+	// non-empty list means another cause still holds it dark. It can therefore
+	// never be required — the good case is the empty one.
+	//
+	// `new_address_count` carries Р31's SECOND EDITION of «Прайс обработан»
+	// («Новых адресов: N — проверьте настройку самовывоза»), owed only when the
+	// file introduced one. ExtractParams must emit "" and not "0" for a zero
+	// count: Go's template truth test runs on the STRING, so "0" is non-empty and
+	// therefore TRUE, and an {{if .new_address_count}} guard over "0" would append
+	// the second edition to every import. Empty is the only value that switches a
+	// guard off — which is why countOrEmpty exists and why a REQUIRED count must
+	// never use it.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_HIDDEN_BY_ADMIN:       {"product_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_SANCTION_LIFTED:       {"product_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED:        {"remaining_causes"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED:  {"remaining_causes"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_BACK_IN_STOCK:         {"product_name", "price"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_FAVORITE_PRICE_DROPPED:      {"product_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_OFFER_APPEARED: {"product_name", "price_from"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_EXPIRING:       {"product_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED:        {"new_address_count"},
 }
 
 // RequiredParams returns the param names required for type t — the contract
