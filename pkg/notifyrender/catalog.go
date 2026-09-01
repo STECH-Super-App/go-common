@@ -419,6 +419,13 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	// non-empty list means another cause still holds it dark. It can therefore
 	// never be required — the good case is the empty one.
 	//
+	// `remaining_price_stale` rides beside it and is DERIVED FROM THE SAME FIELD
+	// (`O-67`, owner ruling of 01.09.2026, option (a)): the wire sends a list, the
+	// flattening to one string happens in this package, and a flat string cannot
+	// answer «is price age among them?». It carries Р56·В-53's SECOND EDITION —
+	// the “upload a fresh price list” instruction — which the generic branch
+	// cannot express. Both are optional and both are read only behind an {{if}}.
+	//
 	// `new_address_count` carries Р31's SECOND EDITION of «Прайс обработан»
 	// («Новых адресов: N — проверьте настройку самовывоза»), owed only when the
 	// file introduced one. ExtractParams must emit "" and not "0" for a zero
@@ -429,8 +436,8 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	// never use it.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_HIDDEN_BY_ADMIN:       {"product_name"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_SANCTION_LIFTED:       {"product_name"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED:        {"remaining_causes"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED:  {"remaining_causes"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED:        {"remaining_causes", "remaining_price_stale"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED:  {"remaining_causes", "remaining_price_stale"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_BACK_IN_STOCK:         {"product_name", "price"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_FAVORITE_PRICE_DROPPED:      {"product_name"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_OFFER_APPEARED: {"product_name", "price_from"},
