@@ -207,3 +207,124 @@ func TestPartsUnmatchedPositionRendersWithoutADanglingName(t *testing.T) {
 		})
 	}
 }
+
+// TestPartsShopLiftTextsCarryTheB53Instruction pins Р56·В-53's SECOND EDITION on
+// both shop-level lift texts, and the case that makes it worth a test.
+//
+// THE RULE. When a sanction is lifted — or a company's verification restored —
+// but the shop's price list is ALREADY older than fourteen days, the storefront
+// does not come back, and the vault says the seller must be told what to do
+// rather than left waiting: «…получают хвост «…Предложения вернутся после
+// загрузки свежего прайса — текущий устарел.» — иначе продавец ждёт возврата
+// витрины, которого не будет».
+//
+// WHY IT NEEDS A DERIVED PARAM (`O-67`, owner ruling of 01.09.2026, option (a)).
+// The wire carries a LIST of remaining causes; this package flattens it to one
+// string for the generic guard, and a flat string cannot answer «is price age
+// among them?» — Go's text/template has no substring test in its default
+// function set and the renderer registers none. `remaining_price_stale` is
+// derived from the same field in ExtractParams, so nothing on the wire changed.
+//
+// ⚠ THE THIRD SUBTEST IS THE WHOLE POINT. The obvious cheaper fix,
+// `{{if eq .remaining_causes "PRICE_STALE"}}`, passes the first two cases and
+// FAILS this one: with two causes the joined string is «SHOP_PAUSED, PRICE_STALE»,
+// whole-string equality misses, and the seller silently loses the instruction —
+// in exactly the multi-cause case the rule exists for. Membership, not
+// exclusivity, is the reading.
+func TestPartsShopLiftTextsCarryTheB53Instruction(t *testing.T) {
+	r := testRendererFull(t)
+
+	types := map[string]notificationv1.NotificationType{
+		"SHOP_SANCTION_LIFTED":       notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED,
+		"SHOP_VERIFICATION_RESTORED": notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED,
+	}
+
+	cases := []struct {
+		name        string
+		causes      []string
+		wantUpload  bool
+		wantGeneric bool
+		wantBack    bool
+	}{
+		{
+			name:     "nothing left — the storefront really is back",
+			causes:   nil,
+			wantBack: true,
+		},
+		{
+			name:        "another cause, not price age — the generic pointer",
+			causes:      []string{"SHOP_PAUSED"},
+			wantGeneric: true,
+		},
+		{
+			name:       "price age alone — В-53's instruction",
+			causes:     []string{"PRICE_STALE"},
+			wantUpload: true,
+		},
+		{
+			name:       "price age AMONG others — still the instruction",
+			causes:     []string{"SHOP_PAUSED", "PRICE_STALE"},
+			wantUpload: true,
+		},
+	}
+
+	for label, nt := range types {
+		for _, tc := range cases {
+			t.Run(label+"/"+tc.name, func(t *testing.T) {
+				env := envelopeWithCauses(nt, tc.causes)
+
+				params, err := ExtractParams(env)
+				if err != nil {
+					t.Fatalf("ExtractParams: %v", err)
+				}
+
+				_, body, err := r.Render(nt, params, "en")
+				if err != nil {
+					t.Fatalf("Render: %v", err)
+				}
+
+				gotUpload := strings.Contains(body, "upload a fresh price list")
+				gotGeneric := strings.Contains(body, "another reason")
+				gotBack := strings.Contains(body, "back in the catalogue")
+
+				if gotUpload != tc.wantUpload || gotGeneric != tc.wantGeneric || gotBack != tc.wantBack {
+					t.Errorf("branch mismatch for causes %v\n  got  upload=%v generic=%v back=%v\n  want upload=%v generic=%v back=%v\n  body = %q",
+						tc.causes, gotUpload, gotGeneric, gotBack,
+						tc.wantUpload, tc.wantGeneric, tc.wantBack, body)
+				}
+
+				// Exactly one branch, always — the three are mutually exclusive by
+				// construction and a template edit must not make them overlap.
+				if n := boolCount(gotUpload, gotGeneric, gotBack); n != 1 {
+					t.Errorf("expected exactly one branch, got %d: %q", n, body)
+				}
+			})
+		}
+	}
+}
+
+func envelopeWithCauses(nt notificationv1.NotificationType, causes []string) *notificationv1.NotificationEnvelope {
+	env := &notificationv1.NotificationEnvelope{
+		Metadata: &notificationv1.EnvelopeMetadata{Type: nt},
+	}
+	if nt == notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED {
+		env.Payload = &notificationv1.NotificationEnvelope_SendPartsShopSanctionLifted{
+			SendPartsShopSanctionLifted: &notificationv1.SendPartsShopSanctionLifted{RemainingCauses: causes},
+		}
+		return env
+	}
+	env.Payload = &notificationv1.NotificationEnvelope_SendPartsShopVerificationRestored{
+		SendPartsShopVerificationRestored: &notificationv1.SendPartsShopVerificationRestored{RemainingCauses: causes},
+	}
+	return env
+}
+
+func boolCount(bs ...bool) int {
+	n := 0
+	for _, b := range bs {
+		if b {
+			n++
+		}
+	}
+	return n
+}

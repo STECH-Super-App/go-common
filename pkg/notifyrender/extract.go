@@ -447,13 +447,25 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"product_name": p.SendPartsOfferSanctionLifted.GetProductName(),
 		}, nil
+	// TWO PARAMS FROM ONE FIELD, and that is the whole point of `O-67`. The wire
+	// carries a LIST; `causesOrEmpty` flattens it to one string for the generic
+	// guard, and once flat a template can ask «is anything left?» but not «is
+	// price age among them?» — Go's text/template has no substring test in its
+	// default function set and this package registers none. Deriving the second
+	// param HERE costs no contract change, because the list never left.
 	case *notificationv1.NotificationEnvelope_SendPartsShopSanctionLifted:
+		causes := p.SendPartsShopSanctionLifted.GetRemainingCauses()
+
 		return map[string]string{
-			"remaining_causes": causesOrEmpty(p.SendPartsShopSanctionLifted.GetRemainingCauses()),
+			"remaining_causes":      causesOrEmpty(causes),
+			"remaining_price_stale": causePresent(causes, causePriceStale),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsShopVerificationRestored:
+		causes := p.SendPartsShopVerificationRestored.GetRemainingCauses()
+
 		return map[string]string{
-			"remaining_causes": causesOrEmpty(p.SendPartsShopVerificationRestored.GetRemainingCauses()),
+			"remaining_causes":      causesOrEmpty(causes),
+			"remaining_price_stale": causePresent(causes, causePriceStale),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsOfferBackInStock:
 		return map[string]string{
@@ -542,4 +554,44 @@ func countOrEmpty(n int32) string {
 // belongs in the translation catalog and not in a Join.
 func causesOrEmpty(causes []string) string {
 	return strings.Join(causes, ", ")
+}
+
+// causePriceStale is the arm name for «прайс старше 14 дней», spelled as the
+// producer spells it.
+//
+// It is `parts.storefront.v1.UnavailableCause`'s arm minus its enum prefix — the
+// same four literals `events.parts.v1.ShopVisibilityCause` and the directive's
+// own docblock carry, under the MIRROR OBLIGATION stated on the proto field. A
+// fifth spelling here would be a drift bug; if this constant ever stops matching,
+// the guard silently stops firing and the seller silently stops being told what
+// to do, which is why it is a named constant and not an inline string.
+const causePriceStale = "PRICE_STALE"
+
+// causePresent reports whether `want` is among the remaining causes, in the
+// ""/"1" shape the OPTIONAL param tier requires — empty is the only value that
+// switches an {{if}} guard off, exactly as countOrEmpty explains for counts.
+//
+// WHY A SEPARATE PARAM RATHER THAN A CLEVERER TEMPLATE. Р56·В-53 does not ask for
+// «mention that a cause remains»; it asks for one specific sentence — «Предложения
+// вернутся после загрузки свежего прайса — текущий устарел» — and gives it a
+// purpose: «иначе продавец ждёт возврата витрины, которого не будет». That
+// sentence is an INSTRUCTION, and a generic «another cause remains» is not one.
+//
+// ⚠ AND DO NOT REPLACE THIS WITH `{{if eq .remaining_causes "PRICE_STALE"}}`. It
+// renders the tail when price age is the ONLY remaining cause and falls back to
+// the generic sentence the moment the shop is also paused — so it passes every
+// single-cause test and fails exactly the multi-cause case the rule exists for.
+//
+// MEMBERSHIP, NOT EXCLUSIVITY, is the reading: В-53 conditions on «прайс уже
+// старше 14 дней» and says nothing about other causes. When another cause does
+// coexist the seller still gets the full list from PRT-10's «Почему магазин не
+// виден покупателям» block, which Р56·В-54 makes the source of truth.
+func causePresent(causes []string, want string) string {
+	for _, cause := range causes {
+		if cause == want {
+			return "1"
+		}
+	}
+
+	return ""
 }
