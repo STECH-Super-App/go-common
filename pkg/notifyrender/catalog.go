@@ -123,6 +123,99 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFERS_HIDDEN_PRICE_LIST_STALE: "parts_offers_hidden_price_list_stale",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED:           "parts_price_list_processed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED:         "parts_price_list_file_failed",
+
+	// The FORTY-NINE below are D-16a: every remaining parts type whose Russian
+	// the vault already carries, transcribed from «Уведомления запчастей.md» and
+	// composed into English here. They have no producer yet — order-service's
+	// PARTS vertical and sale-service's PartsDemand are both unbuilt — and that
+	// ordering is deliberate: D-9's gate is templates BEFORE producers, because
+	// an unmapped type does not degrade, it dead-letters on first delivery and
+	// fails the transaction that published it.
+	//
+	// TWO of the sixty-three are still absent, both for the same reason — the
+	// vault carries no text for them in ANY of its five text tables:
+	//   * PARTS_ORDER_CONTACT_HANDOVER (123, Р47) — has a recipient, a target
+	//     screen and a «не отключается» flag, and no sentence. OWNER-ANSWERS
+	//     2026-09-02 D-8 says the same. One sentence is owed.
+	//   * PARTS_SHOP_VERIFICATION_REVOKED (124, Р51) — the only one of the four
+	//     shop-level texts whose Russian was never written; the other three are
+	//     verbatim in the vault and are below.
+	// Composing English from the owner's Russian is the fleet convention.
+	// Composing the RUSSIAN would be inventing product copy, so neither is here.
+
+	// ── Р40 matching queue: the three seller directives the админка's «Очередь
+	// сопоставления» fires (71–73). Counted, never named: the reasons stay in the
+	// PRT-12 report and the push carries only how many rows moved.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_MATCHED:         "parts_positions_matched",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_PUBLISHED_RETRO: "parts_positions_published_retro",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_REJECTED:        "parts_positions_rejected",
+	// ── М-20 shop-level sanction and the Р40 badge (78, 80), plus Р56·В-52's
+	// buyer-facing notice (126). The two seller arms address «your shop»; the
+	// buyer arm keys on the buyer's own order number, which is the half B-5 left
+	// standing (see the proto's own note on that message).
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_HIDDEN_BY_ADMIN:          "parts_shop_hidden_by_admin",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFIED_BADGE_REVOKED:   "parts_shop_verified_badge_revoked",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_UNAVAILABLE_ORDER_NOTICE: "parts_shop_unavailable_order_notice",
+	// ── The order lifecycle (81–102), which order-service emits off the PARTS
+	// order aggregate. Every one of them carries `order_no` and every one of them
+	// declares it REQUIRED — the delivery vertical's `request_no` is optional only
+	// because directives emitted before numbering shipped carry it empty, and
+	// parts has no such legacy: it has no producer at all yet. After B-5 the
+	// number is also the ONLY identifier left in the sentence, so a push without
+	// one cannot be acted on when a buyer holds several live orders.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CREATED:                   "parts_order_created",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONFIRMED:                 "parts_order_confirmed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONFIRMED_PARTIALLY:       "parts_order_confirmed_partially",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_FULFILMENT_OVERDUE_SELLER: "parts_order_fulfilment_overdue_seller",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_FULFILMENT_OVERDUE_BUYER:  "parts_order_fulfilment_overdue_buyer",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_DISPATCH_REMINDER:         "parts_order_dispatch_reminder",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_READY_FOR_PICKUP:          "parts_order_ready_for_pickup",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_HANDED_TO_CARRIER:         "parts_order_handed_to_carrier",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_PICKED_UP:                 "parts_order_picked_up",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_RECEIPT_REMINDER:          "parts_order_receipt_reminder",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_RECEIPT_CONFIRMED:         "parts_order_receipt_confirmed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_AUTO_CONFIRMED_BUYER:      "parts_order_auto_confirmed_buyer",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_AUTO_CONFIRMED_SELLER:     "parts_order_auto_confirmed_seller",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_REJECTED_BY_SELLER:        "parts_order_rejected_by_seller",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CANCELLED_BY_BUYER:        "parts_order_cancelled_by_buyer",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CANCELLED_BY_SELLER:       "parts_order_cancelled_by_seller",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_RESPONSE_REMINDER:         "parts_order_response_reminder",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_EXPIRED_BUYER:             "parts_order_expired_buyer",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_EXPIRED_SELLER:            "parts_order_expired_seller",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_REPORTED:            "parts_order_issue_reported",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_RESOLVED_BUYER:      "parts_order_issue_resolved_buyer",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_RESOLVED_SELLER:     "parts_order_issue_resolved_seller",
+	// ── Подбор (103–114) plus Р56's two quote-withdrawal arms (127, 128). Same
+	// reasoning for `request_no`. SOURCING_REQUEST_CREATED is the exception that
+	// proves it: the vault's own text for that row names no number, so the param
+	// is declared OPTIONAL and left out of the baseline — a translation may still
+	// use it, which is why it is declared at all.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CREATED:               "parts_sourcing_request_created",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_RECEIVED:                "parts_sourcing_quote_received",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_NO_QUOTES_YET:                 "parts_sourcing_no_quotes_yet",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_ALL_SHOPS_DECLINED:            "parts_sourcing_all_shops_declined",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CLOSED_BY_BUYER:       "parts_sourcing_request_closed_by_buyer",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CLOSED_BY_ORDER_BUYER: "parts_sourcing_request_closed_by_order_buyer",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CLOSED_BY_ORDER_SHOP:  "parts_sourcing_request_closed_by_order_shop",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CANCELLED:             "parts_sourcing_request_cancelled",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRING:              "parts_sourcing_request_expiring",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXTENDED:              "parts_sourcing_request_extended",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRED_BUYER:         "parts_sourcing_request_expired_buyer",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRED_SHOP:          "parts_sourcing_request_expired_shop",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_SHOP_CLOSED:   "parts_sourcing_quote_withdrawn_shop_closed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_BY_SHOP:       "parts_sourcing_quote_withdrawn_by_shop",
+	// ── Р42 catalogue-addition decisions (115, 116). The addition may be PARTIAL
+	// (type only, brand only, brand without model), so all three machinery fields
+	// are optional and the texts branch on which of them arrived.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_ADDED:    "parts_catalogue_machinery_added",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED: "parts_catalogue_machinery_rejected",
+	// ── Reviews (117–120) and Р56·В-66's complaint outcome (131). REVIEW_INVITE is
+	// the second of the two parts rows the matrix also marks EMAIL.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_INVITE:              "parts_review_invite",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_REMINDER:            "parts_review_reminder",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_RECEIVED:            "parts_review_received",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_HIDDEN_BY_COMPLAINT: "parts_review_hidden_by_complaint",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_COMPLAINT_RESOLVED:  "parts_review_complaint_resolved",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -372,6 +465,183 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED: {
 		"file_name",
 	},
+
+	// ─── D-16a: the order, sourcing, catalogue, review and shop-level families ───
+	//
+	// Same two tiers as the twelve above, and the same rule for counts: a REQUIRED
+	// count goes through strconv.Itoa (a zero renders as "0", which is non-empty
+	// and therefore satisfies notifyoutbox's required-param check), an OPTIONAL one
+	// through countOrEmpty. Every count here is required — none of these rows fires
+	// with a zero that means anything.
+	//
+	// An ENUM the copy branches on is never a param. `fulfilment_kind`,
+	// `deadline_basis`, `partial_kind` and the complaint `outcome` are read in
+	// ExtractParams and turned into PAIRED "1"/"" flags, exactly as `O-67` ruled for
+	// `remaining_price_stale`. Two flags rather than one plus an {{else}} is the
+	// whole point: an absent or unrecognised enum then lights NEITHER branch, so the
+	// sentence loses a clause instead of asserting the wrong one — a pickup buyer is
+	// never told his order will be dispatched. Flags are optional by construction
+	// ("" is a legitimate value and a required empty is a publish-time rejection),
+	// which is why the raw enum keeps no required tier of its own.
+	// ── Р40 matching queue: the three seller directives the админка's «Очередь
+	// сопоставления» fires (71–73). Counted, never named: the reasons stay in the
+	// PRT-12 report and the push carries only how many rows moved.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_MATCHED: {
+		"published_count",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_PUBLISHED_RETRO: {
+		"published_count",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_REJECTED: {
+		"rejected_count",
+	},
+	// ── М-20 shop-level sanction and the Р40 badge (78, 80), plus Р56·В-52's
+	// buyer-facing notice (126). The two seller arms address «your shop»; the
+	// buyer arm keys on the buyer's own order number, which is the half B-5 left
+	// standing (see the proto's own note on that message).
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_HIDDEN_BY_ADMIN: {
+		"reason",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_UNAVAILABLE_ORDER_NOTICE: {
+		"order_no",
+	},
+	// ── The order lifecycle (81–102), which order-service emits off the PARTS
+	// order aggregate. Every one of them carries `order_no` and every one of them
+	// declares it REQUIRED — the delivery vertical's `request_no` is optional only
+	// because directives emitted before numbering shipped carry it empty, and
+	// parts has no such legacy: it has no producer at all yet. After B-5 the
+	// number is also the ONLY identifier left in the sentence, so a push without
+	// one cannot be acted on when a buyer holds several live orders.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CREATED: {
+		"order_no", "position_count", "total",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONFIRMED: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONFIRMED_PARTIALLY: {
+		"order_no", "confirmed_count", "total_count",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_FULFILMENT_OVERDUE_SELLER: {
+		"order_no", "deadline_date",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_FULFILMENT_OVERDUE_BUYER: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_DISPATCH_REMINDER: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_READY_FOR_PICKUP: {
+		"order_no", "pickup_address",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_HANDED_TO_CARRIER: {
+		"order_no", "carrier_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_PICKED_UP: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_RECEIPT_REMINDER: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_RECEIPT_CONFIRMED: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_AUTO_CONFIRMED_BUYER: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_AUTO_CONFIRMED_SELLER: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_REJECTED_BY_SELLER: {
+		"order_no", "reason",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CANCELLED_BY_BUYER: {
+		"order_no", "reason",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CANCELLED_BY_SELLER: {
+		"order_no", "reason",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_RESPONSE_REMINDER: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_EXPIRED_BUYER: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_EXPIRED_SELLER: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_REPORTED: {
+		"order_no", "reason",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_RESOLVED_BUYER: {
+		"order_no", "outcome",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_RESOLVED_SELLER: {
+		"order_no", "outcome",
+	},
+	// ── Подбор (103–114) plus Р56's two quote-withdrawal arms (127, 128). Same
+	// reasoning for `request_no`. SOURCING_REQUEST_CREATED is the exception that
+	// proves it: the vault's own text for that row names no number, so the param
+	// is declared OPTIONAL and left out of the baseline — a translation may still
+	// use it, which is why it is declared at all.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CREATED: {
+		"machinery_type", "brand",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_RECEIVED: {
+		"request_no", "position_count", "total",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_NO_QUOTES_YET: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_ALL_SHOPS_DECLINED: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CLOSED_BY_BUYER: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CLOSED_BY_ORDER_BUYER: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CLOSED_BY_ORDER_SHOP: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CANCELLED: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRING: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXTENDED: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRED_BUYER: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRED_SHOP: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_SHOP_CLOSED: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_BY_SHOP: {
+		"request_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED: {
+		"reason",
+	},
+	// ── Reviews (117–120) and Р56·В-66's complaint outcome (131). REVIEW_INVITE is
+	// the second of the two parts rows the matrix also marks EMAIL.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_INVITE: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_REMINDER: {
+		"order_no",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_RECEIVED: {
+		"rating",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_HIDDEN_BY_COMPLAINT: {
+		"reason",
+	},
 }
 
 // optionalParams declares params that MAY arrive empty (or absent) and are
@@ -443,6 +713,28 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_OFFER_APPEARED: {"product_name", "price_from"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_EXPIRING:       {"product_name"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED:        {"new_address_count"},
+
+	// ─── D-16a ───
+	//
+	// The paired branch flags described in requiredParams live here, together with
+	// the ordinary may-be-empty strings: `product_name` on an order with more than
+	// one position, `sourcing_request_no` on a catalogue order that came from no
+	// подбор, `tracking_number` before М-14's «настоятельно рекомендован» track is
+	// supplied, `ready_date` on Р37's «от оплаты» terms, `model` on a Р42 request
+	// that named none, and `request_no` on SOURCING_REQUEST_CREATED, whose vault
+	// text names no number — declared so a translation MAY use it, and left out of
+	// the baseline because the owner's sentence leaves it out.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CREATED:                   {"product_name", "sourcing_request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONFIRMED:                 {"ready_date", "is_pickup", "is_carrier", "is_from_payment"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONFIRMED_PARTIALLY:       {"is_positions_removed", "is_quantity_reduced"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_FULFILMENT_OVERDUE_SELLER: {"is_pickup", "is_carrier"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_FULFILMENT_OVERDUE_BUYER:  {"is_pickup", "is_carrier"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_HANDED_TO_CARRIER:         {"tracking_number"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CREATED:        {"model", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CANCELLED:      {"reason"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_ADDED:       {"machinery_type", "brand", "model"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED:    {"machinery_type", "brand", "model"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_COMPLAINT_RESOLVED:       {"outcome_hidden", "outcome_no_violation"},
 }
 
 // RequiredParams returns the param names required for type t — the contract
