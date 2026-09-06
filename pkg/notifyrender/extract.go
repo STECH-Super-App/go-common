@@ -510,6 +510,270 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"file_name": p.SendPartsPriceListFileFailed.GetFileName(),
 		}, nil
+
+	// ─── D-16a: the order, sourcing, catalogue, review and shop-level arms ───
+	//
+	// Same three prohibitions as above — no shop name, no currency, no id — and one
+	// addition of its own.
+	//
+	// AN ENUM ON THE WIRE BECOMES A PAIR OF FLAGS HERE, NEVER A PARAM. Four fields
+	// pick between editions of a sentence rather than appearing in one:
+	// `fulfilment_kind` (PICKUP | CARRIER), `deadline_basis` (CALENDAR |
+	// FROM_PAYMENT), `partial_kind` (POSITIONS_REMOVED | QUANTITY_REDUCED) and the
+	// В-66 complaint `outcome` (HIDDEN | NO_VIOLATION). Each is turned into "1"/""
+	// flags by flagWhen, exactly as `remaining_price_stale` is by causePresent, and
+	// for the same stated reason: the template can then ask a question the
+	// renderer's function set cannot answer, and the catalog validators — which
+	// only ever see a literal {{.name}} — keep working.
+	//
+	// BOTH ARMS GET A FLAG. `{{if .is_pickup}}…{{else}}…{{end}}` would be shorter
+	// and is wrong: an absent or unrecognised `fulfilment_kind` falls into the
+	// else, and the buyer of a PICKUP order is then told his parcel is on its way.
+	// With a flag on each arm the unknown value lights neither, the clause is
+	// simply not printed, and the sentence stays true — which is the only failure
+	// mode a push may have. TestPartsBranchFlagsNeverAssertTheWrongEdition pins it.
+	case *notificationv1.NotificationEnvelope_SendPartsPositionsMatched:
+		return map[string]string{
+			"published_count": strconv.Itoa(int(p.SendPartsPositionsMatched.GetPublishedCount())),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsPositionsPublishedRetro:
+		return map[string]string{
+			"published_count": strconv.Itoa(int(p.SendPartsPositionsPublishedRetro.GetPublishedCount())),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsPositionsRejected:
+		return map[string]string{
+			"rejected_count": strconv.Itoa(int(p.SendPartsPositionsRejected.GetRejectedCount())),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsShopHiddenByAdmin:
+		return map[string]string{
+			"reason": p.SendPartsShopHiddenByAdmin.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsShopVerifiedBadgeRevoked:
+		return map[string]string{}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsShopUnavailableOrderNotice:
+		return map[string]string{
+			"order_no": p.SendPartsShopUnavailableOrderNotice.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderCreated:
+		return map[string]string{
+			"order_no":            p.SendPartsOrderCreated.GetOrderNo(),
+			"product_name":        p.SendPartsOrderCreated.GetProductName(),
+			"position_count":      strconv.Itoa(int(p.SendPartsOrderCreated.GetPositionCount())),
+			"total":               p.SendPartsOrderCreated.GetTotal(),
+			"sourcing_request_no": p.SendPartsOrderCreated.GetSourcingRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderConfirmed:
+		kind := p.SendPartsOrderConfirmed.GetFulfilmentKind()
+
+		return map[string]string{
+			"order_no":        p.SendPartsOrderConfirmed.GetOrderNo(),
+			"ready_date":      p.SendPartsOrderConfirmed.GetReadyDate(),
+			"is_pickup":       flagWhen(kind, fulfilmentPickup),
+			"is_carrier":      flagWhen(kind, fulfilmentCarrier),
+			"is_from_payment": flagWhen(p.SendPartsOrderConfirmed.GetDeadlineBasis(), deadlineFromPayment),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderConfirmedPartially:
+		partial := p.SendPartsOrderConfirmedPartially.GetPartialKind()
+
+		return map[string]string{
+			"order_no":             p.SendPartsOrderConfirmedPartially.GetOrderNo(),
+			"confirmed_count":      strconv.Itoa(int(p.SendPartsOrderConfirmedPartially.GetConfirmedCount())),
+			"total_count":          strconv.Itoa(int(p.SendPartsOrderConfirmedPartially.GetTotalCount())),
+			"is_positions_removed": flagWhen(partial, partialPositionsRemoved),
+			"is_quantity_reduced":  flagWhen(partial, partialQuantityReduced),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderFulfilmentOverdueSeller:
+		kind := p.SendPartsOrderFulfilmentOverdueSeller.GetFulfilmentKind()
+
+		return map[string]string{
+			"order_no":      p.SendPartsOrderFulfilmentOverdueSeller.GetOrderNo(),
+			"deadline_date": p.SendPartsOrderFulfilmentOverdueSeller.GetDeadlineDate(),
+			"is_pickup":     flagWhen(kind, fulfilmentPickup),
+			"is_carrier":    flagWhen(kind, fulfilmentCarrier),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderFulfilmentOverdueBuyer:
+		kind := p.SendPartsOrderFulfilmentOverdueBuyer.GetFulfilmentKind()
+
+		return map[string]string{
+			"order_no":   p.SendPartsOrderFulfilmentOverdueBuyer.GetOrderNo(),
+			"is_pickup":  flagWhen(kind, fulfilmentPickup),
+			"is_carrier": flagWhen(kind, fulfilmentCarrier),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderDispatchReminder:
+		return map[string]string{
+			"order_no": p.SendPartsOrderDispatchReminder.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderReadyForPickup:
+		return map[string]string{
+			"order_no":       p.SendPartsOrderReadyForPickup.GetOrderNo(),
+			"pickup_address": p.SendPartsOrderReadyForPickup.GetPickupAddress(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderHandedToCarrier:
+		return map[string]string{
+			"order_no":        p.SendPartsOrderHandedToCarrier.GetOrderNo(),
+			"carrier_name":    p.SendPartsOrderHandedToCarrier.GetCarrierName(),
+			"tracking_number": p.SendPartsOrderHandedToCarrier.GetTrackingNumber(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderPickedUp:
+		return map[string]string{
+			"order_no": p.SendPartsOrderPickedUp.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderReceiptReminder:
+		return map[string]string{
+			"order_no": p.SendPartsOrderReceiptReminder.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderReceiptConfirmed:
+		return map[string]string{
+			"order_no": p.SendPartsOrderReceiptConfirmed.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderAutoConfirmedBuyer:
+		return map[string]string{
+			"order_no": p.SendPartsOrderAutoConfirmedBuyer.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderAutoConfirmedSeller:
+		return map[string]string{
+			"order_no": p.SendPartsOrderAutoConfirmedSeller.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderRejectedBySeller:
+		return map[string]string{
+			"order_no": p.SendPartsOrderRejectedBySeller.GetOrderNo(),
+			"reason":   p.SendPartsOrderRejectedBySeller.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderCancelledByBuyer:
+		return map[string]string{
+			"order_no": p.SendPartsOrderCancelledByBuyer.GetOrderNo(),
+			"reason":   p.SendPartsOrderCancelledByBuyer.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderCancelledBySeller:
+		return map[string]string{
+			"order_no": p.SendPartsOrderCancelledBySeller.GetOrderNo(),
+			"reason":   p.SendPartsOrderCancelledBySeller.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderResponseReminder:
+		return map[string]string{
+			"order_no": p.SendPartsOrderResponseReminder.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderExpiredBuyer:
+		return map[string]string{
+			"order_no": p.SendPartsOrderExpiredBuyer.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderExpiredSeller:
+		return map[string]string{
+			"order_no": p.SendPartsOrderExpiredSeller.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderIssueReported:
+		return map[string]string{
+			"order_no": p.SendPartsOrderIssueReported.GetOrderNo(),
+			"reason":   p.SendPartsOrderIssueReported.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderIssueResolvedBuyer:
+		return map[string]string{
+			"order_no": p.SendPartsOrderIssueResolvedBuyer.GetOrderNo(),
+			"outcome":  p.SendPartsOrderIssueResolvedBuyer.GetOutcome(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsOrderIssueResolvedSeller:
+		return map[string]string{
+			"order_no": p.SendPartsOrderIssueResolvedSeller.GetOrderNo(),
+			"outcome":  p.SendPartsOrderIssueResolvedSeller.GetOutcome(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestCreated:
+		return map[string]string{
+			"request_no":     p.SendPartsSourcingRequestCreated.GetRequestNo(),
+			"machinery_type": p.SendPartsSourcingRequestCreated.GetMachineryType(),
+			"brand":          p.SendPartsSourcingRequestCreated.GetBrand(),
+			"model":          p.SendPartsSourcingRequestCreated.GetModel(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingQuoteReceived:
+		return map[string]string{
+			"request_no":     p.SendPartsSourcingQuoteReceived.GetRequestNo(),
+			"position_count": strconv.Itoa(int(p.SendPartsSourcingQuoteReceived.GetPositionCount())),
+			"total":          p.SendPartsSourcingQuoteReceived.GetTotal(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingNoQuotesYet:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingNoQuotesYet.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingAllShopsDeclined:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingAllShopsDeclined.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestClosedByBuyer:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingRequestClosedByBuyer.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestClosedByOrderBuyer:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingRequestClosedByOrderBuyer.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestClosedByOrderShop:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingRequestClosedByOrderShop.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestCancelled:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingRequestCancelled.GetRequestNo(),
+			"reason":     p.SendPartsSourcingRequestCancelled.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestExpiring:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingRequestExpiring.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestExtended:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingRequestExtended.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestExpiredBuyer:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingRequestExpiredBuyer.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestExpiredShop:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingRequestExpiredShop.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingQuoteWithdrawnShopClosed:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingQuoteWithdrawnShopClosed.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsSourcingQuoteWithdrawnByShop:
+		return map[string]string{
+			"request_no": p.SendPartsSourcingQuoteWithdrawnByShop.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsCatalogueMachineryAdded:
+		return map[string]string{
+			"machinery_type": p.SendPartsCatalogueMachineryAdded.GetMachineryType(),
+			"brand":          p.SendPartsCatalogueMachineryAdded.GetBrand(),
+			"model":          p.SendPartsCatalogueMachineryAdded.GetModel(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsCatalogueMachineryRejected:
+		return map[string]string{
+			"machinery_type": p.SendPartsCatalogueMachineryRejected.GetMachineryType(),
+			"brand":          p.SendPartsCatalogueMachineryRejected.GetBrand(),
+			"model":          p.SendPartsCatalogueMachineryRejected.GetModel(),
+			"reason":         p.SendPartsCatalogueMachineryRejected.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsReviewInvite:
+		return map[string]string{
+			"order_no": p.SendPartsReviewInvite.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsReviewReminder:
+		return map[string]string{
+			"order_no": p.SendPartsReviewReminder.GetOrderNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsReviewReceived:
+		return map[string]string{
+			"rating": strconv.Itoa(int(p.SendPartsReviewReceived.GetRating())),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsReviewHiddenByComplaint:
+		return map[string]string{
+			"reason": p.SendPartsReviewHiddenByComplaint.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsReviewComplaintResolved:
+		outcome := p.SendPartsReviewComplaintResolved.GetOutcome()
+
+		return map[string]string{
+			"outcome_hidden":       flagWhen(outcome, complaintOutcomeHidden),
+			"outcome_no_violation": flagWhen(outcome, complaintOutcomeNoViolation),
+		}, nil
 	default:
 		// A payload IS set (the nil case is caught by the guard at the top) but no
 		// case matched it — a directive variant that reached this package without a
@@ -595,3 +859,46 @@ func causePresent(causes []string, want string) string {
 
 	return ""
 }
+
+// flagWhen renders the ""/"1" flag an OPTIONAL param must carry for an {{if}}
+// guard, from a wire enum that picks between editions of one sentence.
+//
+// It is causePresent's single-valued twin — same shape, same reason ("" is the
+// only value that switches a guard off), different question: causePresent asks
+// «is this cause among the remaining ones?», flagWhen asks «is the field exactly
+// this value?».
+//
+// USE IT IN PAIRS. Every caller here derives a flag for BOTH arms of a two-valued
+// enum instead of one flag and an {{else}}, so that an empty or unrecognised
+// value lights neither branch. That turns a producer bug into a missing clause
+// rather than a false statement — the buyer of a PICKUP order is never told his
+// order was dispatched, and a complaint with no recorded outcome is never
+// reported as resolved in the complainant's favour.
+func flagWhen(got, want string) string {
+	if got == want {
+		return "1"
+	}
+
+	return ""
+}
+
+// The wire vocabularies flagWhen compares against, spelled as directives.proto
+// documents them on each field. They are constants for the same reason
+// causePriceStale is: a fifth spelling is a silent drift bug — the guard simply
+// stops firing and the reader silently stops being told the thing the rule
+// exists to tell him.
+const (
+	// SendPartsOrderConfirmed / …FulfilmentOverdue* `fulfilment_kind` (М-23).
+	fulfilmentPickup  = "PICKUP"
+	fulfilmentCarrier = "CARRIER"
+	// SendPartsOrderConfirmed `deadline_basis` (Р37, Р39-№1). CALENDAR is the
+	// other arm and needs no constant: it is the one with a date, and the date
+	// itself is what the template reads.
+	deadlineFromPayment = "FROM_PAYMENT"
+	// SendPartsOrderConfirmedPartially `partial_kind` (Р56·В-56).
+	partialPositionsRemoved = "POSITIONS_REMOVED"
+	partialQuantityReduced  = "QUANTITY_REDUCED"
+	// SendPartsReviewComplaintResolved `outcome` (Р56·В-66).
+	complaintOutcomeHidden      = "HIDDEN"
+	complaintOutcomeNoViolation = "NO_VIOLATION"
+)

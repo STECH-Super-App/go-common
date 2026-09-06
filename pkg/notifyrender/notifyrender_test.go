@@ -1487,6 +1487,35 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	} {
 		declared[nt] = true
 	}
+	// parts, D-16a — eleven more, and the same hand-listing discipline:
+	//   • product_name / model / tracking_number / ready_date / reason /
+	//     sourcing_request_no — ordinary may-be-empty strings, each read behind an
+	//     {{if}} guard so an empty one drops its clause instead of dangling;
+	//   • request_no on SOURCING_REQUEST_CREATED — declared so a translation may
+	//     use it, deliberately unused by the baseline because the vault's own text
+	//     for that row names no number;
+	//   • machinery_type / brand — Р42 additions may be PARTIAL, so each element
+	//     collapses independently;
+	//   • is_pickup / is_carrier / is_from_payment / is_positions_removed /
+	//     is_quantity_reduced / outcome_hidden / outcome_no_violation — the PAIRED
+	//     branch flags flagWhen derives from a wire enum. They are optional by
+	//     construction: "" is their legitimate false, and a required empty is a
+	//     publish-time rejection.
+	for _, nt := range []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CREATED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONFIRMED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONFIRMED_PARTIALLY,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_FULFILMENT_OVERDUE_SELLER,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_FULFILMENT_OVERDUE_BUYER,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_HANDED_TO_CARRIER,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CREATED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CANCELLED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_ADDED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_COMPLAINT_RESOLVED,
+	} {
+		declared[nt] = true
+	}
 	for typ, params := range optionalParams {
 		if !declared[typ] {
 			t.Errorf("unexpected optional params %v on type %v", params, typ)
@@ -1496,12 +1525,24 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 		t.Errorf("optionalParams has %d entries, want %d", len(optionalParams), len(declared))
 	}
 
+	// request_no must appear only where its type DECLARES it. Until D-16a that
+	// was the same statement as «only on delivery», because delivery was the only
+	// vertical with a numbered request; parts' подбор now carries one too, and
+	// carries it REQUIRED rather than optional (it has no legacy producer to
+	// accommodate — see catalog.go). Checking the declaration rather than the
+	// whitelist keeps the original defect caught — a rent or platform template
+	// growing a stray «#{{.request_no}}» still fails here, because those types
+	// declare no such param at all — while admitting the tier it legitimately
+	// belongs to now.
+	// Matched on the PLACEHOLDER, not on the substring: parts' own
+	// «по заявке #{{.sourcing_request_no}}» contains «request_no» and is a
+	// different param on a different field.
 	for key, tmpl := range BaselineEN {
-		if !strings.Contains(tmpl, "request_no") {
+		if !contains(extractPlaceholders(tmpl), "request_no") {
 			continue
 		}
 		section := strings.TrimSuffix(strings.TrimSuffix(key, ".title"), ".body")
-		if !declared[sectionToType[section]] {
+		if !contains(allowedParams(sectionToType[section]), "request_no") {
 			t.Errorf("baseline %q references request_no but its type does not declare it", key)
 		}
 	}
@@ -1943,10 +1984,18 @@ func TestExtractAndRender_PartsPriceListFileFailed(t *testing.T) {
 // parts type WITHOUT an ExtractParams case must error rather than render empty.
 // If this ever passes silently, the publish-time gate has been removed and a
 // missing directive becomes a silent no-op instead of a rolled-back import.
+//
+// The specimen was SendPartsSourcingNoQuotesYet until D-16a mapped it. It is now
+// SendPartsOrderContactHandover — Р47, one of the two types the vault gives a
+// recipient, a target screen and a «не отключается» flag and no sentence in any
+// of its five text tables, which is why it is still unmapped and why it is the
+// honest specimen: an arbitrary unmapped type would be a stub waiting to be
+// filled, this one is a decision waiting on the owner (OWNER-ANSWERS D-8).
+// SendPartsShopVerificationRevoked (124) is the other and would serve equally.
 func TestPartsUnmappedTypeStillFailsClosed(t *testing.T) {
 	env := &notificationv1.NotificationEnvelope{
-		Payload: &notificationv1.NotificationEnvelope_SendPartsSourcingNoQuotesYet{
-			SendPartsSourcingNoQuotesYet: &notificationv1.SendPartsSourcingNoQuotesYet{},
+		Payload: &notificationv1.NotificationEnvelope_SendPartsOrderContactHandover{
+			SendPartsOrderContactHandover: &notificationv1.SendPartsOrderContactHandover{},
 		},
 	}
 	if _, err := ExtractParams(env); err == nil {
