@@ -554,6 +554,12 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"order_no": p.SendPartsShopUnavailableOrderNotice.GetOrderNo(),
 		}, nil
+	// Р51's revocation (124) carries NOTHING: `shop_name` was its only field and
+	// B-5 reserved it, so the message is empty by construction. An empty map is
+	// the arm — not a missing case — because the two are worlds apart downstream:
+	// a missing case is ErrUnknownType inside the producer's transaction.
+	case *notificationv1.NotificationEnvelope_SendPartsShopVerificationRevoked:
+		return map[string]string{}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsOrderCreated:
 		return map[string]string{
 			"order_no":            p.SendPartsOrderCreated.GetOrderNo(),
@@ -675,6 +681,30 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"order_no": p.SendPartsOrderIssueResolvedSeller.GetOrderNo(),
 			"outcome":  p.SendPartsOrderIssueResolvedSeller.GetOutcome(),
+		}, nil
+	// Р47's bulk handover (123). `orders_moved` is REQUIRED and therefore goes
+	// through strconv.Itoa and never countOrEmpty: the door emits nothing at all
+	// on a run that moved no orders, so a zero cannot reach a reader, and blanking
+	// it would reject the directive at publish time. `request_count` is its exact
+	// opposite — a handover that moved no заявки is ordinary, and the proto rules
+	// that such a run «renders the orders half only», which is a guard and
+	// therefore countOrEmpty.
+	//
+	// `order_no` is read and deliberately not printed by the baseline: it is the
+	// ONE order the deep link opens, «never a summary of all of them», and Р47's
+	// sentence names no number. Declared optional so a translation MAY use it —
+	// the same treatment SOURCING_REQUEST_CREATED's `request_no` gets.
+	//
+	// `tenant_name` and `from_user_name` are on the wire and are NOT read here.
+	// C31 bars a tenant name from any directive, order-service holds no display
+	// names at all (every name on this platform is client-hydrated from an id),
+	// and the producer leaves both empty by construction — so the copy says «your
+	// team» and reading them would only put "" onto a template.
+	case *notificationv1.NotificationEnvelope_SendPartsOrderContactHandover:
+		return map[string]string{
+			"orders_moved":  strconv.Itoa(int(p.SendPartsOrderContactHandover.GetOrdersMoved())),
+			"request_count": countOrEmpty(p.SendPartsOrderContactHandover.GetRequestCount()),
+			"order_no":      p.SendPartsOrderContactHandover.GetOrderNo(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestCreated:
 		return map[string]string{

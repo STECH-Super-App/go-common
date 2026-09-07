@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // partsLiveCase is one directive as it appears on the wire: the type its
@@ -333,38 +334,35 @@ func boolCount(bs ...bool) int {
 //
 // The fixtures above are a REPRODUCTION of directives that exist on the wire
 // today, so they stop at the twelve types a producer can emit. The tests below
-// cover the set instead of the traffic: after D-16a, sixty-one of the
-// sixty-three declared parts types render, and the two that do not are named,
-// not merely missing.
+// cover the set instead of the traffic: after D-16a and the two entries added on
+// 07.09.2026, ALL SIXTY-THREE declared parts types render.
 
-// partsUnmappedByDesign are the only parts types allowed to have no catalog
-// entry, and the reason is the same for both: «Уведомления запчастей.md» has
-// FIVE text tables and neither type appears in any of them, so there is no
-// Russian to transcribe and composing some would be inventing product copy.
+// partsUnmappedByDesign are the parts types allowed to have no catalog entry.
+// IT IS EMPTY, and that is the point of the 07.09.2026 pass: the last two —
+// PARTS_ORDER_CONTACT_HANDOVER (123, Р47) and PARTS_SHOP_VERIFICATION_REVOKED
+// (124, Р51) — are mapped, so every declared parts type renders.
 //
-//   - PARTS_ORDER_CONTACT_HANDOVER (123, Р47) — the vault gives it a recipient
-//     («Преемник (Владелец или Менеджер команды)»), a target screen
-//     (PROF-PRT-01) and «не отключается», and no sentence. OWNER-ANSWERS
-//     2026-09-02 D-8 records the same finding.
-//   - PARTS_SHOP_VERIFICATION_REVOKED (124, Р51) — the fourth of the shop-level
-//     texts; the other three («Магазин скрыт администратором», «Бейдж
-//     «ПРОВЕРЕНО» снят», «Магазин «[название]» временно недоступен») are
-//     verbatim in the vault and are mapped.
+// The list survives its own emptying because it is the shape the exemption has
+// to take if one is ever wanted again, and because an empty map states the
+// invariant far more loudly than a deleted one: ADDING a line here is a
+// REGRESSION. It would mean a NotificationType shipped without the text that
+// makes it renderable, and an unmapped type does not skip — inbox-service wraps
+// ErrUnknownType raw with no retry tier, so the directive dead-letters on FIRST
+// delivery, and notifyoutbox rejects it inside the producer's transaction before
+// that.
 //
-// Shrinking this list is the goal. GROWING it is a regression: it would mean a
-// new NotificationType shipped without the text that makes it renderable, and
-// an unmapped type does not skip — inbox-service wraps ErrUnknownType raw with
-// no retry tier, so the directive dead-letters on FIRST delivery.
-var partsUnmappedByDesign = map[notificationv1.NotificationType]string{
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER:    "Р47 — no text in any of the vault's five tables (owner answer D-8)",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_REVOKED: "Р51 — the one shop-level text the vault never wrote",
-}
+// ⚠ MAPPED IS NOT TRANSLATED. 124's Russian is still owed by the owner
+// («Уведомления запчастей.md» carries no row for it in any of its five text
+// tables), so a ru reader falls back to the English baseline until that sentence
+// arrives. That is a translation debt, and it is deliberately NOT modelled as an
+// exemption here: the type renders, which is what this file is about.
+var partsUnmappedByDesign = map[notificationv1.NotificationType]string{}
 
-// TestPartsCatalogCoversEveryDeclaredTypeButTheTwoWithNoText walks the proto
-// enum rather than a hand-written list, so it sees a sixty-fourth parts type the
-// moment gen-go-lib carries one — which is exactly when somebody needs to be
-// told that a template is owed before the producer lands (D-9's ordering gate).
-func TestPartsCatalogCoversEveryDeclaredTypeButTheTwoWithNoText(t *testing.T) {
+// TestPartsCatalogCoversEveryDeclaredType walks the proto enum rather than a
+// hand-written list, so it sees a sixty-fourth parts type the moment gen-go-lib
+// carries one — which is exactly when somebody needs to be told that a template
+// is owed before the producer lands (D-9's ordering gate).
+func TestPartsCatalogCoversEveryDeclaredType(t *testing.T) {
 	declared := 0
 	for value, name := range notificationv1.NotificationType_name {
 		if !strings.HasPrefix(name, "NOTIFICATION_TYPE_PARTS_") {
@@ -396,8 +394,8 @@ func TestPartsCatalogCoversEveryDeclaredTypeButTheTwoWithNoText(t *testing.T) {
 	if declared != 63 {
 		t.Errorf("proto declares %d NOTIFICATION_TYPE_PARTS_* values, expected 63 — a type was added or removed, and this test is the place that has to notice", declared)
 	}
-	if len(partsUnmappedByDesign) != 2 {
-		t.Errorf("partsUnmappedByDesign has %d entries, want 2", len(partsUnmappedByDesign))
+	if len(partsUnmappedByDesign) != 0 {
+		t.Errorf("partsUnmappedByDesign has %d entries, want 0 — every declared parts type has had a catalog entry since 07.09.2026, and a new exemption is a type that will dead-letter on first delivery", len(partsUnmappedByDesign))
 	}
 }
 
@@ -656,15 +654,21 @@ func complaintEnv(m *notificationv1.SendPartsReviewComplaintResolved) *notificat
 	}
 }
 
-// TestNoPartsTemplateReadsAShopName is B-5's structural lock, and it is not
-// hypothetical bookkeeping: the gen-go-lib this module pins
-// (v0.0.0-20260821100229-a79231a125a5) PREDATES the 31.08.2026 removal, so
-// `ShopName` still exists as a Go field on most SendParts* structs and a reader
-// added by habit would compile, pass every happy-path test, and quietly put a
-// name into copy the owner removed the field for.
+// TestNoPartsTemplateReadsAShopName is B-5's structural lock.
 //
-// The check has two halves because the mistake has two shapes: a template that
-// declares the param, and an extraction arm that returns it under any name.
+// ⚠ ITS SECOND HALF CHANGED SHAPE ON 07.09.2026, and the reason is the fix
+// landing rather than the check weakening. It used to build SendParts* payloads
+// with a `ShopName` sentinel and assert no param carried it, which was possible
+// only because the pinned gen-go-lib (v0.0.0-20260821100229) PREDATED the
+// 31.08.2026 removal. This module now pins a gen-go-lib generated after it:
+// `shop_name` is `reserved` on all 53 messages that carried it, there is no Go
+// field left to set, and the old literals no longer compile.
+//
+// So the question moves up one level — to the DESCRIPTORS, which have no
+// compile-time escape hatch and which keep answering after every regeneration.
+// The check still has two halves because the mistake still has two shapes: a
+// template that declares the param, and a payload that offers a field for one to
+// be read from.
 func TestNoPartsTemplateReadsAShopName(t *testing.T) {
 	for nt, key := range typeKey {
 		if !strings.HasPrefix(key, "parts_") {
@@ -677,31 +681,28 @@ func TestNoPartsTemplateReadsAShopName(t *testing.T) {
 		}
 	}
 
-	const sentinel = "ООО «Ромашка-Запчасть»"
-	envs := []*notificationv1.NotificationEnvelope{
-		confirmedEnv(&notificationv1.SendPartsOrderConfirmed{OrderNo: "1", ShopName: sentinel, FulfilmentKind: "PICKUP", ReadyDate: "2026-09-10"}),
-		partialEnv(&notificationv1.SendPartsOrderConfirmedPartially{OrderNo: "1", ShopName: sentinel, PartialKind: "POSITIONS_REMOVED", ConfirmedCount: 1, TotalCount: 2}),
-		complaintEnv(&notificationv1.SendPartsReviewComplaintResolved{ShopName: sentinel, Outcome: "HIDDEN"}),
-		{Payload: &notificationv1.NotificationEnvelope_SendPartsOrderCreated{
-			SendPartsOrderCreated: &notificationv1.SendPartsOrderCreated{ShopName: sentinel, OrderNo: "1", PositionCount: 2, Total: "5 200"},
-		}},
-		{Payload: &notificationv1.NotificationEnvelope_SendPartsSourcingQuoteReceived{
-			SendPartsSourcingQuoteReceived: &notificationv1.SendPartsSourcingQuoteReceived{RequestNo: "7", ShopName: sentinel, PositionCount: 3, Total: "9 900"},
-		}},
-		{Payload: &notificationv1.NotificationEnvelope_SendPartsReviewInvite{
-			SendPartsReviewInvite: &notificationv1.SendPartsReviewInvite{OrderNo: "1", ShopName: sentinel},
-		}},
-	}
-
-	for _, env := range envs {
-		params, err := ExtractParams(env)
-		if err != nil {
-			t.Fatalf("ExtractParams: %v", err)
+	// Second half: no SendParts* payload DECLARES a shop name any more, so no arm
+	// can read one even by habit. Walking the envelope's oneof rather than a list
+	// means a message added later is checked the moment it is generated.
+	oneof := (&notificationv1.NotificationEnvelope{}).ProtoReflect().Descriptor().Fields()
+	walked := 0
+	for i := 0; i < oneof.Len(); i++ {
+		fd := oneof.Get(i)
+		if fd.Kind() != protoreflect.MessageKind {
+			continue
 		}
-		for name, value := range params {
-			if strings.Contains(value, sentinel) {
-				t.Errorf("param %q carries the shop name %q — the arm reads a field B-5 reserved", name, value)
+		payload := fd.Message()
+		if !strings.HasPrefix(string(payload.Name()), "SendParts") {
+			continue
+		}
+		walked++
+		for j := 0; j < payload.Fields().Len(); j++ {
+			if name := string(payload.Fields().Get(j).Name()); strings.Contains(name, "shop_name") {
+				t.Errorf("%s declares field %q — B-5 removed shop_name from all 53 SendParts* messages", payload.Name(), name)
 			}
 		}
+	}
+	if walked != 63 {
+		t.Errorf("walked %d SendParts* payloads, want 63 — the oneof changed shape and this check may be looking at nothing", walked)
 	}
 }
