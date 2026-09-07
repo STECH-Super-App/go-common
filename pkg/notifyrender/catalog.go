@@ -132,16 +132,23 @@ var typeKey = map[notificationv1.NotificationType]string{
 	// an unmapped type does not degrade, it dead-letters on first delivery and
 	// fails the transaction that published it.
 	//
-	// TWO of the sixty-three are still absent, both for the same reason — the
-	// vault carries no text for them in ANY of its five text tables:
-	//   * PARTS_ORDER_CONTACT_HANDOVER (123, Р47) — has a recipient, a target
-	//     screen and a «не отключается» flag, and no sentence. OWNER-ANSWERS
-	//     2026-09-02 D-8 says the same. One sentence is owed.
-	//   * PARTS_SHOP_VERIFICATION_REVOKED (124, Р51) — the only one of the four
-	//     shop-level texts whose Russian was never written; the other three are
-	//     verbatim in the vault and are below.
-	// Composing English from the owner's Russian is the fleet convention.
-	// Composing the RUSSIAN would be inventing product copy, so neither is here.
+	// ALL SIXTY-THREE ARE MAPPED since 07.09.2026. The two that used to be absent
+	// here — PARTS_ORDER_CONTACT_HANDOVER (123) and PARTS_SHOP_VERIFICATION_REVOKED
+	// (124) — are below, each beside its own family, and the note that used to
+	// stand here was wrong about the first of them:
+	//   * 123 (Р47) HAS Russian. «Правила запчастей» ^m18 carries the sentence;
+	//     it is the notification MATRIX that has no row for it. It renders in its
+	//     COLLAPSED form — «вашей команды», not «команды [название]» — because
+	//     C31 bars a tenant name from any directive and order-service holds no
+	//     display names to put there. That divergence is recorded, and reversing
+	//     it is one line here plus a name resolution the write path does not
+	//     currently make.
+	//   * 124 (Р51) genuinely has none, in any of the five tables. Its English is
+	//     composed from the rule and from its own mirror image; the RUSSIAN is
+	//     still owed by the owner and is NOT invented here.
+	// Composing English from the owner's Russian is the fleet convention;
+	// composing the Russian is not, which is why 124's ru is a debt and not a
+	// string.
 
 	// ── Р40 matching queue: the three seller directives the админка's «Очередь
 	// сопоставления» fires (71–73). Counted, never named: the reasons stay in the
@@ -156,6 +163,18 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_HIDDEN_BY_ADMIN:          "parts_shop_hidden_by_admin",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFIED_BADGE_REVOKED:   "parts_shop_verified_badge_revoked",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_UNAVAILABLE_ORDER_NOTICE: "parts_shop_unavailable_order_notice",
+	// Р51's revocation arm (124), the fourth shop-level text and the one the
+	// vault never wrote. ⚠ ITS RUSSIAN IS STILL OWED BY THE OWNER: «Уведомления
+	// запчастей.md» carries no row for it in any of its five text tables, so the
+	// en baseline below is composed from Р51 itself and from its own mirror image
+	// (parts_shop_verification_restored), and a ru reader falls back to that
+	// English until the owner writes the sentence.
+	//
+	// It is mapped ANYWAY, and that is D-9's ordering gate rather than an
+	// oversight: an unmapped type does not degrade to «no push» — ExtractParams
+	// errors INSIDE the publishing transaction, so the revocation that emits it
+	// would roll back rather than send a less-than-final notice.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_REVOKED: "parts_shop_verification_revoked",
 	// ── The order lifecycle (81–102), which order-service emits off the PARTS
 	// order aggregate. Every one of them carries `order_no` and every one of them
 	// declares it REQUIRED — the delivery vertical's `request_no` is optional only
@@ -185,6 +204,16 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_REPORTED:            "parts_order_issue_reported",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_RESOLVED_BUYER:      "parts_order_issue_resolved_buyer",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_RESOLVED_SELLER:     "parts_order_issue_resolved_seller",
+	// Р47's bulk contact handover (123), which order-service emits once per run
+	// from the team door — never once per order, because the vault's sentence is
+	// plural and a per-order push would fire N times.
+	//
+	// ITS RUSSIAN EXISTS and the earlier note here saying otherwise was wrong
+	// (owner correction of 07.09.2026): «Правила запчастей» ^m18 carries «На вас
+	// перенесены N заказов и M заявок команды [название]». What the row lacks is
+	// a line in the notification MATRIX, which is a different absence — the text
+	// is the owner's, only the table is silent.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER: "parts_order_contact_handover",
 	// ── Подбор (103–114) plus Р56's two quote-withdrawal arms (127, 128). Same
 	// reasoning for `request_no`. SOURCING_REQUEST_CREATED is the exception that
 	// proves it: the vault's own text for that row names no number, so the param
@@ -578,6 +607,19 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_ISSUE_RESOLVED_SELLER: {
 		"order_no", "outcome",
 	},
+	// Р47's handover (123) is the ONE order-family row that does not require
+	// `order_no`, and the reason is what the number MEANS here: it is the single
+	// order the deep link opens, not the subject of the sentence — one run moves
+	// N of them and Р47's text names none. It is declared OPTIONAL below, exactly
+	// as SOURCING_REQUEST_CREATED's `request_no` is, so a translation may use it.
+	//
+	// `orders_moved` is required and can never arrive as a meaningless zero: the
+	// door emits nothing at all on a run that moved no orders. `request_count`
+	// CAN legitimately be zero — the proto says such a run «renders the orders
+	// half only» — so it is a guarded optional, not a required count.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER: {
+		"orders_moved",
+	},
 	// ── Подбор (103–114) plus Р56's two quote-withdrawal arms (127, 128). Same
 	// reasoning for `request_no`. SOURCING_REQUEST_CREATED is the exception that
 	// proves it: the vault's own text for that row names no number, so the param
@@ -731,6 +773,7 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_FULFILMENT_OVERDUE_BUYER:  {"is_pickup", "is_carrier"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_HANDED_TO_CARRIER:         {"tracking_number"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CREATED:        {"model", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER:          {"request_count", "order_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CANCELLED:      {"reason"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_ADDED:       {"machinery_type", "brand", "model"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED:    {"machinery_type", "brand", "model"},

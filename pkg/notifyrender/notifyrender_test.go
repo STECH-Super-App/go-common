@@ -1487,7 +1487,7 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	} {
 		declared[nt] = true
 	}
-	// parts, D-16a — eleven more, and the same hand-listing discipline:
+	// parts, D-16a — twelve more, and the same hand-listing discipline:
 	//   • product_name / model / tracking_number / ready_date / reason /
 	//     sourcing_request_no — ordinary may-be-empty strings, each read behind an
 	//     {{if}} guard so an empty one drops its clause instead of dangling;
@@ -1500,7 +1500,13 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	//     is_quantity_reduced / outcome_hidden / outcome_no_violation — the PAIRED
 	//     branch flags flagWhen derives from a wire enum. They are optional by
 	//     construction: "" is their legitimate false, and a required empty is a
-	//     publish-time rejection.
+	//     publish-time rejection;
+	//   • request_count / order_no on Р47's CONTACT_HANDOVER — the count because a
+	//     handover that moved no заявки is ordinary and the proto rules that such a
+	//     run renders the orders half only (a required count would render the
+	//     string "0" and switch the guard ON), the number because it is the ONE
+	//     order the deep link opens rather than the subject of a plural sentence,
+	//     declared for the same reason SOURCING_REQUEST_CREATED's request_no is.
 	for _, nt := range []notificationv1.NotificationType{
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CREATED,
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONFIRMED,
@@ -1513,6 +1519,7 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_ADDED,
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED,
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_COMPLAINT_RESOLVED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER,
 	} {
 		declared[nt] = true
 	}
@@ -1980,25 +1987,173 @@ func TestExtractAndRender_PartsPriceListFileFailed(t *testing.T) {
 	}
 }
 
-// TestPartsUnmappedTypeStillFailsClosed pins the property the gate rests on: a
-// parts type WITHOUT an ExtractParams case must error rather than render empty.
-// If this ever passes silently, the publish-time gate has been removed and a
-// missing directive becomes a silent no-op instead of a rolled-back import.
+// TestExtractAndRender_PartsOrderContactHandover covers Р47's bulk handover
+// (type 123), the door that re-points every live parts order of a team onto one
+// successor and then emits EXACTLY ONE directive — the vault's sentence is
+// plural, so a per-order push would fire N times.
 //
-// The specimen was SendPartsSourcingNoQuotesYet until D-16a mapped it. It is now
-// SendPartsOrderContactHandover — Р47, one of the two types the vault gives a
-// recipient, a target screen and a «не отключается» flag and no sentence in any
-// of its five text tables, which is why it is still unmapped and why it is the
-// honest specimen: an arbitrary unmapped type would be a stub waiting to be
-// filled, this one is a decision waiting on the owner (OWNER-ANSWERS D-8).
-// SendPartsShopVerificationRevoked (124) is the other and would serve equally.
+// Three properties, one per subtest, and each of them is a real failure mode:
+//
+//   - both halves render when both counts arrived;
+//   - a run that moved no заявки renders THE ORDERS HALF ONLY, which is what the
+//     proto rules for a zero `request_count` and the reason that param is a
+//     guarded optional rather than a required count: strconv.Itoa would make it
+//     the string "0", Go's template truth test runs on the STRING, and «and 0
+//     sourcing requests» would ride along on every handover;
+//   - the wire's `tenant_name` and `from_user_name` never reach a param. They
+//     exist on the message and the producer leaves them empty (C31 bars a tenant
+//     name from any directive and order-service holds no display names), so the
+//     copy says «your team» — the deliberate, reversible divergence from Р47's
+//     «команды [название]».
+func TestExtractAndRender_PartsOrderContactHandover(t *testing.T) {
+	r := testRendererFull(t)
+	const nt = notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER
+
+	handover := func(m *notificationv1.SendPartsOrderContactHandover) *notificationv1.NotificationEnvelope {
+		return &notificationv1.NotificationEnvelope{
+			Metadata: &notificationv1.EnvelopeMetadata{Type: nt},
+			Payload: &notificationv1.NotificationEnvelope_SendPartsOrderContactHandover{
+				SendPartsOrderContactHandover: m,
+			},
+		}
+	}
+
+	t.Run("orders and sourcing requests", func(t *testing.T) {
+		params, err := ExtractParams(handover(&notificationv1.SendPartsOrderContactHandover{
+			OrdersMoved: 4, RequestCount: 2, OrderNo: "4105",
+		}))
+		if err != nil {
+			t.Fatalf("ExtractParams: %v", err)
+		}
+		want := map[string]string{"orders_moved": "4", "request_count": "2", "order_no": "4105"}
+		for k, v := range want {
+			if params[k] != v {
+				t.Errorf("params[%q] = %q, want %q", k, params[k], v)
+			}
+		}
+		if len(params) != len(want) {
+			t.Errorf("params = %v, want exactly %v", params, want)
+		}
+		for _, loc := range []string{"en", "ru"} {
+			title, body, err := r.Render(nt, params, loc)
+			if err != nil {
+				t.Fatalf("Render(%s): %v", loc, err)
+			}
+			if title == "" || body == "" {
+				t.Fatalf("%s: empty title/body", loc)
+			}
+			if !strings.Contains(body, "4 orders") || !strings.Contains(body, "2 sourcing requests") {
+				t.Errorf("%s: body counts neither half: %q", loc, body)
+			}
+		}
+	})
+
+	t.Run("no sourcing requests renders the orders half only", func(t *testing.T) {
+		params, err := ExtractParams(handover(&notificationv1.SendPartsOrderContactHandover{
+			OrdersMoved: 1, OrderNo: "4105",
+		}))
+		if err != nil {
+			t.Fatalf("ExtractParams: %v", err)
+		}
+		if params["request_count"] != "" {
+			t.Errorf("request_count = %q, want empty — a zero must switch the guard OFF, not render \"0\"", params["request_count"])
+		}
+		_, body, err := r.Render(nt, params, "en")
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		if strings.Contains(body, "sourcing requests") {
+			t.Errorf("body claims requests moved when none did: %q", body)
+		}
+		if !strings.Contains(body, "1 orders") {
+			t.Errorf("body lost the orders half: %q", body)
+		}
+	})
+
+	t.Run("no name from the wire reaches the copy", func(t *testing.T) {
+		const tenant, person = "ООО «Ромашка-Запчасть»", "Сергей"
+		params, err := ExtractParams(handover(&notificationv1.SendPartsOrderContactHandover{
+			TenantName: tenant, FromUserName: person, OrdersMoved: 3, RequestCount: 1, OrderNo: "4105",
+		}))
+		if err != nil {
+			t.Fatalf("ExtractParams: %v", err)
+		}
+		for name, value := range params {
+			if strings.Contains(value, tenant) || strings.Contains(value, person) {
+				t.Errorf("param %q carries a name from the wire (%q) — C31 bars it", name, value)
+			}
+		}
+		_, body, err := r.Render(nt, params, "en")
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		if !strings.Contains(body, "your team") {
+			t.Errorf("body does not collapse to «your team»: %q", body)
+		}
+	})
+}
+
+// TestExtractAndRender_PartsShopVerificationRevoked covers Р51's revocation
+// (type 124). The payload is EMPTY — `shop_name` was its only field and B-5
+// reserved it — so the whole test is that an empty payload still renders, which
+// is exactly the case a missing dispatch arm breaks: ExtractParams would return
+// ErrUnknownType inside the transaction that revokes the verification and roll
+// it back.
+//
+// ⚠ ITS RUSSIAN IS STILL OWED BY THE OWNER, so the ru locale legitimately falls
+// back to the English baseline here. That is why this test asserts a non-empty
+// render rather than any Russian wording: pinning wording we composed ourselves
+// would turn a debt into a fake asset.
+func TestExtractAndRender_PartsShopVerificationRevoked(t *testing.T) {
+	r := testRendererFull(t)
+	const nt = notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_REVOKED
+
+	params, err := ExtractParams(&notificationv1.NotificationEnvelope{
+		Metadata: &notificationv1.EnvelopeMetadata{Type: nt},
+		Payload: &notificationv1.NotificationEnvelope_SendPartsShopVerificationRevoked{
+			SendPartsShopVerificationRevoked: &notificationv1.SendPartsShopVerificationRevoked{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExtractParams: %v", err)
+	}
+	if len(params) != 0 {
+		t.Errorf("params = %v, want none — the message carries no field", params)
+	}
+	for _, loc := range []string{"en", "ru"} {
+		title, body, err := r.Render(nt, params, loc)
+		if err != nil {
+			t.Fatalf("Render(%s): %v", loc, err)
+		}
+		if title == "" || body == "" {
+			t.Fatalf("%s: empty title/body (title=%q body=%q)", loc, title, body)
+		}
+	}
+}
+
+// TestPartsUnmappedTypeStillFailsClosed pins the property the whole parts gate
+// rests on: a directive type WITHOUT an ExtractParams case must ERROR rather
+// than render empty. If this ever passes silently, the publish-time gate is gone
+// and a missing directive becomes a silent no-op instead of a rolled-back write.
+//
+// The specimen was SendPartsSourcingNoQuotesYet until D-16a mapped it, then
+// SendPartsOrderContactHandover until this pass mapped 123 AND 124. With those
+// two no parts variant is unmapped any more — which is the state D-9 was aiming
+// at, and which leaves this guard without a parts specimen. It is NOT deleted
+// for that: the property it pins is the family's gate, not one type's, and the
+// specimen only has to be something this package maps nowhere.
+//
+// SendAccountDeletionOtpSms is one of the four that remain (with
+// SendChatMessageReceived, SendContactPhoneOtpSms and SendOrgAdminTransferOtpSms
+// — all OTP/chat variants whose text does not come from this catalog). Re-point
+// it at another of the four if a producer ever maps this one.
 func TestPartsUnmappedTypeStillFailsClosed(t *testing.T) {
 	env := &notificationv1.NotificationEnvelope{
-		Payload: &notificationv1.NotificationEnvelope_SendPartsOrderContactHandover{
-			SendPartsOrderContactHandover: &notificationv1.SendPartsOrderContactHandover{},
+		Payload: &notificationv1.NotificationEnvelope_SendAccountDeletionOtpSms{
+			SendAccountDeletionOtpSms: &notificationv1.SendAccountDeletionOtpSms{},
 		},
 	}
 	if _, err := ExtractParams(env); err == nil {
-		t.Fatal("ExtractParams accepted a parts type with no case — the publish-time gate is gone")
+		t.Fatal("ExtractParams accepted a type with no case — the publish-time gate is gone")
 	}
 }
