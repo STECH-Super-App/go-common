@@ -52,6 +52,14 @@ func UserProfile(env Env, userID string) string {
 	return env.DeepLinkScheme + "://profile/" + userID
 }
 
+// OAuthAppReturn returns the deep-link URI the OAuth2 browser callback hands
+// the native app back to, once the provider leg is finished. The callback
+// appends either a one-time handle or an error Reason as query parameters;
+// the app redeems the handle via POST /auth/oauth2/{provider}/exchange.
+func OAuthAppReturn(env Env, provider string) string {
+	return env.DeepLinkScheme + "://auth/oauth2/" + url.PathEscape(provider) + "/callback"
+}
+
 // TenantDashboard returns the deep-link URI for a tenant dashboard.
 func TenantDashboard(env Env, tenantID string) string {
 	return env.DeepLinkScheme + "://tenant/" + tenantID + "/dashboard"

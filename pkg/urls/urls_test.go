@@ -78,6 +78,24 @@ func TestUserProfile(t *testing.T) {
 	}
 }
 
+func TestOAuthAppReturn(t *testing.T) {
+	env := Env{AppBaseURL: "https://app.stech.kz", DeepLinkScheme: "superapp"}
+	got := OAuthAppReturn(env, "yandex")
+	want := "superapp://auth/oauth2/yandex/callback"
+	if got != want {
+		t.Fatalf("OAuthAppReturn: got %q, want %q", got, want)
+	}
+}
+
+func TestOAuthAppReturn_ProviderNeedsEscape(t *testing.T) {
+	env := Env{DeepLinkScheme: "superapp"}
+	got := OAuthAppReturn(env, "a b/c")
+	want := "superapp://auth/oauth2/a%20b%2Fc/callback"
+	if got != want {
+		t.Fatalf("OAuthAppReturn: got %q, want %q", got, want)
+	}
+}
+
 func TestTenantDashboard(t *testing.T) {
 	got := TenantDashboard(testEnv(), "550e8400-e29b-41d4-a716-446655440001")
 	want := "superapp://tenant/550e8400-e29b-41d4-a716-446655440001/dashboard"
