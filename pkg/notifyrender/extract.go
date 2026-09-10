@@ -706,6 +706,15 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"request_count": countOrEmpty(p.SendPartsOrderContactHandover.GetRequestCount()),
 			"order_no":      p.SendPartsOrderContactHandover.GetOrderNo(),
 		}, nil
+	// М-20's administrator cancel (133). Both fields are plain required strings,
+	// so this arm is the buyer/seller cancel arms again with a third initiator —
+	// no countOrEmpty, no guard: the proto rules `reason` «never empty», and an
+	// empty `order_no` is rejected at publish time rather than blanked here.
+	case *notificationv1.NotificationEnvelope_SendPartsOrderCancelledByAdmin:
+		return map[string]string{
+			"order_no": p.SendPartsOrderCancelledByAdmin.GetOrderNo(),
+			"reason":   p.SendPartsOrderCancelledByAdmin.GetReason(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestCreated:
 		return map[string]string{
 			"request_no":     p.SendPartsSourcingRequestCreated.GetRequestNo(),

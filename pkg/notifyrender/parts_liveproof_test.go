@@ -342,6 +342,11 @@ func boolCount(bs ...bool) int {
 // PARTS_ORDER_CONTACT_HANDOVER (123, Р47) and PARTS_SHOP_VERIFICATION_REVOKED
 // (124, Р51) — are mapped, so every declared parts type renders.
 //
+// «The last two» describes that pass, not the frontier: PARTS_ORDER_CANCELLED_BY_ADMIN
+// (133, М-20) was minted afterwards and mapped on 10.09.2026, taking the family
+// to 64. The invariant below is what holds — EVERY declared type, whenever it
+// arrives, not a fixed pair.
+//
 // The list survives its own emptying because it is the shape the exemption has
 // to take if one is ever wanted again, and because an empty map states the
 // invariant far more loudly than a deleted one: ADDING a line here is a
@@ -359,7 +364,7 @@ func boolCount(bs ...bool) int {
 var partsUnmappedByDesign = map[notificationv1.NotificationType]string{}
 
 // TestPartsCatalogCoversEveryDeclaredType walks the proto enum rather than a
-// hand-written list, so it sees a sixty-fourth parts type the moment gen-go-lib
+// hand-written list, so it sees a sixty-fifth parts type the moment gen-go-lib
 // carries one — which is exactly when somebody needs to be told that a template
 // is owed before the producer lands (D-9's ordering gate).
 func TestPartsCatalogCoversEveryDeclaredType(t *testing.T) {
@@ -391,8 +396,8 @@ func TestPartsCatalogCoversEveryDeclaredType(t *testing.T) {
 		}
 	}
 
-	if declared != 63 {
-		t.Errorf("proto declares %d NOTIFICATION_TYPE_PARTS_* values, expected 63 — a type was added or removed, and this test is the place that has to notice", declared)
+	if declared != 64 {
+		t.Errorf("proto declares %d NOTIFICATION_TYPE_PARTS_* values, expected 64 — a type was added or removed, and this test is the place that has to notice", declared)
 	}
 	if len(partsUnmappedByDesign) != 0 {
 		t.Errorf("partsUnmappedByDesign has %d entries, want 0 — every declared parts type has had a catalog entry since 07.09.2026, and a new exemption is a type that will dead-letter on first delivery", len(partsUnmappedByDesign))
@@ -702,7 +707,7 @@ func TestNoPartsTemplateReadsAShopName(t *testing.T) {
 			}
 		}
 	}
-	if walked != 63 {
-		t.Errorf("walked %d SendParts* payloads, want 63 — the oneof changed shape and this check may be looking at nothing", walked)
+	if walked != 64 {
+		t.Errorf("walked %d SendParts* payloads, want 64 — the oneof changed shape and this check may be looking at nothing", walked)
 	}
 }

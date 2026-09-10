@@ -145,6 +145,8 @@ var BaselineEN = map[string]string{
 	"parts_order_auto_confirmed_buyer.title":             "Receipt auto-confirmed",
 	"parts_order_auto_confirmed_seller.body":             "Order #{{.order_no}} is complete: receipt was confirmed automatically after 14 days.",
 	"parts_order_auto_confirmed_seller.title":            "Receipt auto-confirmed",
+	"parts_order_cancelled_by_admin.body":                "An administrator cancelled order #{{.order_no}}: {{.reason}}.",
+	"parts_order_cancelled_by_admin.title":               "Order cancelled by an administrator",
 	"parts_order_cancelled_by_buyer.body":                "The buyer cancelled order #{{.order_no}}: {{.reason}}.",
 	"parts_order_cancelled_by_buyer.title":               "Order cancelled by the buyer",
 	"parts_order_cancelled_by_seller.body":               "The seller cancelled order #{{.order_no}}: {{.reason}}.",
