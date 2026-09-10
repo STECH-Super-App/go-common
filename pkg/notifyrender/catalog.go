@@ -214,6 +214,14 @@ var typeKey = map[notificationv1.NotificationType]string{
 	// a line in the notification MATRIX, which is a different absence — the text
 	// is the owner's, only the table is silent.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER: "parts_order_contact_handover",
+	// М-20's administrator cancel (133) — the ONE edge any administrator may fire
+	// anywhere in the parts lifecycle, out of «Готов к выдаче» and no other state.
+	// It is ONE section, not two. The _BUYER/_SELLER pairs above are two entries
+	// only because they are two enum VALUES; 133 is a single value addressed to
+	// «Покупатель + Продавец», and one sentence serves both because neither of
+	// them did it — the text names the administrator, not the reader. The
+	// category does not switch off.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CANCELLED_BY_ADMIN: "parts_order_cancelled_by_admin",
 	// ── Подбор (103–114) plus Р56's two quote-withdrawal arms (127, 128). Same
 	// reasoning for `request_no`. SOURCING_REQUEST_CREATED is the exception that
 	// proves it: the vault's own text for that row names no number, so the param
@@ -619,6 +627,15 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	// half only» — so it is a guarded optional, not a required count.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER: {
 		"orders_moved",
+	},
+	// М-20's administrator cancel (133). Both params are REQUIRED, exactly as on
+	// the buyer and seller cancel arms it sits beside: `order_no` is the only
+	// identifier the sentence carries after B-5, and the proto rules `reason`
+	// «never empty» — a cancel reason is mandatory at every parts status, so an
+	// empty one is a producer bug to reject at publish time rather than a value
+	// to render as «: .».
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CANCELLED_BY_ADMIN: {
+		"order_no", "reason",
 	},
 	// ── Подбор (103–114) plus Р56's two quote-withdrawal arms (127, 128). Same
 	// reasoning for `request_no`. SOURCING_REQUEST_CREATED is the exception that

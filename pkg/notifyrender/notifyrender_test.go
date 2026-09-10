@@ -2131,6 +2131,77 @@ func TestExtractAndRender_PartsShopVerificationRevoked(t *testing.T) {
 	}
 }
 
+// TestExtractAndRender_PartsOrderCancelledByAdmin covers М-20's administrator
+// cancel (133) — the one edge any administrator may fire anywhere in the parts
+// lifecycle, out of «Готов к выдаче» and no other state.
+//
+// It is ONE section serving BOTH recipients, and that is the property worth
+// pinning rather than the wording: the buyer did not cancel this order and
+// neither did the seller, so the sentence names the administrator and addresses
+// neither party. A copy edit that reintroduced «the buyer» or «the seller» would
+// tell one of the two readers they did something they did not do — and it would
+// pass every render test that only checks for a non-empty string.
+//
+// The reason is rendered AS GIVEN (the operator's choice from their own short
+// vocabulary plus a free comment, G-11), not resolved from a key, so it is a
+// required param exactly as on the buyer and seller cancel arms: the proto rules
+// it «never empty», and notifyoutbox rejects an empty one inside the producer's
+// transaction rather than rendering «: .».
+func TestExtractAndRender_PartsOrderCancelledByAdmin(t *testing.T) {
+	r := testRendererFull(t)
+	const nt = notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CANCELLED_BY_ADMIN
+
+	params, err := ExtractParams(&notificationv1.NotificationEnvelope{
+		Metadata: &notificationv1.EnvelopeMetadata{Type: nt},
+		Payload: &notificationv1.NotificationEnvelope_SendPartsOrderCancelledByAdmin{
+			SendPartsOrderCancelledByAdmin: &notificationv1.SendPartsOrderCancelledByAdmin{
+				OrderNo: "10245",
+				Reason:  "Нарушение правил площадки: продавец не выходит на связь",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExtractParams: %v", err)
+	}
+	want := map[string]string{
+		"order_no": "10245",
+		"reason":   "Нарушение правил площадки: продавец не выходит на связь",
+	}
+	if len(params) != len(want) {
+		t.Errorf("params = %v, want exactly %v", params, want)
+	}
+	for k, v := range want {
+		if params[k] != v {
+			t.Errorf("params[%q] = %q, want %q", k, params[k], v)
+		}
+	}
+
+	for _, loc := range []string{"en", "ru"} {
+		title, body, err := r.Render(nt, params, loc)
+		if err != nil {
+			t.Fatalf("Render(%s): %v", loc, err)
+		}
+		if title == "" || body == "" {
+			t.Fatalf("%s: empty title/body (title=%q body=%q)", loc, title, body)
+		}
+		if !strings.Contains(body, "10245") {
+			t.Errorf("%s body %q drops the order number — it is the only identifier the sentence carries", loc, body)
+		}
+		if !strings.Contains(body, want["reason"]) {
+			t.Errorf("%s body %q drops the reason — G-11 renders it as given", loc, body)
+		}
+		// One text, two recipients: neither party may be named as the actor. The
+		// operator's free-form reason is cut out first — it is the operator's
+		// words, not the template's, and it may legitimately mention either party.
+		fixed := strings.ToLower(strings.ReplaceAll(body, want["reason"], ""))
+		for _, forbidden := range []string{"buyer", "seller", "покупател", "продав"} {
+			if strings.Contains(fixed, forbidden) {
+				t.Errorf("%s body %q names %q — 133 is a single section read by BOTH parties and neither of them cancelled", loc, body, forbidden)
+			}
+		}
+	}
+}
+
 // TestPartsUnmappedTypeStillFailsClosed pins the property the whole parts gate
 // rests on: a directive type WITHOUT an ExtractParams case must ERROR rather
 // than render empty. If this ever passes silently, the publish-time gate is gone
