@@ -249,8 +249,6 @@ var BaselineEN = map[string]string{
 	"parts_sourcing_request_expired_shop.title":          "The request expired",
 	"parts_sourcing_request_expiring.body":               "Request #{{.request_no}} closes tomorrow. Look at the shops' quotes, or press «Extend for 7 days» in the request card.",
 	"parts_sourcing_request_expiring.title":              "The request expires tomorrow",
-	"parts_sourcing_request_extended.body":               "Request #{{.request_no}} was extended by 7 days. Your quote stays active.",
-	"parts_sourcing_request_extended.title":              "The request was extended",
 	"parts_subscription_expiring.body":                   "Your «notify me» subscription{{if .product_name}} for '{{.product_name}}'{{end}} expires in {{.days_left}} days. Renew it for another 90 days?",
 	"parts_subscription_expiring.title":                  "Subscription expiring",
 	"parts_subscription_offer_appeared.body":             "{{if .product_name}}'{{.product_name}}'{{else}}The part you were waiting for{{end}} is offered by sellers now{{if .price_from}} — from {{.price_from}} ₽{{end}}.",

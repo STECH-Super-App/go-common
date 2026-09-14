@@ -396,8 +396,10 @@ func TestPartsCatalogCoversEveryDeclaredType(t *testing.T) {
 		}
 	}
 
-	if declared != 64 {
-		t.Errorf("proto declares %d NOTIFICATION_TYPE_PARTS_* values, expected 64 — a type was added or removed, and this test is the place that has to notice", declared)
+	// 64 → 63 on 14.09.2026: value 112 (the «заявка продлена» directive) was retired
+	// with its feature (В-64, В-94) and its number reserved. This pin moved with it.
+	if declared != 63 {
+		t.Errorf("proto declares %d NOTIFICATION_TYPE_PARTS_* values, expected 63 — a type was added or removed, and this test is the place that has to notice", declared)
 	}
 	if len(partsUnmappedByDesign) != 0 {
 		t.Errorf("partsUnmappedByDesign has %d entries, want 0 — every declared parts type has had a catalog entry since 07.09.2026, and a new exemption is a type that will dead-letter on first delivery", len(partsUnmappedByDesign))
@@ -707,7 +709,9 @@ func TestNoPartsTemplateReadsAShopName(t *testing.T) {
 			}
 		}
 	}
-	if walked != 64 {
-		t.Errorf("walked %d SendParts* payloads, want 64 — the oneof changed shape and this check may be looking at nothing", walked)
+	// 64 → 63 on 14.09.2026: envelope slot 131 (send_parts_sourcing_request_extended) was
+	// retired with В-94 and reserved. Same count as the declared-types pin above, on purpose.
+	if walked != 63 {
+		t.Errorf("walked %d SendParts* payloads, want 63 — the oneof changed shape and this check may be looking at nothing", walked)
 	}
 }
