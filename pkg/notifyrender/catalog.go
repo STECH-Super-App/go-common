@@ -236,7 +236,6 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CLOSED_BY_ORDER_SHOP:  "parts_sourcing_request_closed_by_order_shop",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_CANCELLED:             "parts_sourcing_request_cancelled",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRING:              "parts_sourcing_request_expiring",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXTENDED:              "parts_sourcing_request_extended",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRED_BUYER:         "parts_sourcing_request_expired_buyer",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRED_SHOP:          "parts_sourcing_request_expired_shop",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_SHOP_CLOSED:   "parts_sourcing_quote_withdrawn_shop_closed",
@@ -722,9 +721,6 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 		"request_no",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRING: {
-		"request_no",
-	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXTENDED: {
 		"request_no",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_REQUEST_EXPIRED_BUYER: {

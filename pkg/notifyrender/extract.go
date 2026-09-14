@@ -757,10 +757,6 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"request_no": p.SendPartsSourcingRequestExpiring.GetRequestNo(),
 		}, nil
-	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestExtended:
-		return map[string]string{
-			"request_no": p.SendPartsSourcingRequestExtended.GetRequestNo(),
-		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsSourcingRequestExpiredBuyer:
 		return map[string]string{
 			"request_no": p.SendPartsSourcingRequestExpiredBuyer.GetRequestNo(),
