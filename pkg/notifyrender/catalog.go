@@ -253,6 +253,61 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_RECEIVED:            "parts_review_received",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_HIDDEN_BY_COMPLAINT: "parts_review_hidden_by_complaint",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_COMPLAINT_RESOLVED:  "parts_review_complaint_resolved",
+	// ── Ремонт спецтехники — the order-side deal family (134–156), master
+	// §3.3 rows 0–22. order-service emits every one of them off a REPAIR order,
+	// tenant-addressed to ONE side with recipient_role_filter [ADMIN, MANAGER]
+	// and channels [IN_APP, PUSH] (spec §11, D28).
+	//
+	// `machinery` is the frozen «<тип> <марка> <модель>» label the order carries,
+	// never a live lookup, and the counterpart is named the same way: customer_name
+	// and provider_name are TENANT DISPLAY NAMES — the counterpart tenant's public
+	// name as the deal froze it at create time (master §3.3, sub-plan 03d), never
+	// a contact person's name, never a phone and never an id. Freezing is the
+	// whole point: nothing here, and nothing in the emitting transaction, resolves
+	// a name.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CREATED:  "repair_request_created",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_SENT:       "repair_offer_sent",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_ACCEPTED:   "repair_offer_accepted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_DECLINED:   "repair_offer_declined",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_WITHDRAWN:  "repair_offer_withdrawn",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_REJECTED: "repair_request_rejected",
+	// Р47 is TWO types, not one parameterised arm: the customer's sentence and
+	// the provider's share no clause, and REQUEST_EXPIRED_PROVIDER fires ONLY
+	// when an ACTIVE offer was voided — a repairer who never answered gets
+	// nothing (spec §11). The customer's own two editions ride one type, keyed
+	// on had_offer.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_EXPIRED:          "repair_request_expired",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_EXPIRED_PROVIDER: "repair_request_expired_provider",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_WORK_STARTED:             "repair_work_started",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_PROPOSED:       "repair_new_price_proposed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_ACCEPTED:       "repair_new_price_accepted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_DECLINED:       "repair_new_price_declined",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_WITHDRAWN:      "repair_new_price_withdrawn",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_WORK_COMPLETED:           "repair_work_completed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_CONFIRM_REMINDER:         "repair_confirm_reminder",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_AUTO_CONFIRMED:           "repair_auto_confirmed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_COMPLETED:        "repair_request_completed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_RECEIVED:          "repair_review_received",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CANCELLED:        "repair_request_cancelled",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_AUTO_CANCELLED:   "repair_request_auto_cancelled",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_INVITE:            "repair_review_invite",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_WINDOW_ENDING:     "repair_review_window_ending",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_PAIR_FORMED:              "repair_pair_formed",
+	// ── Ремонт — the bank/posting family (157–164), master §3.3 rows 23–30.
+	// sale-service's Repair module emits these off a posting or a response; each
+	// is addressed to ONE tenant (the customer's or a seller's) and fanned out
+	// per ADMIN/MANAGER downstream. Deep links carry seller_tenant_id as a PARAM
+	// on the responder arms because inbox-service persists only the link's screen
+	// and params — recipient_tenant_id never reaches the client
+	// (inbox-service/internal/application/ingestion/service.go:130-134).
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING:          "repair_matching_posting",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_RECEIVED:         "repair_response_received",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN:        "repair_response_withdrawn",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_DECLINED:         "repair_response_declined",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRING:          "repair_posting_expiring",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_CUSTOMER:  "repair_posting_expired_customer",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_RESPONDER: "repair_posting_expired_responder",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED:         "repair_posting_cancelled",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -701,6 +756,134 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_HIDDEN_BY_COMPLAINT: {
 		"reason",
 	},
+	// ── Ремонт: the order-side deal family (master §3.3 rows 0–22) ───
+	//
+	// ⚠ THE BRANCHING FLAGS ARE ABSENT FROM THIS MAP ON PURPOSE, and not because
+	// a producer might omit them: order-service sends `had_offer`,
+	// `deal_completed`, `cancelled_by` and `supersedes_previous` on every single
+	// directive that declares one. They sit in the optional tier BY MECHANISM —
+	// they are read only inside `{{if eq .x "…"}}`, never as a literal
+	// {{.name}}, and `ValidateBundleComplete` fails any type whose REQUIRED param
+	// has no literal placeholder (validate.go:74-78). Master §3.3 assigns them
+	// this tier too, so the two agree; promoting one to requiredParams «because
+	// the producer always sends it» turns i18n-catalog's CI red and cannot be
+	// fixed without printing «true» in a push.
+	//
+	// `machinery`, `offer` and `price` are PRE-FORMATTED display strings — the
+	// frozen «<тип> <марка> <модель>» label, «10 000–15 000 ₽», «12 500 ₽».
+	// notifyrender interpolates strings and formats nothing.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CREATED: {
+		"customer_name", "machinery", "work_types",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_SENT: {
+		"provider_name", "machinery", "offer",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_ACCEPTED: {
+		"customer_name", "machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_DECLINED: {
+		"customer_name", "machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_WITHDRAWN: {
+		"provider_name", "machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_REJECTED: {
+		"provider_name", "machinery", "reason",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_EXPIRED: {
+		"machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_EXPIRED_PROVIDER: {
+		"machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_WORK_STARTED: {
+		"provider_name", "machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_PROPOSED: {
+		"provider_name", "machinery", "price",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_ACCEPTED: {
+		"customer_name", "price",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_DECLINED: {
+		"customer_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_WITHDRAWN: {
+		"provider_name", "machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_WORK_COMPLETED: {
+		"provider_name", "machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_CONFIRM_REMINDER: {
+		"machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_AUTO_CONFIRMED: {
+		"machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_COMPLETED: {
+		"customer_name", "machinery",
+	},
+	// `rating` is REQUIRED so the star count is always a literal {{.rating}}
+	// placeholder and never a clause that can collapse — a review with no stars
+	// cannot exist. The value arrives through strconv.Itoa of an int32, never
+	// countOrEmpty, so it can never BE empty: a zero rating renders «0★», which
+	// is the producer's to prevent rather than this tier's.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_RECEIVED: {
+		"customer_name", "machinery", "rating",
+	},
+	// `reason` is the LABEL snapshot of the D25 cancel-reason dictionary, never
+	// the code, and it is required on both human cancels — the vault's two texts
+	// («[Сервис] отменил заявку … : [причина]») name it.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CANCELLED: {
+		"actor_name", "machinery", "reason",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_AUTO_CANCELLED: {
+		"machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_INVITE: {
+		"provider_name", "machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_WINDOW_ENDING: {
+		"provider_name", "machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_PAIR_FORMED: {
+		"machinery",
+	},
+	// ── Ремонт: the bank/posting family (master §3.3 rows 23–30) ───
+	//
+	// These texts name a counterpart only where the reader can use one: Р26's
+	// targeting sends one directive per matched seller tenant, and the seller's
+	// own tenant name in his own push would be noise; the customer's name is not
+	// his to know before the pair forms. Where a name IS carried — seller_name
+	// below — it is a TENANT DISPLAY NAME frozen on the response, exactly as on
+	// the deal side, never a contact person and never a phone.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING: {
+		"machinery", "work_types",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_RECEIVED: {
+		"machinery", "offer",
+	},
+	// `seller_name` IS named here, and only here on the bank side: D17's
+	// withdrawal is about one identifiable responder among several, and «кто-то
+	// отозвал отклик» is not actionable.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN: {
+		"seller_name", "machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_DECLINED: {
+		"machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRING: {
+		"machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_CUSTOMER: {
+		"machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_RESPONDER: {
+		"machinery",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED: {
+		"machinery",
+	},
 }
 
 // optionalParams declares params that MAY arrive empty (or absent) and are
@@ -795,6 +978,60 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_ADDED:       {"machinery_type", "brand", "model"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED:    {"machinery_type", "brand", "model"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_COMPLAINT_RESOLVED:       {"outcome_hidden", "outcome_no_violation"},
+	// ─── Ремонт ───
+	//
+	// `request_no` repeats delivery's Д-13 reasoning: the human-facing number is
+	// stamped by order-service, and a directive may be emitted before the number
+	// is assigned, so every deal text reads it behind a guard.
+	//
+	// THE FOUR DISCRIMINATORS — `had_offer`, `deal_completed`, `cancelled_by`,
+	// `supersedes_previous` — ARE OPTIONAL BY MECHANISM, and master §3.3 assigns
+	// them the same tier. A required param must appear as a literal {{.name}}
+	// (validate.go:74-78, baseline_test.go:64-70) and none of them is ever
+	// PRINTED: each one picks between editions of a sentence. Their producer
+	// always sends them and their values are exactly the ones §3.3 fixes —
+	// "true"/"false", "customer"/"provider"; the tier governs how a template may
+	// read them, not whether they arrive.
+	//
+	// ⚠ BOTH ARMS ARE TESTED EXPLICITLY, never {{if}}…{{else}}. That is the rule
+	// of extract.go's flagWhen helper in its string form: an absent or
+	// unrecognised value must light NEITHER arm, so a customer whose request
+	// expired with no offer is never told an offer «больше не действует».
+	// `supersedes_previous` is the single-armed exception and is allowed to be:
+	// its false edition is «say nothing», which is true under every value the
+	// wire can carry.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CREATED: {"request_no"},
+	// D62 reaches the pre-confirm offer too: a re-offer on AWAITING_CUSTOMER_
+	// DECISION supersedes the pending one, so OFFER_SENT reads the same flag as
+	// NEW_PRICE_PROPOSED, with the same "true"/"false" vocabulary.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_SENT:               {"supersedes_previous", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_ACCEPTED:           {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_DECLINED:           {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_WITHDRAWN:          {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_REJECTED:         {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_EXPIRED:          {"had_offer", "provider_name", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_EXPIRED_PROVIDER: {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_WORK_STARTED:             {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_PROPOSED:       {"supersedes_previous", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_ACCEPTED:       {"machinery", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_DECLINED:       {"machinery", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_WITHDRAWN:      {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_WORK_COMPLETED:           {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_CONFIRM_REMINDER:         {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_AUTO_CONFIRMED:           {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_COMPLETED:        {"price", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_RECEIVED:          {"deal_completed", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CANCELLED:        {"cancelled_by", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_AUTO_CANCELLED:   {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_INVITE:            {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_WINDOW_ENDING:     {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_PAIR_FORMED:              {"request_no"},
+	// `distance_km` is the only optional param on the bank side, and it goes
+	// through countOrEmpty: a zero renders "" and collapses the clause, because
+	// "0" is a non-empty STRING and would light its own guard («~0 km»). The
+	// sentence without it — machinery plus work types — is already the whole
+	// offer, so the tilde-distance is decoration and may vanish.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING: {"distance_km"},
 }
 
 // RequiredParams returns the param names required for type t — the contract

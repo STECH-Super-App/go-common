@@ -813,6 +813,234 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"outcome_hidden":       flagWhen(outcome, complaintOutcomeHidden),
 			"outcome_no_violation": flagWhen(outcome, complaintOutcomeNoViolation),
 		}, nil
+	// ─── Ремонт спецтехники: the order-side deal family (master §3.3 rows 0–22) ───
+	//
+	// Three rules, re-stated because they are the ones a future arm is tempted to
+	// break:
+	//   * NAMES ARE TENANT DISPLAY NAMES — customer_name / provider_name /
+	//     actor_name carry the counterpart TENANT's public name as the deal froze
+	//     it (master §3.3, sub-plan 03d), never a contact person and never a
+	//     phone. This package passes the frozen string through and resolves
+	//     nothing.
+	//   * NO ID — a deep link carries ids; a sentence carries request_no.
+	//   * NO FORMATTING — machinery, offer and price arrive display-ready. This
+	//     package interpolates strings; a ₽ in a baseline is a rendering.
+	//
+	// AN EDITION-PICKING FIELD IS PASSED THROUGH VERBATIM, and the template asks
+	// `{{if eq .x "…"}}` on BOTH arms. All four — `had_offer`, `deal_completed`,
+	// `cancelled_by`, `supersedes_previous` — are strings on the wire carrying
+	// their own vocabulary, so nothing here formats or flags them. The
+	// parts family reaches the same place with flagWhen's ""/"1" pairs — same
+	// rule, different spelling: an absent or unrecognised value must light
+	// NEITHER arm, so the reader is told less rather than something false.
+	case *notificationv1.NotificationEnvelope_SendRepairRequestCreated:
+		return map[string]string{
+			"customer_name": p.SendRepairRequestCreated.GetCustomerName(),
+			"machinery":     p.SendRepairRequestCreated.GetMachinery(),
+			"work_types":    p.SendRepairRequestCreated.GetWorkTypes(),
+			"request_no":    p.SendRepairRequestCreated.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairOfferSent:
+		return map[string]string{
+			"provider_name":       p.SendRepairOfferSent.GetProviderName(),
+			"machinery":           p.SendRepairOfferSent.GetMachinery(),
+			"offer":               p.SendRepairOfferSent.GetOffer(),
+			"supersedes_previous": p.SendRepairOfferSent.GetSupersedesPrevious(),
+			"request_no":          p.SendRepairOfferSent.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairOfferAccepted:
+		return map[string]string{
+			"customer_name": p.SendRepairOfferAccepted.GetCustomerName(),
+			"machinery":     p.SendRepairOfferAccepted.GetMachinery(),
+			"request_no":    p.SendRepairOfferAccepted.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairOfferDeclined:
+		return map[string]string{
+			"customer_name": p.SendRepairOfferDeclined.GetCustomerName(),
+			"machinery":     p.SendRepairOfferDeclined.GetMachinery(),
+			"request_no":    p.SendRepairOfferDeclined.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairOfferWithdrawn:
+		return map[string]string{
+			"provider_name": p.SendRepairOfferWithdrawn.GetProviderName(),
+			"machinery":     p.SendRepairOfferWithdrawn.GetMachinery(),
+			"request_no":    p.SendRepairOfferWithdrawn.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairRequestRejected:
+		return map[string]string{
+			"provider_name": p.SendRepairRequestRejected.GetProviderName(),
+			"machinery":     p.SendRepairRequestRejected.GetMachinery(),
+			"reason":        p.SendRepairRequestRejected.GetReason(),
+			"request_no":    p.SendRepairRequestRejected.GetRequestNo(),
+		}, nil
+	// Р47. `had_offer` is the ONLY thing that separates «[Сервис] не ответил по
+	// заявке» from «предложение [Сервис] больше не действует», and the provider's
+	// name is optional beside it because a request that expired with nobody on it
+	// has no name to print.
+	case *notificationv1.NotificationEnvelope_SendRepairRequestExpired:
+		return map[string]string{
+			"machinery":     p.SendRepairRequestExpired.GetMachinery(),
+			"had_offer":     p.SendRepairRequestExpired.GetHadOffer(),
+			"provider_name": p.SendRepairRequestExpired.GetProviderName(),
+			"request_no":    p.SendRepairRequestExpired.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairRequestExpiredProvider:
+		return map[string]string{
+			"machinery":  p.SendRepairRequestExpiredProvider.GetMachinery(),
+			"request_no": p.SendRepairRequestExpiredProvider.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairWorkStarted:
+		return map[string]string{
+			"provider_name": p.SendRepairWorkStarted.GetProviderName(),
+			"machinery":     p.SendRepairWorkStarted.GetMachinery(),
+			"request_no":    p.SendRepairWorkStarted.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairNewPriceProposed:
+		return map[string]string{
+			"provider_name":       p.SendRepairNewPriceProposed.GetProviderName(),
+			"machinery":           p.SendRepairNewPriceProposed.GetMachinery(),
+			"price":               p.SendRepairNewPriceProposed.GetPrice(),
+			"supersedes_previous": p.SendRepairNewPriceProposed.GetSupersedesPrevious(),
+			"request_no":          p.SendRepairNewPriceProposed.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairNewPriceAccepted:
+		return map[string]string{
+			"customer_name": p.SendRepairNewPriceAccepted.GetCustomerName(),
+			"price":         p.SendRepairNewPriceAccepted.GetPrice(),
+			"machinery":     p.SendRepairNewPriceAccepted.GetMachinery(),
+			"request_no":    p.SendRepairNewPriceAccepted.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairNewPriceDeclined:
+		return map[string]string{
+			"customer_name": p.SendRepairNewPriceDeclined.GetCustomerName(),
+			"machinery":     p.SendRepairNewPriceDeclined.GetMachinery(),
+			"request_no":    p.SendRepairNewPriceDeclined.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairNewPriceWithdrawn:
+		return map[string]string{
+			"provider_name": p.SendRepairNewPriceWithdrawn.GetProviderName(),
+			"machinery":     p.SendRepairNewPriceWithdrawn.GetMachinery(),
+			"request_no":    p.SendRepairNewPriceWithdrawn.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairWorkCompleted:
+		return map[string]string{
+			"provider_name": p.SendRepairWorkCompleted.GetProviderName(),
+			"machinery":     p.SendRepairWorkCompleted.GetMachinery(),
+			"request_no":    p.SendRepairWorkCompleted.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairConfirmReminder:
+		return map[string]string{
+			"machinery":  p.SendRepairConfirmReminder.GetMachinery(),
+			"request_no": p.SendRepairConfirmReminder.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairAutoConfirmed:
+		return map[string]string{
+			"machinery":  p.SendRepairAutoConfirmed.GetMachinery(),
+			"request_no": p.SendRepairAutoConfirmed.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairRequestCompleted:
+		return map[string]string{
+			"customer_name": p.SendRepairRequestCompleted.GetCustomerName(),
+			"machinery":     p.SendRepairRequestCompleted.GetMachinery(),
+			"price":         p.SendRepairRequestCompleted.GetPrice(),
+			"request_no":    p.SendRepairRequestCompleted.GetRequestNo(),
+		}, nil
+	// `rating` is REQUIRED, so strconv.Itoa and never countOrEmpty: the star
+	// count is always a literal {{.rating}} placeholder and never a clause that
+	// can collapse. strconv.Itoa is also why publish-time rejection is NOT what
+	// stops a starless review — an int32 always formats to something, so the
+	// param can never BE empty and notifyoutbox never sees it as missing. A zero
+	// rating renders «0★», and preventing it is the producer's job
+	// (order-service), not this tier's.
+	case *notificationv1.NotificationEnvelope_SendRepairReviewReceived:
+		return map[string]string{
+			"customer_name":  p.SendRepairReviewReceived.GetCustomerName(),
+			"machinery":      p.SendRepairReviewReceived.GetMachinery(),
+			"rating":         strconv.Itoa(int(p.SendRepairReviewReceived.GetRating())),
+			"deal_completed": p.SendRepairReviewReceived.GetDealCompleted(),
+			"request_no":     p.SendRepairReviewReceived.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairRequestCancelled:
+		return map[string]string{
+			"cancelled_by": p.SendRepairRequestCancelled.GetCancelledBy(),
+			"actor_name":   p.SendRepairRequestCancelled.GetActorName(),
+			"machinery":    p.SendRepairRequestCancelled.GetMachinery(),
+			"reason":       p.SendRepairRequestCancelled.GetReason(),
+			"request_no":   p.SendRepairRequestCancelled.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairRequestAutoCancelled:
+		return map[string]string{
+			"machinery":  p.SendRepairRequestAutoCancelled.GetMachinery(),
+			"request_no": p.SendRepairRequestAutoCancelled.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairReviewInvite:
+		return map[string]string{
+			"provider_name": p.SendRepairReviewInvite.GetProviderName(),
+			"machinery":     p.SendRepairReviewInvite.GetMachinery(),
+			"request_no":    p.SendRepairReviewInvite.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairReviewWindowEnding:
+		return map[string]string{
+			"provider_name": p.SendRepairReviewWindowEnding.GetProviderName(),
+			"machinery":     p.SendRepairReviewWindowEnding.GetMachinery(),
+			"request_no":    p.SendRepairReviewWindowEnding.GetRequestNo(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairPairFormed:
+		return map[string]string{
+			"machinery":  p.SendRepairPairFormed.GetMachinery(),
+			"request_no": p.SendRepairPairFormed.GetRequestNo(),
+		}, nil
+	// ─── Ремонт: the bank/posting family (master §3.3 rows 23–30) ───
+	//
+	// These eight name no tenant and carry no id: Р26 fans one directive out per
+	// matched seller tenant, and the seller's own company name in his own push
+	// would be noise. `seller_tenant_id` and `response_id` ride the DEEP LINK,
+	// which inbox-service persists beside the rendered text — a template that
+	// printed one would put a uuid in a push.
+	//
+	// `distance_km` is the family's only optional value and goes through
+	// countOrEmpty: a zero must render "" and not "0", because Go's template
+	// truth test runs on the STRING and «~0 km» would print for every seller
+	// standing on the posting's own point.
+	case *notificationv1.NotificationEnvelope_SendRepairMatchingPosting:
+		return map[string]string{
+			"machinery":   p.SendRepairMatchingPosting.GetMachinery(),
+			"work_types":  p.SendRepairMatchingPosting.GetWorkTypes(),
+			"distance_km": countOrEmpty(p.SendRepairMatchingPosting.GetDistanceKm()),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairResponseReceived:
+		return map[string]string{
+			"machinery": p.SendRepairResponseReceived.GetMachinery(),
+			"offer":     p.SendRepairResponseReceived.GetOffer(),
+		}, nil
+	// `seller_name` is named here and only here on the bank side: D17's
+	// withdrawal is about one identifiable responder among several, and «кто-то
+	// отозвал отклик» is not actionable.
+	case *notificationv1.NotificationEnvelope_SendRepairResponseWithdrawn:
+		return map[string]string{
+			"seller_name": p.SendRepairResponseWithdrawn.GetSellerName(),
+			"machinery":   p.SendRepairResponseWithdrawn.GetMachinery(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairResponseDeclined:
+		return map[string]string{
+			"machinery": p.SendRepairResponseDeclined.GetMachinery(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairPostingExpiring:
+		return map[string]string{
+			"machinery": p.SendRepairPostingExpiring.GetMachinery(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairPostingExpiredCustomer:
+		return map[string]string{
+			"machinery": p.SendRepairPostingExpiredCustomer.GetMachinery(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairPostingExpiredResponder:
+		return map[string]string{
+			"machinery": p.SendRepairPostingExpiredResponder.GetMachinery(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairPostingCancelled:
+		return map[string]string{
+			"machinery": p.SendRepairPostingCancelled.GetMachinery(),
+		}, nil
 	default:
 		// A payload IS set (the nil case is caught by the guard at the top) but no
 		// case matched it — a directive variant that reached this package without a

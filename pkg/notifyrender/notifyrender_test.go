@@ -1523,6 +1523,57 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	} {
 		declared[nt] = true
 	}
+	// ремонт — the whole order-side deal family (master §3.3 rows 0–22) carries
+	// an optional tier, and it is listed by hand for the same reason the parts
+	// blocks above are: the tier must not be able to grow without a reader.
+	//   • request_no — delivery's Д-13 reasoning exactly: order-service stamps
+	//     the human-facing number, and a directive may be emitted before one is
+	//     assigned, so every repair text reads it behind an {{if}} guard;
+	//   • machinery on the two NEW_PRICE decisions and price on
+	//     REQUEST_COMPLETED — clauses that collapse rather than dangle;
+	//   • provider_name on REQUEST_EXPIRED — the customer edition names the
+	//     repairer only when there was one to name;
+	//   • had_offer / supersedes_previous / deal_completed / cancelled_by — the
+	//     four discriminators. They are optional BY MECHANISM, not because a
+	//     producer might omit them: each is read only inside {{if eq .x "…"}}
+	//     and never as a literal {{.name}}, and a REQUIRED param with no literal
+	//     placeholder fails TestBaselineMatchesCatalogContract's reverse check.
+	for _, nt := range []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CREATED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_SENT,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_ACCEPTED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_DECLINED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_WITHDRAWN,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_REJECTED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_EXPIRED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_EXPIRED_PROVIDER,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_WORK_STARTED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_PROPOSED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_ACCEPTED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_DECLINED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_WITHDRAWN,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_WORK_COMPLETED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_CONFIRM_REMINDER,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_AUTO_CONFIRMED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_COMPLETED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_RECEIVED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CANCELLED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_AUTO_CANCELLED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_INVITE,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_WINDOW_ENDING,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_PAIR_FORMED,
+	} {
+		declared[nt] = true
+	}
+	// ремонт, bank side (master §3.3 rows 23–30) — exactly ONE of the eight
+	// posting/response types carries an optional tier, and it is named here for
+	// the same reason the blocks above are:
+	//   • distance_km on MATCHING_POSTING — the «~N km» decoration on Р26's
+	//     fan-out, read behind an {{if}} guard. It goes through countOrEmpty, so
+	//     a zero arrives as "" and drops the clause; a required count would
+	//     render the string "0", which is non-empty and would light the guard
+	//     as «~0 km». The other seven bank types declare no optional param.
+	declared[notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING] = true
 	for typ, params := range optionalParams {
 		if !declared[typ] {
 			t.Errorf("unexpected optional params %v on type %v", params, typ)

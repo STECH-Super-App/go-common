@@ -271,4 +271,104 @@ var BaselineEN = map[string]string{
 	"wallet_operation_decided.title":                     "Wallet operation {{.decision}}",
 	"wallet_operation_requested.body":                    "A {{.operation_kind}} of {{.amount}} {{.currency}} has been requested.",
 	"wallet_operation_requested.title":                   "Wallet operation requested",
+	// ── Ремонт спецтехники, order-side (master §3.3 rows 0–22) ──
+	//
+	// Composed from «Уведомления ремонта.md» (v1.3, 19.08.2026), which is the
+	// owner's Russian; the fleet convention is English composed FROM it, never a
+	// Russian composed from an English draft. Nine of these rows have no vault
+	// text at all and are marked NEW TEXT below — they are vault-patch targets,
+	// listed in this sub-plan's Assumptions.
+	"repair_request_created.title":  "New direct request",
+	"repair_request_created.body":   "New request from {{.customer_name}}: {{.machinery}}, {{.work_types}}.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_offer_sent.title":       "The service responded",
+	"repair_offer_sent.body":        "{{.provider_name}} responded to the {{.machinery}} request: {{.offer}}{{if eq .supersedes_previous \"true\"}} (updated offer){{end}}.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_offer_accepted.title":   "Offer accepted",
+	"repair_offer_accepted.body":    "{{.customer_name}} accepted your offer for {{.machinery}} — the request is confirmed.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_offer_declined.title":   "Offer declined",
+	"repair_offer_declined.body":    "{{.customer_name}} declined your offer for {{.machinery}} — you can propose other terms.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_offer_withdrawn.title":  "Offer withdrawn",
+	"repair_offer_withdrawn.body":   "{{.provider_name}} withdrew the offer on the {{.machinery}} request.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_request_rejected.title": "Request rejected",
+	"repair_request_rejected.body":  "{{.provider_name}} rejected the {{.machinery}} request: {{.reason}}.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// Р47's two customer editions on one type. The tail sentence is
+	// unconditional so the push stays actionable when had_offer is absent.
+	"repair_request_expired.title":          "Request expired",
+	"repair_request_expired.body":           "The {{.machinery}} request expired.{{if eq .had_offer \"true\"}}{{if .provider_name}} {{.provider_name}}'s offer is no longer valid.{{end}}{{else if eq .had_offer \"false\"}}{{if .provider_name}} {{.provider_name}} never answered.{{end}}{{end}} Send it to the request bank.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_request_expired_provider.title": "Request expired",
+	"repair_request_expired_provider.body":  "The {{.machinery}} request expired — your offer is no longer valid.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_work_started.title":             "Work started",
+	"repair_work_started.body":              "{{.provider_name}} started work on {{.machinery}}.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_new_price_proposed.title":       "New price proposed",
+	"repair_new_price_proposed.body":        "{{.provider_name}} proposes a new price for {{.machinery}}: {{.price}} — accept or decline.{{if eq .supersedes_previous \"true\"}} It replaces the previous proposal.{{end}}{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_new_price_accepted.title":       "New price accepted",
+	"repair_new_price_accepted.body":        "{{.customer_name}} accepted the new price of {{.price}}{{if .machinery}} for {{.machinery}}{{end}}.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_new_price_declined.title":       "New price declined",
+	"repair_new_price_declined.body":        "{{.customer_name}} declined the new price{{if .machinery}} for {{.machinery}}{{end}} — the previous agreement stands.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// NEW TEXT (D62) — the provider's explicit withdrawal of a pending mid-job
+	// proposal. An «update» is NEW_PRICE_PROPOSED with supersedes_previous.
+	"repair_new_price_withdrawn.title": "Price proposal withdrawn",
+	"repair_new_price_withdrawn.body":  "{{.provider_name}} withdrew the new price proposal for {{.machinery}} — the previous agreement stands.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_work_completed.title":      "Work completed",
+	"repair_work_completed.body":       "{{.provider_name}} completed the work on {{.machinery}} — confirm the result.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// NEW TEXT (D4) — §9's 48 h nudge, 24 h before the 72 h auto-confirm.
+	"repair_confirm_reminder.title": "Confirm the work",
+	"repair_confirm_reminder.body":  "The work on {{.machinery}} is still waiting for your confirmation. Confirm it, or it will be confirmed automatically in 24 hours.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// NEW TEXT (D4/D63) — the 72 h landing, addressed to BOTH sides: ONE type,
+	// one rendered string, one directive to each tenant. It therefore carries NO
+	// review call to action. Repair reviews are one-directional (заказчик →
+	// ремонтник, D24), so a second-person «you can leave a review» would tell the
+	// provider tenant it may do something it cannot, and would pass every render
+	// test that only checks for a non-empty string. The customer's invitation is
+	// repair_review_invite's own text; REVIEW_INVITE fires on the human confirm,
+	// so inviting an auto-confirmed customer is the PRODUCER's job — emit it on
+	// this path too — and not a clause here.
+	"repair_auto_confirmed.title": "Work confirmed automatically",
+	"repair_auto_confirmed.body":  "The work on {{.machinery}} was confirmed automatically.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// The vault's «Работы подтверждены» MINUS its rating clause: the rating is a
+	// separate later directive (REVIEW_RECEIVED) and cannot render here.
+	"repair_request_completed.title": "Work confirmed",
+	"repair_request_completed.body":  "{{.customer_name}} confirmed the work on {{.machinery}}.{{if .price}} Final price: {{.price}}.{{end}}{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_review_received.title":   "New review",
+	"repair_review_received.body":    "{{.customer_name}} left a review for {{.machinery}}: {{.rating}}★.{{if eq .deal_completed \"true\"}} The work was confirmed.{{else if eq .deal_completed \"false\"}} The request was cancelled — the deal did not take place.{{end}}{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// The vault's two cancel texts differ only in the subject, so cancelled_by
+	// chooses the noun and the neutral arm simply names the actor.
+	"repair_request_cancelled.title": "Request cancelled",
+	"repair_request_cancelled.body":  "{{if eq .cancelled_by \"customer\"}}The customer {{.actor_name}}{{else if eq .cancelled_by \"provider\"}}The service {{.actor_name}}{{else}}{{.actor_name}}{{end}} cancelled the {{.machinery}} request: {{.reason}}.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// NEW TEXT (D4/D23) — §9's idle-cancel out of CONFIRMED, to both sides. No
+	// by-side arm covers a system cancel, and no actor may be named.
+	"repair_request_auto_cancelled.title": "Request cancelled automatically",
+	"repair_request_auto_cancelled.body":  "The {{.machinery}} request was cancelled automatically — it had no activity for 14 days.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// NEW TEXT (D63) — fires on the human confirm only.
+	"repair_review_invite.title": "Leave a review",
+	"repair_review_invite.body":  "How did {{.provider_name}} handle the {{.machinery}} repair? Leave a review — you have 14 days.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// NEW TEXT — §9's review-window reminder, 48 h before the window closes.
+	"repair_review_window_ending.title": "Review window closing",
+	"repair_review_window_ending.body":  "2 days left to review {{.provider_name}}'s work on {{.machinery}}.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_pair_formed.title":          "You were chosen",
+	"repair_pair_formed.body":           "You were chosen for the {{.machinery}} request — contact details are now available.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	// ── Ремонт спецтехники, bank side (master §3.3 rows 23–30) ──
+	"repair_matching_posting.title":  "New matching request",
+	"repair_matching_posting.body":   "A new request matching your specialisation: {{.machinery}}, {{.work_types}}{{if .distance_km}}, ~{{.distance_km}} km{{end}}.",
+	"repair_response_received.title": "New response",
+	"repair_response_received.body":  "A new response to your {{.machinery}} request: {{.offer}}.",
+	// NEW TEXT (D17) — the vault's «Предложение отозвано» is the DIRECT-request
+	// offer, sibling of «Предложение сервиса (прямая)»; a bank отклик withdrawn
+	// has no row of its own.
+	"repair_response_withdrawn.title": "Response withdrawn",
+	"repair_response_withdrawn.body":  "{{.seller_name}} withdrew its response to your {{.machinery}} request.",
+	"repair_response_declined.title":  "Another contractor was chosen",
+	"repair_response_declined.body":   "Your response to the {{.machinery}} request is closed. Other open requests are waiting in the request bank.",
+	"repair_posting_expiring.title":   "Request expires tomorrow",
+	"repair_posting_expiring.body":    "The {{.machinery}} request expires tomorrow — extend it or update it.",
+	// The vault says «Продлить на 7 дней?»; D32 makes the extension 14 days, so
+	// the text is rewritten here and the vault patched.
+	"repair_posting_expired_customer.title": "Request expired",
+	"repair_posting_expired_customer.body":  "The {{.machinery}} request expired. Extend it for 14 days?",
+	// NEW TEXT (D6) — the «Ремонтнику» table has a row for a CANCELLED open
+	// posting and one for the direct Р47 case, none for the hard expiry of an
+	// OPEN posting whose ACTIVE response the sweep withdrew.
+	"repair_posting_expired_responder.title": "Request expired",
+	"repair_posting_expired_responder.body":  "The {{.machinery}} request expired — your response is no longer active.",
+	"repair_posting_cancelled.title":         "The customer cancelled the request",
+	"repair_posting_cancelled.body":          "Your response to the {{.machinery}} request is closed as well. Other open requests are waiting in the request bank.",
 }
