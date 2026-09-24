@@ -343,28 +343,50 @@ var BaselineEN = map[string]string{
 	"repair_review_invite.title": "Leave a review",
 	"repair_review_invite.body":  "How did {{.provider_name}} handle the {{.machinery}} repair? Leave a review — you have 14 days.{{if .request_no}} Request #{{.request_no}}.{{end}}",
 	// NEW TEXT — §9's review-window reminder, 48 h before the window closes.
+	//
+	// `deal_completed` governs the WHOLE first sentence (repair critique
+	// NOTIF-04): D24 makes a CONFIRMED deal reviewable and D25's cancel path
+	// reviewable too, so «2 days left to review X's work» is simply wrong for
+	// the half of the window that follows a cancellation — there was no work.
+	//
+	// ONE ARM ASSERTS, THE {{else}} IS TODAY'S TEXT. Only «false» claims
+	// anything; the default arm is byte-identical to the sentence that shipped
+	// before the field existed, so a producer older than it, a replayed
+	// envelope, and a «true» all render exactly what they rendered yesterday.
+	// The two-explicit-arms shape this family uses elsewhere cannot be used
+	// here — the discriminator replaces the sentence instead of appending to
+	// it, so an absent value would light neither arm and the push would go out
+	// with an EMPTY body.
 	"repair_review_window_ending.title": "Review window closing",
-	"repair_review_window_ending.body":  "2 days left to review {{.provider_name}}'s work on {{.machinery}}.{{if .request_no}} Request #{{.request_no}}.{{end}}",
+	"repair_review_window_ending.body":  "2 days left to review {{if eq .deal_completed \"false\"}}the deal with {{.provider_name}} on {{.machinery}} — the request was cancelled{{else}}{{.provider_name}}'s work on {{.machinery}}{{end}}.{{if .request_no}} Request #{{.request_no}}.{{end}}",
 	"repair_pair_formed.title":          "You were chosen",
 	"repair_pair_formed.body":           "You were chosen for the {{.machinery}} request — contact details are now available.{{if .request_no}} Request #{{.request_no}}.{{end}}",
 	// ── Ремонт спецтехники, bank side (master §3.3 rows 23–30) ──
+	//
+	// `posting_no` («Заявка #N») is read by the FOUR customer-addressed rows
+	// below and by no other (repair critique NOTIF-06): a customer holds several
+	// open postings at once, so «новый отклик на вашу заявку» names none of them
+	// without a number. The responder-addressed rows stay unnumbered per §5 R7 —
+	// the customer's numbering is not a seller's vocabulary. Each suffix is
+	// guarded by {{if .posting_no}}, so an empty value drops the clause instead
+	// of dangling a «#».
 	"repair_matching_posting.title":  "New matching request",
 	"repair_matching_posting.body":   "A new request matching your specialisation: {{.machinery}}, {{.work_types}}{{if .distance_km}}, ~{{.distance_km}} km{{end}}.",
 	"repair_response_received.title": "New response",
-	"repair_response_received.body":  "A new response to your {{.machinery}} request: {{.offer}}.",
+	"repair_response_received.body":  "A new response to your {{.machinery}} request: {{.offer}}.{{if .posting_no}} Request #{{.posting_no}}.{{end}}",
 	// NEW TEXT (D17) — the vault's «Предложение отозвано» is the DIRECT-request
 	// offer, sibling of «Предложение сервиса (прямая)»; a bank отклик withdrawn
 	// has no row of its own.
 	"repair_response_withdrawn.title": "Response withdrawn",
-	"repair_response_withdrawn.body":  "{{.seller_name}} withdrew its response to your {{.machinery}} request.",
+	"repair_response_withdrawn.body":  "{{.seller_name}} withdrew its response to your {{.machinery}} request.{{if .posting_no}} Request #{{.posting_no}}.{{end}}",
 	"repair_response_declined.title":  "Another contractor was chosen",
 	"repair_response_declined.body":   "Your response to the {{.machinery}} request is closed. Other open requests are waiting in the request bank.",
 	"repair_posting_expiring.title":   "Request expires tomorrow",
-	"repair_posting_expiring.body":    "The {{.machinery}} request expires tomorrow — extend it or update it.",
+	"repair_posting_expiring.body":    "The {{.machinery}} request expires tomorrow — extend it or update it.{{if .posting_no}} Request #{{.posting_no}}.{{end}}",
 	// The vault says «Продлить на 7 дней?»; D32 makes the extension 14 days, so
 	// the text is rewritten here and the vault patched.
 	"repair_posting_expired_customer.title": "Request expired",
-	"repair_posting_expired_customer.body":  "The {{.machinery}} request expired. Extend it for 14 days?",
+	"repair_posting_expired_customer.body":  "The {{.machinery}} request expired. Extend it for 14 days?{{if .posting_no}} Request #{{.posting_no}}.{{end}}",
 	// NEW TEXT (D6) — the «Ремонтнику» table has a row for a CANCELLED open
 	// posting and one for the direct Р47 case, none for the hard expiry of an
 	// OPEN posting whose ACTIVE response the sweep withdrew.

@@ -975,11 +975,22 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"machinery":     p.SendRepairReviewInvite.GetMachinery(),
 			"request_no":    p.SendRepairReviewInvite.GetRequestNo(),
 		}, nil
+	// `deal_completed` is the SAME wire vocabulary REVIEW_RECEIVED carries —
+	// the strings "true" and "false", passed through verbatim and never
+	// strconv.FormatBool — because the reminder must be able to say «the request
+	// was cancelled» to a customer whose deal never took place (repair critique
+	// NOTIF-04). D24 makes a CONFIRMED deal reviewable and D25's cancel path
+	// reviewable too, so «оценить работы» is wrong for half the window.
+	//
+	// Absent is a THIRD value here, not a missing one: a producer older than the
+	// field, or a replayed envelope, sends nothing, and the baseline's {{else}}
+	// arm is byte-identical to the text that shipped before this field existed.
 	case *notificationv1.NotificationEnvelope_SendRepairReviewWindowEnding:
 		return map[string]string{
-			"provider_name": p.SendRepairReviewWindowEnding.GetProviderName(),
-			"machinery":     p.SendRepairReviewWindowEnding.GetMachinery(),
-			"request_no":    p.SendRepairReviewWindowEnding.GetRequestNo(),
+			"provider_name":  p.SendRepairReviewWindowEnding.GetProviderName(),
+			"machinery":      p.SendRepairReviewWindowEnding.GetMachinery(),
+			"deal_completed": p.SendRepairReviewWindowEnding.GetDealCompleted(),
+			"request_no":     p.SendRepairReviewWindowEnding.GetRequestNo(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendRepairPairFormed:
 		return map[string]string{
@@ -1014,10 +1025,29 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"work_types":  p.SendRepairMatchingPosting.GetWorkTypes(),
 			"distance_km": countOrEmpty(p.SendRepairMatchingPosting.GetDistanceKm()),
 		}, nil
+	// `posting_no` — the human-facing number of the customer's OWN posting
+	// («Заявка #N»), and it appears on exactly the four board directives
+	// addressed TO the customer: a customer holds several open postings at once
+	// and «новый отклик на вашу заявку» names none of them without it (repair
+	// critique NOTIF-06).
+	//
+	// ⚠ It is NOT `request_no`. That number is order-service's DEAL sequence,
+	// which no board payload carries and which counts a different thing; a
+	// template spelling the placeholder that way would render empty forever,
+	// silently, because the {{if}} guard would simply never light.
+	//
+	// The four RESPONDER-addressed board payloads (RESPONSE_DECLINED,
+	// POSTING_EXPIRED_RESPONDER, POSTING_CANCELLED, MATCHING_POSTING) carry no
+	// posting_no on purpose: the customer's own numbering is not a seller's
+	// vocabulary, and a seller reads the posting through the bank, not by number.
+	//
+	// It is a string on the wire, like request_no, so it needs no countOrEmpty —
+	// "" is the absent form and collapses {{if .posting_no}} on its own.
 	case *notificationv1.NotificationEnvelope_SendRepairResponseReceived:
 		return map[string]string{
-			"machinery": p.SendRepairResponseReceived.GetMachinery(),
-			"offer":     p.SendRepairResponseReceived.GetOffer(),
+			"machinery":  p.SendRepairResponseReceived.GetMachinery(),
+			"offer":      p.SendRepairResponseReceived.GetOffer(),
+			"posting_no": p.SendRepairResponseReceived.GetPostingNo(),
 		}, nil
 	// `seller_name` is named here and only here on the bank side: D17's
 	// withdrawal is about one identifiable responder among several, and «кто-то
@@ -1026,6 +1056,7 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"seller_name": p.SendRepairResponseWithdrawn.GetSellerName(),
 			"machinery":   p.SendRepairResponseWithdrawn.GetMachinery(),
+			"posting_no":  p.SendRepairResponseWithdrawn.GetPostingNo(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendRepairResponseDeclined:
 		return map[string]string{
@@ -1033,11 +1064,13 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendRepairPostingExpiring:
 		return map[string]string{
-			"machinery": p.SendRepairPostingExpiring.GetMachinery(),
+			"machinery":  p.SendRepairPostingExpiring.GetMachinery(),
+			"posting_no": p.SendRepairPostingExpiring.GetPostingNo(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendRepairPostingExpiredCustomer:
 		return map[string]string{
-			"machinery": p.SendRepairPostingExpiredCustomer.GetMachinery(),
+			"machinery":  p.SendRepairPostingExpiredCustomer.GetMachinery(),
+			"posting_no": p.SendRepairPostingExpiredCustomer.GetPostingNo(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendRepairPostingExpiredResponder:
 		return map[string]string{
