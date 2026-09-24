@@ -317,9 +317,12 @@ var BaselineEN = map[string]string{
 	// ремонтник, D24), so a second-person «you can leave a review» would tell the
 	// provider tenant it may do something it cannot, and would pass every render
 	// test that only checks for a non-empty string. The customer's invitation is
-	// repair_review_invite's own text; REVIEW_INVITE fires on the human confirm,
-	// so inviting an auto-confirmed customer is the PRODUCER's job — emit it on
-	// this path too — and not a clause here.
+	// repair_review_invite's own text, and inviting the customer is the PRODUCER's
+	// job on BOTH confirmation paths — order-service emits REVIEW_INVITE beside
+	// this type on the 72 h auto-confirm exactly as it does on the human confirm
+	// (D63, decision of 24.09.2026, repair critique NOTIF-01). It is never a
+	// clause here: this one type is addressed to both tenants, so an invitation
+	// in this text would also reach the provider.
 	"repair_auto_confirmed.title": "Work confirmed automatically",
 	"repair_auto_confirmed.body":  "The work on {{.machinery}} was confirmed automatically.{{if .request_no}} Request #{{.request_no}}.{{end}}",
 	// The vault's «Работы подтверждены» MINUS its rating clause: the rating is a

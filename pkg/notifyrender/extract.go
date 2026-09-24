@@ -998,6 +998,16 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	// countOrEmpty: a zero must render "" and not "0", because Go's template
 	// truth test runs on the STRING and «~0 km» would print for every seller
 	// standing on the posting's own point.
+	//
+	// ZERO IS THE «UNKNOWN» SENTINEL, and it is the producer's job to keep it
+	// unambiguous: the field is an int32, so a known distance that rounds to
+	// zero and an unresolvable one would otherwise share a wire value. The
+	// producer FLOORS a known positive distance at one kilometre
+	// (sale-service's RepairPostingNotificationAdapter, `max(1, round($km))`)
+	// and sends zero only when it has no distance at all — without that floor
+	// the push for the nearest possible request, the one across the street, is
+	// the one that omits the distance (repair critique MATCHING-08). Nothing
+	// here can recover it: this side sees one integer.
 	case *notificationv1.NotificationEnvelope_SendRepairMatchingPosting:
 		return map[string]string{
 			"machinery":   p.SendRepairMatchingPosting.GetMachinery(),
