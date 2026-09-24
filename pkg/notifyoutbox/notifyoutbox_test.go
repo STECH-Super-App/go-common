@@ -3,6 +3,7 @@ package notifyoutbox
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -412,5 +413,178 @@ func TestPublishDirective_HappyWritesRow(t *testing.T) {
 	}
 	if row.ID != "11111111-1111-1111-1111-111111111111" {
 		t.Errorf("Message.ID = %q, want envelope EventId", row.ID)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ремонт спецтехники — the [IN_APP, PUSH] channel guard (critique NOTIF-09).
+//
+// Spec §11 / D28 say a repair directive takes exactly that pair. Until this
+// guard nothing enforced it: the sentence everyone quoted («repair has no rows
+// in the email/SMS template table») describes a table notification-service
+// consults ONLY for a type it does not recognise, and it recognises every
+// repair type. An envelope declaring EMAIL would have reached the email sender
+// carrying the push title and body.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// repairEnvelope returns a minimally-valid repair directive: tenant-addressed,
+// the legal channel pair, and a payload whose one required param is populated.
+// Tests mutate Metadata.Channels to drive the guard.
+func repairEnvelope(t *testing.T) *notificationv1.NotificationEnvelope {
+	t.Helper()
+	e := validEnvelope(t)
+	e.Metadata.RecipientUserId = ""
+	e.Metadata.RecipientTenantId = testTenantID
+	e.Metadata.Type = notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_DECLINED
+	e.Metadata.Channels = []notificationv1.Channel{
+		notificationv1.Channel_CHANNEL_IN_APP,
+		notificationv1.Channel_CHANNEL_PUSH,
+	}
+	e.Metadata.DeepLink = &notificationv1.DeepLinkTarget{
+		Screen: notificationv1.DeepLinkScreen_DEEP_LINK_SCREEN_REPAIR_POSTING_RESPONDER,
+		Params: map[string]string{"posting_id": "P1", "seller_tenant_id": testTenantID},
+	}
+	e.Payload = &notificationv1.NotificationEnvelope_SendRepairResponseDeclined{
+		SendRepairResponseDeclined: &notificationv1.SendRepairResponseDeclined{
+			Machinery: "Экскаватор Komatsu PC200",
+		},
+	}
+	return e
+}
+
+// TestValidateRepairChannels_PairAccepted: both orderings pass. The rule is a
+// SET, not a sequence — neither producer is asked to agree on an order.
+func TestValidateRepairChannels_PairAccepted(t *testing.T) {
+	orders := [][]notificationv1.Channel{
+		{notificationv1.Channel_CHANNEL_IN_APP, notificationv1.Channel_CHANNEL_PUSH},
+		{notificationv1.Channel_CHANNEL_PUSH, notificationv1.Channel_CHANNEL_IN_APP},
+	}
+	for _, channels := range orders {
+		e := repairEnvelope(t)
+		e.Metadata.Channels = channels
+		if err := validateRepairChannels(e.GetMetadata()); err != nil {
+			t.Errorf("channels %v: expected nil, got %v", channels, err)
+		}
+	}
+}
+
+// TestValidateRepairChannels_RejectsIllegalSets walks the ways a producer could
+// widen or narrow the pair. The EMAIL-only and SMS-only rows are the ones no
+// other check could catch: validateParams returns early when IN_APP is absent,
+// so before this guard those two envelopes were validated by nothing at all.
+func TestValidateRepairChannels_RejectsIllegalSets(t *testing.T) {
+	cases := []struct {
+		name     string
+		channels []notificationv1.Channel
+	}{
+		{"email_widens_the_pair", []notificationv1.Channel{
+			notificationv1.Channel_CHANNEL_IN_APP,
+			notificationv1.Channel_CHANNEL_PUSH,
+			notificationv1.Channel_CHANNEL_EMAIL,
+		}},
+		{"email_only", []notificationv1.Channel{notificationv1.Channel_CHANNEL_EMAIL}},
+		{"sms_only", []notificationv1.Channel{notificationv1.Channel_CHANNEL_SMS}},
+		{"in_app_swapped_for_email", []notificationv1.Channel{
+			notificationv1.Channel_CHANNEL_EMAIL,
+			notificationv1.Channel_CHANNEL_PUSH,
+		}},
+		{"in_app_alone", []notificationv1.Channel{notificationv1.Channel_CHANNEL_IN_APP}},
+		{"push_alone", []notificationv1.Channel{notificationv1.Channel_CHANNEL_PUSH}},
+		{"duplicated_in_app", []notificationv1.Channel{
+			notificationv1.Channel_CHANNEL_IN_APP,
+			notificationv1.Channel_CHANNEL_IN_APP,
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := repairEnvelope(t)
+			e.Metadata.Channels = tc.channels
+			assertReason(t, validateRepairChannels(e.GetMetadata()), ReasonRepairChannels)
+		})
+	}
+}
+
+// TestValidateRepairChannels_CoversEveryDeclaredRepairType: the guard is keyed
+// on the enum NAME, so it has to hold for all 31 values and for the thirty-second
+// the day proto-contracts mints it — not for the one specimen above. The count
+// is asserted here as well, mirroring notifyrender's census: a family that grows
+// without this file noticing is exactly the failure NOTIF-09 describes.
+func TestValidateRepairChannels_CoversEveryDeclaredRepairType(t *testing.T) {
+	declared := 0
+	for value, name := range notificationv1.NotificationType_name {
+		nt := notificationv1.NotificationType(value)
+		if !strings.HasPrefix(name, repairTypePrefix) {
+			if isRepairType(nt) {
+				t.Errorf("%s is not a repair type but isRepairType says it is", name)
+			}
+			continue
+		}
+		declared++
+		if !isRepairType(nt) {
+			t.Errorf("%s: isRepairType = false", name)
+		}
+		m := &notificationv1.EnvelopeMetadata{
+			Type:     nt,
+			Channels: []notificationv1.Channel{notificationv1.Channel_CHANNEL_EMAIL},
+		}
+		assertReason(t, validateRepairChannels(m), ReasonRepairChannels)
+	}
+	if declared != 31 {
+		t.Errorf("proto declares %d NOTIFICATION_TYPE_REPAIR_* values, expected 31 (master §3.3, values 134–164)", declared)
+	}
+}
+
+// TestValidateRepairChannels_LeavesOtherFamiliesAlone: the guard is repair-only.
+// Rent, delivery and parts directives legitimately declare EMAIL or SMS, and a
+// guard that fired on them would roll back writes across three verticals.
+func TestValidateRepairChannels_LeavesOtherFamiliesAlone(t *testing.T) {
+	others := []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_INVITE,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_UNSPECIFIED,
+	}
+	for _, nt := range others {
+		m := &notificationv1.EnvelopeMetadata{
+			Type: nt,
+			Channels: []notificationv1.Channel{
+				notificationv1.Channel_CHANNEL_EMAIL,
+				notificationv1.Channel_CHANNEL_SMS,
+				notificationv1.Channel_CHANNEL_IN_APP,
+			},
+		}
+		if err := validateRepairChannels(m); err != nil {
+			t.Errorf("%s: expected the repair guard to ignore it, got %v", nt.String(), err)
+		}
+	}
+}
+
+// TestPublishDirective_RepairEmailRollsBackBeforeOutbox: the guard runs inside
+// the caller's transaction and refuses BEFORE the outbox row is written, so the
+// producer's own write rolls back rather than a malformed push being published.
+func TestPublishDirective_RepairEmailRollsBackBeforeOutbox(t *testing.T) {
+	store := outbox.NewTestStore()
+	pub := outbox.NewPublisher(store, "default-topic")
+	e := repairEnvelope(t)
+	e.Metadata.Channels = []notificationv1.Channel{
+		notificationv1.Channel_CHANNEL_IN_APP,
+		notificationv1.Channel_CHANNEL_PUSH,
+		notificationv1.Channel_CHANNEL_EMAIL,
+	}
+	assertReason(t, PublishDirective(context.Background(), pub, nil, e), ReasonRepairChannels)
+	if got := len(store.Messages); got != 0 {
+		t.Errorf("expected no outbox write, got %d", got)
+	}
+}
+
+// TestPublishDirective_RepairPairWritesRow: the legal pair still publishes —
+// the guard refuses a channel set, never the family.
+func TestPublishDirective_RepairPairWritesRow(t *testing.T) {
+	store := outbox.NewTestStore()
+	pub := outbox.NewPublisher(store, "default-topic")
+	if err := PublishDirective(context.Background(), pub, nil, repairEnvelope(t)); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if got := len(store.Messages); got != 1 {
+		t.Fatalf("expected 1 outbox row, got %d", got)
 	}
 }

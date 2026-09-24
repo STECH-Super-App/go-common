@@ -2,6 +2,7 @@ package notifyoutbox
 
 import (
 	"context"
+	"strings"
 
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
 	eventsv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/v1"
@@ -44,6 +45,9 @@ func PublishDirective(
 		return errNilPublisher()
 	}
 	if err := validate(env); err != nil {
+		return err
+	}
+	if err := validateRepairChannels(env.GetMetadata()); err != nil {
 		return err
 	}
 	if err := validateParams(env); err != nil {
@@ -140,6 +144,63 @@ func validateParams(env *notificationv1.NotificationEnvelope) error {
 		if v, ok := params[required]; !ok || v == "" {
 			return errMissingParam(env.GetMetadata().GetType(), required)
 		}
+	}
+	return nil
+}
+
+// repairTypePrefix is the enum-name prefix every «Ремонт спецтехники» directive
+// shares. The family is recognised by NAME rather than by a hand-written list of
+// the 31 values because the list is the thing that would be forgotten: a
+// thirty-second repair type minted in proto-contracts must be guarded the day it
+// exists, not the day somebody remembers this file.
+const repairTypePrefix = "NOTIFICATION_TYPE_REPAIR_"
+
+// isRepairType reports whether t belongs to the repair family. The lookup is on
+// NotificationType_name rather than t.String() so an unknown numeric value
+// yields "" — which matches no prefix — instead of a decimal string.
+func isRepairType(t notificationv1.NotificationType) bool {
+	return strings.HasPrefix(notificationv1.NotificationType_name[int32(t)], repairTypePrefix)
+}
+
+// validateRepairChannels enforces spec §11 / D28: a repair directive takes
+// EXACTLY the pair [IN_APP, PUSH] and no other channel.
+//
+// This is the guard, and until now there was none. The stated one — «repair has
+// no rows in notification-service's email/SMS template table, so it cannot take
+// those channels» — is not a guard at all: that table is consulted only when the
+// dispatcher does not recognise a type, and every repair type is recognised by
+// notifyrender. An envelope declaring EMAIL would have reached the email sender
+// with the push title and body in it. What actually kept repair on the pair was
+// that both producers hard-code it (order-service's repairChannels(),
+// sale-service's per-service CHANNELS consts) — a convention, one edit from
+// being untrue, with nothing red anywhere (critique 2026-09-23, NOTIF-09).
+//
+// It runs INSIDE the caller's transaction, beside the required-param check, and
+// for the same reason: a rejected directive must roll the producer's own write
+// back rather than be published as a malformed push.
+//
+// «Exactly» is read strictly — two entries, one IN_APP and one PUSH, in either
+// order. A repeated channel is refused too: a duplicate is a producer bug, and
+// every channel-owning consumer fans out per entry.
+func validateRepairChannels(m *notificationv1.EnvelopeMetadata) error {
+	if m == nil || !isRepairType(m.GetType()) {
+		return nil
+	}
+	channels := m.GetChannels()
+	if len(channels) != 2 {
+		return errRepairChannels(m.GetType(), channels)
+	}
+	var inApp, push bool
+	for _, c := range channels {
+		switch c {
+		case notificationv1.Channel_CHANNEL_IN_APP:
+			inApp = true
+		case notificationv1.Channel_CHANNEL_PUSH:
+			push = true
+		}
+	}
+	if !inApp || !push {
+		return errRepairChannels(m.GetType(), channels)
 	}
 	return nil
 }

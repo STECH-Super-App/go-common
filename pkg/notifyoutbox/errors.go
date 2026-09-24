@@ -6,6 +6,7 @@ package notifyoutbox
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
 
@@ -29,6 +30,14 @@ const (
 	ReasonMissingParam       = "NOTIFYOUTBOX_MISSING_PARAM"
 	ReasonNilPublisher       = "NOTIFYOUTBOX_NIL_PUBLISHER"
 	ReasonEmptyVerbatim      = "NOTIFYOUTBOX_EMPTY_VERBATIM"
+	// ReasonRepairChannels follows this package's twelve siblings
+	// (NOTIFYOUTBOX_<CONDITION>) rather than Critical Rule 7's
+	// <SERVICE>_<DOMAIN>_<CONDITION>: a shared library has no service name to
+	// put there, and one odd-one-out among thirteen would read as a typo. The
+	// deviation was reviewed and taken deliberately (repair critique
+	// 2026-09-23, libs #6) — consistency inside the package wins. New reasons
+	// here keep the package prefix; do not "fix" the family.
+	ReasonRepairChannels = "NOTIFYOUTBOX_REPAIR_CHANNEL_SET"
 )
 
 func errEmptyEventID() *commonerr.AppError {
@@ -99,6 +108,25 @@ func errMissingParam(t notificationv1.NotificationType, param string) *commonerr
 		Reason(ReasonMissingParam).
 		Message(fmt.Sprintf("missing required param %q for type %s", param, t.String())).
 		Params(map[string]any{"type": t.String(), "param": param}).
+		Build()
+}
+
+// errRepairChannels names the offending type AND the channel set it declared:
+// the whole point of the guard is that the two producers are allowed to widen
+// the pair only by changing this rule, so the message has to say what was asked
+// for. Channels are printed by enum name, the vocabulary the producer typed.
+func errRepairChannels(t notificationv1.NotificationType, channels []notificationv1.Channel) *commonerr.AppError {
+	names := make([]string, 0, len(channels))
+	for _, c := range channels {
+		names = append(names, c.String())
+	}
+	got := strings.Join(names, ", ")
+	return commonerr.New(http.StatusInternalServerError).
+		Reason(ReasonRepairChannels).
+		Message(fmt.Sprintf(
+			"repair directive %s declares channels [%s]; the Ремонт family is exactly [CHANNEL_IN_APP, CHANNEL_PUSH] (spec §11, D28)",
+			t.String(), got)).
+		Params(map[string]any{"type": t.String(), "channels": got}).
 		Build()
 }
 
