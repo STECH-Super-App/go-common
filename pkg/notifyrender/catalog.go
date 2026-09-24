@@ -996,6 +996,16 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	// `supersedes_previous` is the single-armed exception and is allowed to be:
 	// its false edition is «say nothing», which is true under every value the
 	// wire can carry.
+	//
+	// REVIEW_WINDOW_ENDING's `deal_completed` is the SECOND such exception, and
+	// it is written {{if eq .deal_completed "false"}}…{{else}}…{{end}} on
+	// purpose (repair critique NOTIF-04). The rule above protects a reader from
+	// an arm that ASSERTS something the wire did not say; here only the "false"
+	// arm asserts anything («the request was cancelled»), and the {{else}} is
+	// byte-identical to the sentence that shipped before the field existed. The
+	// discriminator governs the WHOLE sentence rather than adding a suffix, so
+	// two explicit arms with no default would render an EMPTY body for an absent
+	// value — a worse failure than the one the rule guards against.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CREATED: {"request_no"},
 	// D62 reaches the pre-confirm offer too: a re-offer on AWAITING_CUSTOMER_
 	// DECISION supersedes the pending one, so OFFER_SENT reads the same flag as
@@ -1020,14 +1030,38 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CANCELLED:        {"cancelled_by", "request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_AUTO_CANCELLED:   {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_INVITE:            {"request_no"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_WINDOW_ENDING:     {"request_no"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_PAIR_FORMED:              {"request_no"},
+	// `deal_completed` joins request_no here, and OPTIONAL is the only tier it
+	// can hold: it is read solely inside {{if eq .deal_completed "false"}} and
+	// never as a literal {{.deal_completed}}, so declaring it required would
+	// fail TestBaselineMatchesCatalogContract's reverse check («declared param
+	// never used»). Same mechanism, same vocabulary and same reasoning as
+	// REVIEW_RECEIVED's copy of the flag one row above (repair critique
+	// NOTIF-04).
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_WINDOW_ENDING: {"deal_completed", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_PAIR_FORMED:          {"request_no"},
 	// `distance_km` is the only optional param on the bank side, and it goes
 	// through countOrEmpty: a zero renders "" and collapses the clause, because
 	// "0" is a non-empty STRING and would light its own guard («~0 km»). The
 	// sentence without it — machinery plus work types — is already the whole
 	// offer, so the tilde-distance is decoration and may vanish.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING: {"distance_km"},
+	// `posting_no` — «Заявка #N», the customer's own posting number, on the four
+	// board directives addressed TO the customer (repair critique NOTIF-06). It
+	// is optional for delivery's Д-13 reason exactly: sale-service stamps the
+	// number, but a directive may be emitted by a producer older than the field
+	// or replayed from before it, so every text reads it behind an {{if}} guard
+	// and an empty value drops the clause rather than dangling a «#».
+	//
+	// The four RESPONDER-addressed board types declare none: a seller has no
+	// vocabulary for the customer's numbering, and §5 R7 keeps those rows
+	// unnumbered.
+	//
+	// ⚠ The param is `posting_no`, NOT `request_no` — that one is order-service's
+	// deal sequence and counts a different thing.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_RECEIVED:        {"posting_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN:       {"posting_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRING:         {"posting_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_CUSTOMER: {"posting_no"},
 }
 
 // RequiredParams returns the param names required for type t — the contract

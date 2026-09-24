@@ -264,7 +264,8 @@ func repairDealEnvelopes() []repairCase {
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_WINDOW_ENDING, "REVIEW_WINDOW_ENDING", &notificationv1.NotificationEnvelope{
 			Payload: &notificationv1.NotificationEnvelope_SendRepairReviewWindowEnding{
 				SendRepairReviewWindowEnding: &notificationv1.SendRepairReviewWindowEnding{
-					ProviderName: "СТО «Гидромаш»", Machinery: "Экскаватор Komatsu PC200", RequestNo: "1042",
+					ProviderName: "СТО «Гидромаш»", Machinery: "Экскаватор Komatsu PC200",
+					DealCompleted: "true", RequestNo: "1042",
 				}}}},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_PAIR_FORMED, "PAIR_FORMED", &notificationv1.NotificationEnvelope{
 			Payload: &notificationv1.NotificationEnvelope_SendRepairPairFormed{
@@ -316,6 +317,13 @@ func TestRepairDirectivesRenderRatherThanDeadLetter(t *testing.T) {
 // machinery label the deal-side fixtures carry: one posting becomes one deal,
 // and the label is frozen at posting time, so a divergence here would be a
 // fixture telling a story the product cannot.
+//
+// The four CUSTOMER-addressed rows carry `posting_no` (NOTIF-06) because that is
+// what sale-service writes; the four responder-addressed ones carry none, and
+// TestRepairResponderBoardRowsCarryNoPostingNumber is what holds that apart. The
+// ABSENT form of every optional is covered by
+// TestRepairTemplatesDegradeCleanlyWithEveryOptionalAbsent, so populating here
+// costs no coverage and buys the populated form a ru-locale render.
 func repairBankEnvelopes() []repairCase {
 	return stamp([]repairCase{
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING, "MATCHING_POSTING", &notificationv1.NotificationEnvelope{
@@ -326,12 +334,12 @@ func repairBankEnvelopes() []repairCase {
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_RECEIVED, "RESPONSE_RECEIVED", &notificationv1.NotificationEnvelope{
 			Payload: &notificationv1.NotificationEnvelope_SendRepairResponseReceived{
 				SendRepairResponseReceived: &notificationv1.SendRepairResponseReceived{
-					Machinery: "Экскаватор Komatsu PC200", Offer: "10 000–15 000 ₽",
+					Machinery: "Экскаватор Komatsu PC200", Offer: "10 000–15 000 ₽", PostingNo: "4711",
 				}}}},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN, "RESPONSE_WITHDRAWN", &notificationv1.NotificationEnvelope{
 			Payload: &notificationv1.NotificationEnvelope_SendRepairResponseWithdrawn{
 				SendRepairResponseWithdrawn: &notificationv1.SendRepairResponseWithdrawn{
-					SellerName: "СТО «Гидромаш»", Machinery: "Экскаватор Komatsu PC200",
+					SellerName: "СТО «Гидромаш»", Machinery: "Экскаватор Komatsu PC200", PostingNo: "4711",
 				}}}},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_DECLINED, "RESPONSE_DECLINED", &notificationv1.NotificationEnvelope{
 			Payload: &notificationv1.NotificationEnvelope_SendRepairResponseDeclined{
@@ -341,12 +349,12 @@ func repairBankEnvelopes() []repairCase {
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRING, "POSTING_EXPIRING", &notificationv1.NotificationEnvelope{
 			Payload: &notificationv1.NotificationEnvelope_SendRepairPostingExpiring{
 				SendRepairPostingExpiring: &notificationv1.SendRepairPostingExpiring{
-					Machinery: "Экскаватор Komatsu PC200",
+					Machinery: "Экскаватор Komatsu PC200", PostingNo: "4711",
 				}}}},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_CUSTOMER, "POSTING_EXPIRED_CUSTOMER", &notificationv1.NotificationEnvelope{
 			Payload: &notificationv1.NotificationEnvelope_SendRepairPostingExpiredCustomer{
 				SendRepairPostingExpiredCustomer: &notificationv1.SendRepairPostingExpiredCustomer{
-					Machinery: "Экскаватор Komatsu PC200",
+					Machinery: "Экскаватор Komatsu PC200", PostingNo: "4711",
 				}}}},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_RESPONDER, "POSTING_EXPIRED_RESPONDER", &notificationv1.NotificationEnvelope{
 			Payload: &notificationv1.NotificationEnvelope_SendRepairPostingExpiredResponder{
@@ -721,5 +729,271 @@ func TestRepairTemplatesDegradeCleanlyWithEveryOptionalAbsent(t *testing.T) {
 	}
 	if covered != 31 {
 		t.Errorf("the catalog carries %d repair_ sections, want 31 (master §3.3, values 134–164)", covered)
+	}
+}
+
+// ── Wave B: the two proto-dependent params (repair critique NOTIF-04/NOTIF-06) ──
+
+// TestRepairReviewWindowEndingFollowsTheDealOutcome is NOTIF-04's lock.
+//
+// The reminder fires 48 h before the review window closes, and D24 makes BOTH
+// outcomes reviewable — a confirmed job and a cancelled request. Before
+// `deal_completed` the one text said «2 days left to review X's work», which is
+// a lie to half its readers: there was no work.
+//
+// It is deliberately NOT a row of TestRepairBranchFlagsNeverAssertTheWrongEdition's
+// table, because this discriminator breaks that table's rule on purpose. There,
+// an absent flag must light NEITHER arm; here the flag replaces the whole
+// sentence, so a two-armed shape would render an EMPTY body for an absent value.
+// The contract is narrower and needs stating in its own right: exactly one arm
+// ASSERTS anything, and the default is byte-identical to the shipped text.
+func TestRepairReviewWindowEndingFollowsTheDealOutcome(t *testing.T) {
+	r := testRendererFull(t)
+	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_WINDOW_ENDING
+
+	// The exact sentence that shipped before deal_completed existed. An {{else}}
+	// arm that drifts by one character silently rewords every push sent by a
+	// producer older than the field, and no other test in this package would
+	// notice — which is why this is a byte comparison and not a Contains.
+	const shipped = "2 days left to review СТО «Гидромаш»'s work on Экскаватор."
+
+	base := map[string]string{"provider_name": "СТО «Гидромаш»", "machinery": "Экскаватор"}
+	params := func(extra map[string]string) map[string]string {
+		out := map[string]string{}
+		for k, v := range base {
+			out[k] = v
+		}
+		for k, v := range extra {
+			out[k] = v
+		}
+		return out
+	}
+
+	t.Run("cancelled_deal_says_so", func(t *testing.T) {
+		_, body, err := r.Render(nt, params(map[string]string{"deal_completed": "false"}), "en")
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		for _, want := range []string{"the deal with СТО «Гидромаш» on Экскаватор", "the request was cancelled"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("body %q does not carry %q", body, want)
+			}
+		}
+		if strings.Contains(body, "'s work on") {
+			t.Errorf("WRONG EDITION — a cancelled request has no work to review: %q", body)
+		}
+	})
+
+	t.Run("completed_deal_keeps_the_shipped_text", func(t *testing.T) {
+		_, body, err := r.Render(nt, params(map[string]string{"deal_completed": "true"}), "en")
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		if body != shipped {
+			t.Errorf("body = %q, want the shipped sentence %q", body, shipped)
+		}
+	})
+
+	// The wire shape of every producer that predates the field, and of every
+	// replayed envelope: protojson omits an empty string, Render fills the
+	// absent optional with "", and neither eq-arm lights.
+	t.Run("absent_flag_degrades_to_the_shipped_text", func(t *testing.T) {
+		_, body, err := r.Render(nt, params(nil), "en")
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		if body != shipped {
+			t.Errorf("body = %q, want the shipped sentence %q", body, shipped)
+		}
+		if strings.Contains(body, "cancelled") {
+			t.Errorf("an absent flag asserted the cancelled edition: %q", body)
+		}
+	})
+
+	// An unrecognised value takes the same {{if eq}} path as an absent one and
+	// is the realistic shape of a producer bug ("TRUE", "1", "no"). It must fall
+	// through to the neutral arm, never to the assertive one.
+	t.Run("unrecognised_flag_degrades_to_the_shipped_text", func(t *testing.T) {
+		_, body, err := r.Render(nt, params(map[string]string{"deal_completed": "FALSE"}), "en")
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		if body != shipped {
+			t.Errorf("body = %q, want the shipped sentence %q", body, shipped)
+		}
+	})
+
+	// The render arms above are worthless if the extractor never carries the
+	// wire value into the params map: an unread key and a dropped one are the
+	// same thing to an {{if eq}} guard, forever and silently.
+	t.Run("extract_arm_passes_the_wire_value_verbatim", func(t *testing.T) {
+		for _, want := range []string{"true", "false", ""} {
+			env := &notificationv1.NotificationEnvelope{
+				Metadata: &notificationv1.EnvelopeMetadata{Type: nt},
+				Payload: &notificationv1.NotificationEnvelope_SendRepairReviewWindowEnding{
+					SendRepairReviewWindowEnding: &notificationv1.SendRepairReviewWindowEnding{
+						ProviderName: "СТО «Гидромаш»", Machinery: "Экскаватор",
+						DealCompleted: want, RequestNo: "1042",
+					}},
+			}
+			got, err := ExtractParams(env)
+			if err != nil {
+				t.Fatalf("ExtractParams: %v", err)
+			}
+			if got["deal_completed"] != want {
+				t.Errorf("deal_completed = %q, want %q (verbatim, never FormatBool)", got["deal_completed"], want)
+			}
+		}
+	})
+}
+
+// repairCustomerBoardTypes is NOTIF-06's scope: the four board directives
+// addressed to the CUSTOMER, which are the only ones that may carry his own
+// posting number.
+var repairCustomerBoardTypes = []notificationv1.NotificationType{
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_RECEIVED,
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN,
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRING,
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_CUSTOMER,
+}
+
+// TestRepairBoardPostingNumberRendersAndCollapses is NOTIF-06's lock: each of
+// the four customer-addressed board texts gains «Request #N» when the number is
+// there and loses the whole clause when it is not.
+//
+// Both halves matter and neither implies the other. Without the populated case
+// the suffix could be deleted from the baseline and every other test would pass
+// (an {{if}} on a param nobody prints is invisible). Without the absent case a
+// guard written on the wrong param — or forgotten entirely — would ship
+// «Request #.» to every reader of a legacy directive.
+func TestRepairBoardPostingNumberRendersAndCollapses(t *testing.T) {
+	r := testRendererFull(t)
+
+	for _, nt := range repairCustomerBoardTypes {
+		key := typeKey[nt]
+		t.Run(key, func(t *testing.T) {
+			if !contains(OptionalParams(nt), "posting_no") {
+				t.Fatalf("%s declares no optional posting_no — the suffix can never light", nt)
+			}
+
+			withNo := validParamsFor(nt)
+			withNo["posting_no"] = "4711"
+			_, body, err := r.Render(nt, withNo, "en")
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			if !strings.HasSuffix(body, " Request #4711.") {
+				t.Errorf("body does not end in the numbered suffix: %q", body)
+			}
+
+			_, plain, err := r.Render(nt, validParamsFor(nt), "en")
+			if err != nil {
+				t.Fatalf("Render (absent): %v", err)
+			}
+			if strings.Contains(plain, "#") || strings.Contains(plain, "Request #") {
+				t.Errorf("the suffix survived an absent posting_no: %q", plain)
+			}
+			if plain+" Request #4711." != body {
+				t.Errorf("the numbered body is not the plain body plus the suffix:\n plain = %q\n  with = %q", plain, body)
+			}
+		})
+	}
+}
+
+// TestRepairResponderBoardRowsCarryNoPostingNumber is the other half of
+// NOTIF-06, and the one a «add the field everywhere» reflex would break: the
+// customer's numbering is not a seller's vocabulary (§5 R7), so the four
+// responder-addressed board types must declare no posting_no and print none.
+//
+// Checking the DECLARATION as well as the text is deliberate — a param declared
+// but unprinted is invisible to every render test, and would then be demanded
+// of the producer by assertParamSetMatchesCatalog.
+func TestRepairResponderBoardRowsCarryNoPostingNumber(t *testing.T) {
+	r := testRendererFull(t)
+
+	responder := []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_DECLINED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_RESPONDER,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED,
+	}
+	if len(responder)+len(repairCustomerBoardTypes) != len(repairBankTypes) {
+		t.Fatalf("the two board halves cover %d types, want all %d bank rows",
+			len(responder)+len(repairCustomerBoardTypes), len(repairBankTypes))
+	}
+
+	for _, nt := range responder {
+		key := typeKey[nt]
+		t.Run(key, func(t *testing.T) {
+			if contains(allowedParams(nt), "posting_no") {
+				t.Errorf("%s declares posting_no — the customer's numbering is not a seller's vocabulary (§5 R7)", nt)
+			}
+			for _, part := range []string{BaselineEN[key+".title"], BaselineEN[key+".body"]} {
+				if strings.Contains(part, "posting_no") {
+					t.Errorf("baseline references posting_no: %q", part)
+				}
+			}
+			// Rendered with the number present anyway: text/template ignores an
+			// unread key, so this proves the text, not the map.
+			params := validParamsFor(nt)
+			params["posting_no"] = "4711"
+			_, body, err := r.Render(nt, params, "en")
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			if strings.Contains(body, "4711") {
+				t.Errorf("a responder text printed the customer's posting number: %q", body)
+			}
+		})
+	}
+}
+
+// TestRepairBoardExtractArmsCarryThePostingNumber is the extractor half of
+// NOTIF-06. ExtractParams is a hand-written type switch, so a field added to
+// four payloads and read in three arms renders empty on the fourth forever —
+// and an {{if}} guard cannot tell that from a producer that sent nothing.
+func TestRepairBoardExtractArmsCarryThePostingNumber(t *testing.T) {
+	const no = "4711"
+
+	envelopes := map[notificationv1.NotificationType]*notificationv1.NotificationEnvelope{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_RECEIVED: {
+			Payload: &notificationv1.NotificationEnvelope_SendRepairResponseReceived{
+				SendRepairResponseReceived: &notificationv1.SendRepairResponseReceived{
+					Machinery: "Экскаватор", Offer: "10 000–15 000 ₽", PostingNo: no,
+				}}},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN: {
+			Payload: &notificationv1.NotificationEnvelope_SendRepairResponseWithdrawn{
+				SendRepairResponseWithdrawn: &notificationv1.SendRepairResponseWithdrawn{
+					SellerName: "СТО «Гидромаш»", Machinery: "Экскаватор", PostingNo: no,
+				}}},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRING: {
+			Payload: &notificationv1.NotificationEnvelope_SendRepairPostingExpiring{
+				SendRepairPostingExpiring: &notificationv1.SendRepairPostingExpiring{
+					Machinery: "Экскаватор", PostingNo: no,
+				}}},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_CUSTOMER: {
+			Payload: &notificationv1.NotificationEnvelope_SendRepairPostingExpiredCustomer{
+				SendRepairPostingExpiredCustomer: &notificationv1.SendRepairPostingExpiredCustomer{
+					Machinery: "Экскаватор", PostingNo: no,
+				}}},
+	}
+	if len(envelopes) != len(repairCustomerBoardTypes) {
+		t.Fatalf("the fixture map covers %d of the %d customer board types", len(envelopes), len(repairCustomerBoardTypes))
+	}
+
+	for _, nt := range repairCustomerBoardTypes {
+		t.Run(typeKey[nt], func(t *testing.T) {
+			env := envelopes[nt]
+			env.Metadata = &notificationv1.EnvelopeMetadata{Type: nt}
+
+			params, err := ExtractParams(env)
+			if err != nil {
+				t.Fatalf("ExtractParams: %v", err)
+			}
+			assertParamSetMatchesCatalog(t, nt, params)
+			if params["posting_no"] != no {
+				t.Errorf("posting_no = %q, want %q", params["posting_no"], no)
+			}
+		})
 	}
 }

@@ -1538,6 +1538,11 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	//     producer might omit them: each is read only inside {{if eq .x "…"}}
 	//     and never as a literal {{.name}}, and a REQUIRED param with no literal
 	//     placeholder fails TestBaselineMatchesCatalogContract's reverse check.
+	//     `deal_completed` is read on TWO types, not one: REVIEW_RECEIVED and,
+	//     since the repair critique's NOTIF-04, REVIEW_WINDOW_ENDING — the
+	//     reminder cannot say «оценить работы» to a customer whose request was
+	//     cancelled. Both types were already on this list for request_no, so the
+	//     new param widens an existing row rather than adding one.
 	for _, nt := range []notificationv1.NotificationType{
 		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CREATED,
 		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_OFFER_SENT,
@@ -1565,15 +1570,29 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	} {
 		declared[nt] = true
 	}
-	// ремонт, bank side (master §3.3 rows 23–30) — exactly ONE of the eight
-	// posting/response types carries an optional tier, and it is named here for
+	// ремонт, bank side (master §3.3 rows 23–30) — FIVE of the eight
+	// posting/response types carry an optional tier, and each is named here for
 	// the same reason the blocks above are:
 	//   • distance_km on MATCHING_POSTING — the «~N km» decoration on Р26's
 	//     fan-out, read behind an {{if}} guard. It goes through countOrEmpty, so
 	//     a zero arrives as "" and drops the clause; a required count would
 	//     render the string "0", which is non-empty and would light the guard
-	//     as «~0 km». The other seven bank types declare no optional param.
+	//     as «~0 km».
+	//   • posting_no on the FOUR customer-addressed rows — «Заявка #N», the
+	//     customer's own posting number (repair critique NOTIF-06), optional for
+	//     delivery's Д-13 reason: a producer older than the field, or a replayed
+	//     envelope, carries none, so the suffix is guarded and collapses on "".
+	//     The three responder-addressed rows and MATCHING_POSTING deliberately
+	//     declare no posting_no — §5 R7 keeps a seller's texts unnumbered.
 	declared[notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING] = true
+	for _, nt := range []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_RECEIVED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRING,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_CUSTOMER,
+	} {
+		declared[nt] = true
+	}
 	for typ, params := range optionalParams {
 		if !declared[typ] {
 			t.Errorf("unexpected optional params %v on type %v", params, typ)

@@ -23,6 +23,8 @@ github.com/STECH-Super-App/go-common
 | `pkg/health` | Health check endpoint | Service health monitoring |
 | `pkg/client` | gRPC client utilities | Service-to-service communication |
 | `pkg/outbox` | `New()`, `Start()`, `PublishProto()`, `RunInTx()`, `DBTX`, `Migrate()`, `Deduplicator`, `Store.PendingStats()`, `ExtractOutboxID()`, `ExtractEventType()` | Transactional outbox pattern (at-least-once Kafka delivery + consumer dedup), backlog metrics, `traceparent` capture |
+| `pkg/notifyrender` | `BaselineEN`, `RequiredParams()`, `OptionalParams()`, `ExtractParams()`, `Render()` | The in-app/push notification catalogue: EN baselines per type, the required/optional param tiers, the per-payload extract arms (a protoreflect completeness test reds a declared field no arm reads), the i18n-catalog overlay contract |
+| `pkg/notifyoutbox` | `PublishDirective()` | Writes a notification directive into the caller's outbox transaction after three in-tx checks: envelope shape, required params, and (for `REPAIR_*`) the exact `[IN_APP, PUSH]` channel set — an unknown type or a missing required param rolls the caller's write back |
 | `pkg/tracing` | `Init(serviceName) (shutdown, error)` | OpenTelemetry setup; no-op + nil error when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset |
 
 ## Context Keys (pkg/middleware)
