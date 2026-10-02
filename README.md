@@ -16,6 +16,60 @@ Database connection factories.
 - **Postgres**: `NewPostgres` creates a `*pgxpool.Pool` (using `jackc/pgx/v5`).
 - **Redis**: `NewRedis` creates a `*redis.Client` (using `redis/go-redis/v9`).
 
+### `pkg/input`
+The fleet's one validation package for every value entering a service — REST body, path, query, gRPC field. Pure functions, no Echo/HTTP/logging, usable inside domain constructors. Spec: dev-setup `docs/superpowers/specs/2026-10-02-input-validation-standard-design.md` §4.
+
+**Every validator returns the cleaned value; store, forward and publish only that value, never the raw input.** Caps are mandatory by signature (text max in **runes**, numbers min/max); a non-positive text cap or an inverted range panics at the call site.
+
+```go
+func Line(raw string, maxRunes int, opts ...TextOpt) (string, *Failure) // single-line
+func Body(raw string, maxRunes int, opts ...TextOpt) (string, *Failure) // multi-line (TAB/LF/CR allowed)
+func Required() TextOpt
+func UUID(raw string) (string, *Failure)                                  // strict 8-4-4-4-12, any case in, lower case out
+func Int32(v int64, lo, hi int32) (int32, *Failure)
+func Int64(v int64, lo, hi int64) (int64, *Failure)
+func ParseInt32(raw string, lo, hi int32) (int32, *Failure)              // decimal only: optional '-', digits
+func ParseInt64(raw string, lo, hi int64) (int64, *Failure)
+func ParsePage(rawNumber, rawSize string, defaultSize, maxSize int32) (Page, *Failure)
+func MaxItems(n, maxItems int) *Failure
+func Phone(raw string) (string, *Failure)                                 // '+' required, libphonenumber IsValidNumber, E.164 out
+func Email(raw string, maxRunes int) (string, *Failure)                   // domain lower-cased, no DNS/IDN
+func Collect(fields ...*errors.FieldError) []errors.FieldError            // drops nils; nil when nothing failed
+func GRPC(fields ...errors.FieldError) error                              // InvalidArgument + errdetails.BadRequest; nil for no fields
+func MessageFor(reason string) string                                     // English fallback for AppError.Message
+```
+
+`Line`/`Body` processing order: (1) invalid UTF-8 → `COMMON_TEXT_INVALID_CHARACTERS`; (2) trim leading/trailing whitespace, `Cc` and `Cf`; (3) character rule — any `Cc` (Body exempts TAB/LF/CR), and in `Line` also U+200E/F, U+202A–E, U+2066–9, U+2028/9 → `COMMON_TEXT_INVALID_CHARACTERS`. The rule is a copy of sale-service `app/Support/Validation/ControlCharacters.php`, pinned by a port of its unit vectors and an exhaustive all-code-points test. Interior `Cf` (ZWJ, ZWSP, BOM) is allowed — emoji sequences need ZWJ; (4) blank (only whitespace / `Cf` / variation selectors / default-ignorables) → `COMMON_TEXT_REQUIRED` with `Required()`, else `""`; (5) rune count > max → `COMMON_TEXT_TOO_LONG {max}`. No Unicode normalisation.
+
+`*Failure` (`Reason`, `Params`) implements `error`, so a domain constructor can return it and a handler finds it with `errors.As`. The library is **status-free**: the service picks the HTTP status. Field names are attached by whoever knows them:
+
+```go
+name, nameF := input.Line(req.Name, 120, input.Required())
+id, idF := input.UUID(c.Param("id"))
+if details := input.Collect(nameF.At("name"), idF.At("id")); details != nil {
+    return response.JSONError(c, commonErrors.New(http.StatusBadRequest).
+        Reason(details[0].Reason).Message(details[0].Message).Details(details).Build())
+}
+```
+
+`At` is nil-safe (a nil `*Failure` yields nil), which is what makes the `Collect` idiom work. A `ParsePage` failure names the input that failed through `AtPage(numberField, sizeField)`. `Phone` additionally refuses an interior control/format character and an extension (E.164 cannot carry one). Stricter domain rules (organisation's +7, VIN grammar) stay in the service, applied to the cleaned value.
+
+Reasons (exported as `Reason*` constants): `COMMON_TEXT_REQUIRED`, `COMMON_TEXT_TOO_LONG {max}`, `COMMON_TEXT_INVALID_CHARACTERS`, `COMMON_UUID_INVALID`, `COMMON_NUMBER_INVALID`, `COMMON_NUMBER_OUT_OF_RANGE {min,max}`, `COMMON_TOO_MANY_ITEMS {max}`, `COMMON_PHONE_INVALID`, `COMMON_EMAIL_INVALID`, `COMMON_INPUT_REJECTED_BY_STORAGE` (the `pgerr` backstop), `COMMON_REQUEST_ENCODING_INVALID` (api-gateway).
+
+### `pkg/db/pgerr`
+The repository-level backstop for input that reached Postgres without a validator. Call it as the **first line of every `mapPgError`**:
+
+```go
+func mapPgError(err error) error {
+    if f, ok := pgerr.InvalidInput(err); ok {
+        return f // or wrap as a 4xx AppError; f.Error() names sqlstate/table/column for the log
+    }
+    // ... constraint-name mapping (Critical Rule 3) ...
+}
+```
+
+`InvalidInput(err) (*input.Failure, bool)` recognises `*pgconn.PgError` SQLSTATE `22021`, `22P05`, `22001`, `22P02`, and pgx v5's client-side integer out-of-range encode error (no exported type; matched on its message, pinned by a test that produces the real error through `pgx.ExtendedQueryBuilder`). A hit returns a `COMMON_INPUT_REJECTED_BY_STORAGE` Failure whose cause carries the SQLSTATE and Postgres' table/column (logged, never sent to the client), and increments `stech_input_backstop_total{sqlstate}` (`22021|22P05|22001|22P02|encode`, all five pre-created at 0) on `metrics.Registry`. Any increase means a missing `pkg/input` call — the alert is `increase(stech_input_backstop_total[15m]) > 0`.
+
 ### `pkg/errors`
 Typed application-error envelope returned to HTTP clients.
 
@@ -205,7 +259,7 @@ All three skip the operational routes `/metrics`, `/health`, `/livez`, `/readyz`
 - `Logger`: **deprecated** — logs HTTP requests with no `request_id`, so its lines cannot be correlated across the gateway hop. Use `RequestLogger`.
 - `CORS`: Handles Cross-Origin Resource Sharing.
 - `AuthMiddleware`, `OptionalAuthMiddleware`, `RegistrationAuthMiddleware`, `AdminMiddleware`, `ClientMiddleware`: emit `COMMON_*` reasons via `pkg/errors` + `pkg/response` on rejection.
-- `ParseUUIDParam(c, paramName, reason)`: validates an Echo path parameter as a UUID. On parse failure returns a 400 `*AppError` with the supplied reason and a message derived from `paramName`. Stops malformed UUIDs at the handler boundary so they never reach the repository layer (where Postgres would reject them with SQLSTATE 22P02 and leak as a 500).
+- `ParseUUIDParam(c, paramName, reason)`: validates an Echo path parameter with `input.UUID` — only the 36-character hyphenated form (any case) is accepted; braces, `urn:uuid:` and bare 32-hex are refused — and returns it **lower-cased**. On failure returns a 400 `*AppError` with the supplied reason, a message derived from `paramName`, and the `*input.Failure` as its cause. Stops malformed UUIDs at the handler boundary so they never reach the repository layer (where Postgres would reject them with SQLSTATE 22P02 and leak as a 500).
 
 ### `pkg/metrics`
 Prometheus instruments and exposition. `Registry` is the **only** registry anything serves — never `promauto` or the prometheus default registerer, which nothing scrapes.
@@ -213,7 +267,7 @@ Prometheus instruments and exposition. `Registry` is the **only** registry anyth
 - `MountOn(e *echo.Echo)`: wires `GET /metrics` on an Echo instance. Idempotent — safe across two Echo instances, and safe to call twice on one.
 - `StartServer(addr) (stop func(context.Context) error)`: standalone `net/http` listener for services with no public Echo, and the uniform mechanism when metrics live on their own port.
 - `HTTPRequestDuration`, `GRPCServerHandling`: the two labelled families, **registered at package init** — never inside a middleware factory or a server constructor, because service tests rebuild those repeatedly in one process and `MustRegister` panics on the second call.
-- `DefaultBuckets` (`0.005 … 10`), `StatusClass(code)`, `RouteUnmatched`: the shared label contract. Allowed label keys fleet-wide: `method, route, status_class, grpc_service, grpc_method, grpc_code, topic, group, reason, vertical`. Never ids, raw paths, emails or tokens.
+- `DefaultBuckets` (`0.005 … 10`), `StatusClass(code)`, `RouteUnmatched`: the shared label contract. Allowed label keys fleet-wide: `method, route, status_class, grpc_service, grpc_method, grpc_code, topic, group, reason, vertical, sqlstate` (`sqlstate` is `pkg/db/pgerr`'s closed five-value set). Never ids, raw paths, emails or tokens.
 - `NewCounter`, `NewGauge`, `NewHistogram`: constructors for **unlabelled** instruments. Labelled families are built with `prometheus.New*Vec` directly.
 
 ### `pkg/tracing`

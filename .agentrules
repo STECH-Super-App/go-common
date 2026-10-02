@@ -19,6 +19,8 @@ github.com/STECH-Super-App/go-common
 | `pkg/logger` | `New(level, service) (*zap.Logger, error)`, `IntoContext`/`FromContext` | Structured JSON logging (JSON encoder unconditional) + request-scoped logger on `context.Context` |
 | `pkg/metrics` | `Registry`, `MountOn(e)`, `StartServer(addr)`, `HTTPRequestDuration`, `GRPCServerHandling`, `DefaultBuckets`, `StatusClass`, `NewCounter/Gauge/Histogram()` | Prometheus instruments + `/metrics` exposition |
 | `pkg/middleware` | `CORS()`, `Tracing()`, `RequestLogger()`, `Metrics()`, `MetricsUnaryServerInterceptor()`, `AuthMiddleware()`, `UserIDFromContext()` | HTTP middlewares, gRPC interceptors, context helpers (`Logger()` deprecated → `RequestLogger()`) |
+| `pkg/input` | `Line()`, `Body()`, `Required()`, `UUID()`, `Int32/Int64()`, `ParseInt32/ParseInt64()`, `ParsePage()`, `MaxItems()`, `Phone()`, `Email()`, `Failure` (`At`, `AtPage`), `Collect()`, `GRPC()`, `MessageFor()`, `Reason*` | Input validation returning the CLEANED value; status-free `COMMON_*` Reasons; text rule mirrors sale-service `ControlCharacters` |
+| `pkg/db/pgerr` | `InvalidInput(err) (*input.Failure, bool)` | Repository backstop (22021/22P05/22001/22P02 + pgx int encode) — first line of every `mapPgError`; meters `stech_input_backstop_total{sqlstate}` |
 | `pkg/utils` | `Ptr()`, `ToVal()`, `Contains()`, `Map()`, `Filter()` | Generic utilities |
 | `pkg/health` | Health check endpoint | Service health monitoring |
 | `pkg/client` | gRPC client utilities | Service-to-service communication |
@@ -32,7 +34,7 @@ github.com/STECH-Super-App/go-common
 
 ## Observability contract (Wave 0, 2026-08-25)
 - Every instrument registers on `metrics.Registry` **at package init**, never inside a middleware factory or server constructor — service tests rebuild those repeatedly in one process and `MustRegister` panics on the second call. `promauto` and the prometheus default registerer are forbidden: nothing serves them.
-- Allowed metric label keys fleet-wide: `method, route, status_class, grpc_service, grpc_method, grpc_code, topic, group, reason, vertical`. Never ids, raw paths, emails or tokens. The same law governs span names.
+- Allowed metric label keys fleet-wide: `method, route, status_class, grpc_service, grpc_method, grpc_code, topic, group, reason, vertical, sqlstate` (`sqlstate` = pgerr's closed five-value set). Never ids, raw paths, emails or tokens. The same law governs span names.
 - Duration buckets are fixed at `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]`.
 - Operational routes `/metrics`, `/health`, `/livez`, `/readyz` are skipped by every observability middleware; an unmatched route clamps to `unmatched`.
 - Tracing must be absence-tolerant: no OTLP endpoint means a no-op provider and a nil error. Observability must never be able to take a service down.
