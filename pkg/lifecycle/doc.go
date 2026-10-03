@@ -25,7 +25,12 @@
 //  2. The workers' context — derived from context.WithoutCancel(ctx), NOT from
 //     the signal — is cancelled only now, so Kafka consumers and the outbox
 //     relay keep running while in-flight requests drain. Run waits for every
-//     worker within the remaining budget.
+//     worker within the remaining budget. Cancelling a worker means "stop
+//     taking new work", not "abort the work in hand": events.Dispatcher.Run
+//     finishes the message it has already fetched (handler, dedup, DLQ write,
+//     offset commit) on an uncancelled context, and the outbox relay flushes
+//     its fetched batch (within ShutdownFlushTimeout), so the budget is what
+//     ultimately bounds that drain.
 //  3. Closers run sequentially in REGISTRATION order (not reverse: the order is
 //     written down in main, not implied by defers), each with the remaining
 //     budget. Recommended: Kafka readers/writers → Redis → DB pool → metrics

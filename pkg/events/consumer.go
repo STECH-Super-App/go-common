@@ -194,6 +194,25 @@ const (
 // message is routed to its registered handler; on error, retry/DLQ rules
 // apply.
 //
+// Shutdown finishes the message in flight. ctx governs only the FETCH of the
+// next message: it is checked before every fetch and passed to FetchMessage,
+// so a cancel interrupts an idle, blocking fetch at once. A message that has
+// already been fetched is handled to completion on context.WithoutCancel(ctx)
+// — the handler, the dedup transaction, the retry/DLQ write and the offset
+// commit all run on a context that keeps ctx's values (trace, logger) but not
+// its cancellation. Cancelling them mid-message is what produces duplicate
+// side effects: the handler's SMS has left the provider, then the dead ctx
+// rolls back the dedup claim and fails the offset commit, and Kafka redelivers
+// it. That detached work is deliberately given no timeout of its own: it is
+// bounded by the DB/Kafka/provider clients' own timeouts and, above them, by
+// pkg/lifecycle's shutdown budget. Run returns as soon as that message is done
+// and never starts another once ctx has ended.
+//
+// The ctx check before each fetch is load-bearing, not redundant with passing
+// ctx to FetchMessage: kafka-go picks at random between a buffered message and
+// ctx.Done when both are ready, so a cancelled fetch can still hand out — and
+// Run would then fully process — one more message per loop.
+//
 // Returns ctx.Err() on cancel, and nil when the reader has been closed
 // (kafka-go answers every FetchMessage on a closed reader with io.EOF — a
 // closed reader is a shutdown, not a fault, and retrying it would spin
@@ -202,6 +221,9 @@ const (
 func (d *Dispatcher) Run(ctx context.Context) error {
 	backoff := fetchBackoffInitial
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		msg, err := d.reader.FetchMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -219,7 +241,7 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			continue
 		}
 		backoff = fetchBackoffInitial
-		d.handleOne(ctx, msg)
+		d.handleOne(context.WithoutCancel(ctx), msg)
 	}
 }
 
