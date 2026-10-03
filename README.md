@@ -287,6 +287,45 @@ defer func() { _ = shutdown(context.Background()) }()
 
 Span names obey the same cardinality law as metric labels: route templates and topic names, never raw URLs or ids.
 
+### `pkg/lifecycle`
+The fleet's process shutdown orchestrator: SIGTERM becomes an ordered, bounded drain instead of a runtime kill. It **accepts already-built components** — it builds nothing, reads no config and never calls `os.Exit`/`Fatal`; `main` keeps the wiring and the exit code. Design: dev-setup `docs/superpowers/specs/2026-10-03-go-graceful-shutdown-design.md`.
+
+- `SignalContext(parent) (ctx, cancel)`: cancelled on the first **SIGINT or SIGTERM** (Docker and the kubelet send SIGTERM — `os.Interrupt` alone is not enough). After the first signal the handler unregisters, so a second signal kills the process immediately.
+- `New(log, opts...)`, `WithShutdownBudget(d)` (default `DefaultShutdownBudget` = 25 s, one deadline for every phase, fits the k8s 30 s grace), `WithDrainDelay(d)` (default 0, counts against the budget).
+- Registration: `HTTP(name, *echo.Echo, addr)`, `GRPC(name, *grpc.Server, net.Listener)`, `Server(name, start, stop)` (escape hatch, no hard stop), `Worker(name, run func(ctx) error)`, `Closer(name, close func(ctx) error)`. `Stopping() <-chan struct{}` closes when shutdown begins — SSE/WebSocket handlers select on it.
+- `Run(ctx) error`: starts everything, waits for the trigger — `ctx` done (a signal), **any** server start returning (`http.ErrServerClosed` included), or a worker returning a non-nil error (a worker returning `nil` early is only logged) — then, inside the budget:
+  0. `Stopping()` closes, the drain delay elapses;
+  1. servers stop **in parallel** (`e.Shutdown` / `GracefulStop`); one still busy at the deadline is hard-stopped (`e.Close` / `Stop`) and logged at Warn;
+  2. the **workers' context is cancelled only now** — it derives from `context.WithoutCancel(ctx)`, not from the signal, so consumers and the outbox relay keep running while requests drain — and Run waits for them;
+  3. closers run **sequentially in registration order** (not reverse; the order is written in `main`). Recommended: Kafka readers/writers → Redis → DB pool → metrics server → tracer flush. A closer that no longer fits the budget is skipped and reported, never run concurrently with the next.
+
+  Every goroutine recovers panics (logged with stack, reported as `ErrPanic`). Run logs `shutdown complete` (`trigger`, `duration`, `timed_out`) and returns **nil for a clean signal-triggered shutdown**, otherwise `errors.Join` of the trigger failure (`ErrServerExited` / `ErrWorkerFailed`), timeouts (`ErrShutdownTimeout`), closer errors (`ErrCloserFailed`) and worker failures during shutdown. Run may be called once; registering after it panics.
+
+```go
+func main() {
+    ctx, stop := lifecycle.SignalContext(context.Background())
+    defer stop()
+    // ... build log, tracing, pool, reader, ob (outbox), e (echo), grpcServer — start-up Fatal is fine here ...
+    stopMetrics := metrics.StartServer(":9091")
+
+    app := lifecycle.New(log)
+    app.HTTP("http", e, ":8080")
+    app.GRPC("grpc", grpcServer, grpcListener)
+    app.Worker("user-events-consumer", dispatcher.Run)
+    app.Worker("outbox", ob.Run)
+    app.Closer("kafka-reader", func(context.Context) error { return reader.Close() })
+    app.Closer("postgres", func(context.Context) error { pool.Close(); return nil })
+    app.Closer("metrics", stopMetrics)
+    app.Closer("tracing", shutdownTracing)
+
+    if err := app.Run(ctx); err != nil {
+        os.Exit(1) // Run already logged "shutdown complete" with the cause
+    }
+}
+```
+
+No `signal.Notify`, no shutdown-path `Fatal`, no defer-ordered teardown in a migrated `main`.
+
 ### `pkg/utils`
 Generic utility functions.
 - **Ptr**: Pointer helpers (`Ptr[T]`, `ToVal[T]`).
@@ -330,6 +369,8 @@ Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafk
 
 - `New(pool, kafkaWriter, logger, cfg)`: Creates the full outbox subsystem.
 - `Start(ctx)`: Launches three background goroutines — relay (poll → Kafka), reaper (cleanup) and the metrics sampler — and returns one `stop()` that shuts all three down. There is no separate `StartMetrics` a repo could forget to call.
+- `Run(ctx) error`: `Start` for a blocking caller — blocks until `ctx` is cancelled, stops all three, returns `ctx.Err()`. This is the shape `pkg/lifecycle` registers: `app.Worker("outbox", ob.Run)`.
+- **Shutdown flush.** `FetchPending` runs on the relay's cancellable context, so no new batch is taken after a cancel; but a batch **already fetched** is written to Kafka and marked sent (both the full-success and the partial `kafka.WriteErrors` arms) on a context detached from that cancellation and cancelled `RelayConfig.ShutdownFlushTimeout` (default 5 s) **after** it — a SIGTERM mid-batch no longer leaves delivered rows pending to be re-published on restart. The bound starts at cancellation, not at fetch: a write slower than the timeout during normal operation is not cut short. A zero/negative value means the default.
 - `Store.PendingStats(ctx) (count int64, oldestAgeSeconds float64, err error)`: the single-round-trip aggregate behind the backlog gauges.
 - `Migrate(postgresURL)`: Runs the embedded goose migrations (outbox + dedup tables).
 - `RunInTx(ctx, pool, fn)`: Executes a function within a Postgres transaction.
@@ -347,6 +388,7 @@ Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafk
 |----------|---------|-------------|
 | `OUTBOX_POLL_INTERVAL` | `1s` | Relay polling frequency |
 | `OUTBOX_BATCH_SIZE` | `100` | Messages per poll cycle |
+| `OUTBOX_SHUTDOWN_FLUSH_TIMEOUT` | `5s` | How long an already-fetched batch may keep writing + marking sent after the relay is cancelled |
 | `OUTBOX_REAPER_INTERVAL` | `5m` | Cleanup schedule |
 | `OUTBOX_RETENTION` | `72h` | Sent message retention before deletion |
 | `OUTBOX_METRICS_INTERVAL` | `15s` | Backlog gauge sampling (deliberately far slower than the poll interval) |
@@ -375,8 +417,8 @@ import (
 
 // In main.go — after existing migrations
 outbox.Migrate(cfg.Postgres.URL)
-ob := outbox.New(pool, kafkaWriter, zlog, outbox.DefaultConfig())
-stop := ob.Start(ctx); defer stop()
+ob := outbox.New(pool, kafkaWriter, zlog, outbox.DefaultConfig(), defaultTopic)
+app.Worker("outbox", ob.Run) // pkg/lifecycle; or: stop := ob.Start(ctx); defer stop()
 
 // In a use case — atomic domain write + event publish
 outbox.RunInTx(ctx, pool, func(tx outbox.Tx) error {
@@ -400,7 +442,7 @@ Typed consumer dispatcher. Registers proto-typed handlers keyed on the proto FQN
 - `NewDispatcher(reader, dlq, opts ...)` — DLQ is a **required** positional arg; no code path drops a failed message. Options: `WithRetry(w)`, `WithDedup(d)` (takes any value satisfying `Process(ctx, id, fn) error` — typically `*outbox.Deduplicator`), `WithMaxRetries(n)` (default 3), `WithLogger(l)`, `WithGroup(id)`.
 - `WithGroup(id)` — the consumer group id used as the `group` label on every consumer metric. Pass the Kafka `GroupID` **verbatim**, exactly the string the `kafka.ReaderConfig` got: only that value matches kafka-exporter's `consumergroup` label, which is what lets a lag panel and a dead-letter counter sit on the same dashboard row. Do not pass the DLQ short name — a repo can have both and they differ (`order-review-events-consumer` vs `order`). Unset means `GroupUnknown` (`"unknown"`).
 - `Handle[T proto.Message](d *Dispatcher, fn func(ctx, T) error)` — register a typed handler. Routing key is derived from `proto.MessageName(*new(T))`; protojson-unmarshal into a fresh `T` per message.
-- `d.Run(ctx) error` — poll loop; returns `ctx.Err()` on cancel.
+- `d.Run(ctx) error` — poll loop; returns `ctx.Err()` on cancel and **`nil` once the reader is closed** (kafka-go answers a closed reader with `io.EOF` — before, `Run` busy-looped on it). Any other fetch error is retried with a capped exponential backoff (100 ms doubling to 5 s, ctx-aware, reset by a successful fetch), so a broker outage is not a hot loop. Register it directly as a `pkg/lifecycle` worker: `app.Worker("…-consumer", disp.Run)`.
 - `TopicName(eventsv1.Topic) string` — converts the proto `Topic` enum to its wire name (e.g. `TOPIC_USER_EVENTS` → `"user-events"`).
 - `ErrPoisonPill` — sentinel for non-retryable handler errors (wrap with `%w`; goes straight to DLQ without consuming retry budget).
 

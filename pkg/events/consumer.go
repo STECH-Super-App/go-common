@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -181,19 +182,62 @@ const (
 	reasonHandlerPanic dlqReason = "handler_panic"
 )
 
-// Run polls the reader until ctx is cancelled. Each message is routed to its
-// registered handler; on error, retry/DLQ rules apply. Returns ctx.Err() on cancel.
+// Fetch-error backoff bounds: the first retry waits fetchBackoffInitial, each
+// consecutive failure doubles it up to fetchBackoffCap, and a successful fetch
+// resets it.
+const (
+	fetchBackoffInitial = 100 * time.Millisecond
+	fetchBackoffCap     = 5 * time.Second
+)
+
+// Run polls the reader until ctx is cancelled or the reader is closed. Each
+// message is routed to its registered handler; on error, retry/DLQ rules
+// apply.
+//
+// Returns ctx.Err() on cancel, and nil when the reader has been closed
+// (kafka-go answers every FetchMessage on a closed reader with io.EOF — a
+// closed reader is a shutdown, not a fault, and retrying it would spin
+// forever). Any other fetch error is logged and retried with a capped
+// exponential backoff, so a broker outage is not a hot loop.
 func (d *Dispatcher) Run(ctx context.Context) error {
+	backoff := fetchBackoffInitial
 	for {
 		msg, err := d.reader.FetchMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
-			d.log.Warn("fetch error", zap.Error(err))
+			if errors.Is(err, io.EOF) {
+				d.log.Info("reader closed; dispatcher stopping", zap.String("group", d.group))
+				return nil
+			}
+			d.log.Warn("fetch error", zap.Error(err), zap.Duration("retry_in", backoff))
+			if !sleepCtx(ctx, backoff) {
+				return ctx.Err()
+			}
+			backoff = nextFetchBackoff(backoff)
 			continue
 		}
+		backoff = fetchBackoffInitial
 		d.handleOne(ctx, msg)
+	}
+}
+
+// nextFetchBackoff doubles the wait, capped at fetchBackoffCap.
+func nextFetchBackoff(current time.Duration) time.Duration {
+	return min(current*2, fetchBackoffCap)
+}
+
+// sleepCtx waits for d or until ctx ends; it reports whether the full wait
+// elapsed.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
