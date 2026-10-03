@@ -13,7 +13,17 @@ import (
 type RelayConfig struct {
 	PollInterval time.Duration // How often to poll for pending messages (default: 1s)
 	BatchSize    int           // Max messages per poll cycle (default: 100)
+
+	// ShutdownFlushTimeout bounds how long an already-fetched batch may keep
+	// writing to Kafka and marking itself sent after the relay's context is
+	// cancelled (default: DefaultShutdownFlushTimeout). Zero or negative means
+	// the default, so a hand-built RelayConfig cannot turn it into "abandon
+	// every in-flight batch".
+	ShutdownFlushTimeout time.Duration
 }
+
+// DefaultShutdownFlushTimeout is RelayConfig.ShutdownFlushTimeout's default.
+const DefaultShutdownFlushTimeout = 5 * time.Second
 
 // relayStore is the slice of *Store the relay actually uses. It exists so the
 // poll loop — and the metric wiring hanging off its outcomes — can be unit
@@ -59,6 +69,7 @@ func (r *Relay) Run(ctx context.Context) error {
 	r.logger.Info("outbox relay started",
 		zap.Duration("poll_interval", r.cfg.PollInterval),
 		zap.Int("batch_size", r.cfg.BatchSize),
+		zap.Duration("shutdown_flush_timeout", r.shutdownFlushTimeout()),
 	)
 
 	// Seed the freshness gauge at start: an unset Prometheus gauge reads 0,
@@ -106,6 +117,12 @@ func (r *Relay) Run(ctx context.Context) error {
 // lets kafka-go batch them naturally and returns sub-second per poll for any
 // realistic batch.
 //
+// FetchPending runs on ctx, so no new batch is taken once the relay is
+// cancelled. Everything after it runs on flushCtx: a batch that was already
+// fetched is written AND marked sent even if a shutdown arrives mid-batch —
+// abandoning it there would leave rows Kafka already holds pending, to be
+// re-published on the next start.
+//
 // Returns the number of messages successfully processed.
 func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
 	messages, err := r.store.FetchPending(ctx, r.cfg.BatchSize)
@@ -116,6 +133,9 @@ func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	flushCtx, release := r.flushContext(ctx)
+	defer release()
+
 	kafkaMsgs := make([]kafka.Message, len(messages))
 	ids := make([]string, len(messages))
 	for i, msg := range messages {
@@ -123,7 +143,7 @@ func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
 		ids[i] = msg.ID
 	}
 
-	if err := r.writer.WriteMessages(ctx, kafkaMsgs...); err != nil {
+	if err := r.writer.WriteMessages(flushCtx, kafkaMsgs...); err != nil {
 		// kafka-go returns either a single error (whole batch failed,
 		// e.g., broker down) or kafka.WriteErrors with one entry per
 		// message (partial failure). Mark only the entries that
@@ -166,7 +186,7 @@ func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
 				// losing a steady fraction of every batch reports as clean.
 				recordRelayError()
 			}
-			if err := r.store.MarkSentBatch(ctx, succeededIDs); err != nil {
+			if err := r.store.MarkSentBatch(flushCtx, succeededIDs); err != nil {
 				r.logger.Error("outbox relay: mark sent batch failed",
 					zap.Int("count", len(succeededIDs)),
 					zap.Error(err),
@@ -187,7 +207,7 @@ func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	if err := r.store.MarkSentBatch(ctx, ids); err != nil {
+	if err := r.store.MarkSentBatch(flushCtx, ids); err != nil {
 		r.logger.Error("outbox relay: mark sent batch failed",
 			zap.Int("count", len(ids)),
 			zap.Error(err),
@@ -199,6 +219,38 @@ func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
 		zap.Int("count", len(messages)),
 	)
 	return len(messages), nil
+}
+
+// shutdownFlushTimeout applies the ShutdownFlushTimeout default.
+func (r *Relay) shutdownFlushTimeout() time.Duration {
+	if r.cfg.ShutdownFlushTimeout > 0 {
+		return r.cfg.ShutdownFlushTimeout
+	}
+	return DefaultShutdownFlushTimeout
+}
+
+// flushContext returns the context an already-fetched batch is written and
+// marked sent on: detached from ctx's cancellation (values are kept), and
+// cancelled ShutdownFlushTimeout after ctx is — so a shutdown never abandons
+// the batch, yet can never be held up by it for longer than the timeout.
+//
+// The bound starts at cancellation, not at fetch: while the relay runs
+// normally the write keeps today's semantics (the Kafka writer's own
+// timeouts and retries govern it), so a slow broker cannot make every batch
+// fail on an arbitrary clock and re-publish itself on each poll.
+//
+// release must be called once the batch is done.
+func (r *Relay) flushContext(ctx context.Context) (flushCtx context.Context, release func()) {
+	flushCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	grace := r.shutdownFlushTimeout()
+	stopWatching := context.AfterFunc(ctx, func() {
+		// Firing after release is harmless: cancel is idempotent.
+		time.AfterFunc(grace, cancel)
+	})
+	return flushCtx, func() {
+		stopWatching()
+		cancel()
+	}
 }
 
 // toKafkaMessage converts an outbox Message to a kafka-go Message.

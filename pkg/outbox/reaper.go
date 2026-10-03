@@ -13,10 +13,16 @@ type ReaperConfig struct {
 	Retention time.Duration // How long to keep sent messages (default: 72h)
 }
 
+// reaperStore is the slice of *Store the reaper uses — a seam so the outbox
+// subsystem can be run in unit tests without Postgres. *Store satisfies it.
+type reaperStore interface {
+	DeleteSent(ctx context.Context, retention time.Duration) (int64, error)
+}
+
 // Reaper periodically deletes old sent messages from the outbox table
 // to prevent table bloat. It is fully self-contained — no external cron needed.
 type Reaper struct {
-	store  *Store
+	store  reaperStore
 	logger *zap.Logger
 	cfg    ReaperConfig
 }

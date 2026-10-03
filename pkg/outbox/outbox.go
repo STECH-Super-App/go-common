@@ -16,6 +16,10 @@ import (
 // Usage in a service's main.go:
 //
 //	ob := outbox.New(pool, kafkaWriter, zlog, outbox.DefaultConfig(), cfg.Kafka.Topic)
+//	app.Worker("outbox", ob.Run) // pkg/lifecycle
+//
+// or, without pkg/lifecycle:
+//
 //	stopOutbox := ob.Start(ctx)
 //	defer stopOutbox()
 //
@@ -94,4 +98,15 @@ func (o *Outbox) Start(ctx context.Context) (stop func()) {
 		wg.Wait()
 		o.logger.Info("outbox subsystem stopped")
 	}
+}
+
+// Run is Start for a blocking caller — a pkg/lifecycle Worker. It starts the
+// relay, reaper and sampler, blocks until ctx is cancelled, then stops all
+// three and waits for them (the relay first finishes an already-fetched batch,
+// bounded by RelayConfig.ShutdownFlushTimeout). It returns ctx.Err().
+func (o *Outbox) Run(ctx context.Context) error {
+	stop := o.Start(ctx)
+	<-ctx.Done()
+	stop()
+	return ctx.Err()
 }

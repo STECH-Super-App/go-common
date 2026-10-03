@@ -22,6 +22,7 @@ type Config struct {
 //
 //	OUTBOX_POLL_INTERVAL  - Relay polling frequency     (default: "1s")
 //	OUTBOX_BATCH_SIZE     - Messages per poll cycle     (default: 100)
+//	OUTBOX_SHUTDOWN_FLUSH_TIMEOUT - In-flight batch flush after cancel (default: "5s")
 //	OUTBOX_REAPER_INTERVAL - Cleanup schedule           (default: "5m")
 //	OUTBOX_RETENTION      - Sent message retention      (default: "72h")
 //	OUTBOX_METRICS_INTERVAL - Backlog gauge sampling    (default: "15s")
@@ -30,6 +31,8 @@ func DefaultConfig() *Config {
 		Relay: RelayConfig{
 			PollInterval: config.GetEnvDuration("OUTBOX_POLL_INTERVAL", 1*time.Second),
 			BatchSize:    config.GetEnvInt("OUTBOX_BATCH_SIZE", 100),
+			ShutdownFlushTimeout: config.GetEnvDuration(
+				"OUTBOX_SHUTDOWN_FLUSH_TIMEOUT", DefaultShutdownFlushTimeout),
 		},
 		Reaper: ReaperConfig{
 			Interval:  config.GetEnvDuration("OUTBOX_REAPER_INTERVAL", 5*time.Minute),
