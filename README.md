@@ -292,12 +292,14 @@ The fleet's process shutdown orchestrator: SIGTERM becomes an ordered, bounded d
 
 - `SignalContext(parent) (ctx, cancel)`: cancelled on the first **SIGINT or SIGTERM** (Docker and the kubelet send SIGTERM — `os.Interrupt` alone is not enough). After the first signal the handler unregisters, so a second signal kills the process immediately.
 - `New(log, opts...)`, `WithShutdownBudget(d)` (default `DefaultShutdownBudget` = 25 s, one deadline for every phase, fits the k8s 30 s grace), `WithDrainDelay(d)` (default 0, counts against the budget).
-- Registration: `HTTP(name, *echo.Echo, addr)`, `GRPC(name, *grpc.Server, net.Listener)`, `Server(name, start, stop)` (escape hatch, no hard stop), `Worker(name, run func(ctx) error)`, `Closer(name, close func(ctx) error)`. `Stopping() <-chan struct{}` closes when shutdown begins — SSE/WebSocket handlers select on it.
+- Registration: `HTTP(name, *echo.Echo, addr)`, `GRPC(name, *grpc.Server, net.Listener)`, `Server(name, start, stop)` (escape hatch, no hard stop), `Worker(name, run func(ctx) error)`, `Closer(name, close func(ctx) error)`, `CloserGroup(name, members ...NamedCloser)` (`NamedCloser{Name, Close func(ctx) error}`). `Stopping() <-chan struct{}` closes when shutdown begins — SSE/WebSocket handlers select on it.
 - `Run(ctx) error`: starts everything, waits for the trigger — `ctx` done (a signal), **any** server start returning (`http.ErrServerClosed` included), or a worker returning a non-nil error (a worker returning `nil` early is only logged) — then, inside the budget:
   0. `Stopping()` closes, the drain delay elapses;
   1. servers stop **in parallel** (`e.Shutdown` / `GracefulStop`); one still busy at the deadline is hard-stopped (`e.Close` / `Stop`) and logged at Warn;
   2. the **workers' context is cancelled only now** — it derives from `context.WithoutCancel(ctx)`, not from the signal, so consumers and the outbox relay keep running while requests drain — and Run waits for them;
-  3. closers run **sequentially in registration order** (not reverse; the order is written in `main`). Recommended: Kafka readers/writers → Redis → DB pool → metrics server → tracer flush. A closer that no longer fits the budget is skipped and reported, never run concurrently with the next.
+  3. closers run **sequentially in registration order** (not reverse; the order is written in `main`). Recommended: Kafka readers/writers → Redis → DB pool → metrics server → tracer flush. A closer that no longer fits the budget is skipped and reported, never run concurrently with the next. A **`CloserGroup` is one step of that order whose members run concurrently**: the step ends when every member has finished or the budget is spent, and each member is reported on its own as `closer:<group>/<member>` (`ErrCloserFailed`, `ErrPanic`, timeout) without stopping its siblings.
+
+  **Register every Kafka reader and writer in one `CloserGroup("kafka", …)`.** A kafka-go consumer-group `Reader.Close` waits for each partition's in-flight Fetch, a broker long-poll of up to `ReaderConfig.MaxWait` (default 10 s) whose socket read deadline is that same `MaxWait`; cancellation is only seen between fetches. An idle reader therefore takes up to one `MaxWait` to close even after its consumer stopped (measured 7.5–9 s on the local stack), and sequential closers sum it: two readers cost 15.5 s of the 25 s budget, three would overrun it. Grouped, they cost one `MaxWait`. Lowering a reader's own `MaxWait` is the only way to shorten that one wait, at the price of more fetch round trips on an idle topic.
 
   Every goroutine recovers panics (logged with stack, reported as `ErrPanic`). Run logs `shutdown complete` (`trigger`, `duration`, `timed_out`) and returns **nil for a clean signal-triggered shutdown**, otherwise `errors.Join` of the trigger failure (`ErrServerExited` / `ErrWorkerFailed`), timeouts (`ErrShutdownTimeout`), closer errors (`ErrCloserFailed`) and worker failures during shutdown. Run may be called once; registering after it panics.
 
@@ -305,7 +307,7 @@ The fleet's process shutdown orchestrator: SIGTERM becomes an ordered, bounded d
 func main() {
     ctx, stop := lifecycle.SignalContext(context.Background())
     defer stop()
-    // ... build log, tracing, pool, reader, ob (outbox), e (echo), grpcServer — start-up Fatal is fine here ...
+    // ... build log, tracing, pool, reader, kafkaWriter, ob (outbox), e (echo), grpcServer — start-up Fatal is fine here ...
     stopMetrics := metrics.StartServer(":9091")
 
     app := lifecycle.New(log)
@@ -313,7 +315,10 @@ func main() {
     app.GRPC("grpc", grpcServer, grpcListener)
     app.Worker("user-events-consumer", dispatcher.Run)
     app.Worker("outbox", ob.Run)
-    app.Closer("kafka-reader", func(context.Context) error { return reader.Close() })
+    app.CloserGroup("kafka",
+        lifecycle.NamedCloser{Name: "user-events-reader", Close: func(context.Context) error { return reader.Close() }},
+        lifecycle.NamedCloser{Name: "writer", Close: func(context.Context) error { return kafkaWriter.Close() }},
+    )
     app.Closer("postgres", func(context.Context) error { pool.Close(); return nil })
     app.Closer("metrics", stopMetrics)
     app.Closer("tracing", shutdownTracing)
