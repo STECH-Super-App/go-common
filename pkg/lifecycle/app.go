@@ -59,9 +59,19 @@ type worker struct {
 	done chan struct{} // closed when run returns
 }
 
+// closer is one step of phase 3: either a single fn or, for a CloserGroup,
+// members that run concurrently within the step.
 type closer struct {
-	name string
-	fn   func(context.Context) error
+	name    string
+	fn      func(context.Context) error
+	group   bool
+	members []NamedCloser
+}
+
+// NamedCloser is one member of a CloserGroup.
+type NamedCloser struct {
+	Name  string
+	Close func(context.Context) error
 }
 
 // App orchestrates a process's run and shutdown. It accepts already-built
@@ -159,11 +169,30 @@ func (a *App) Worker(name string, run func(ctx context.Context) error) {
 
 // Closer registers a teardown step. Closers run sequentially in REGISTRATION
 // order after every worker has stopped, each with the remaining budget.
-// Recommended order: Kafka readers/writers → Redis → DB pool → metrics server
+// Recommended order: Kafka readers/writers (one CloserGroup) → Redis → DB pool → metrics server
 // → tracer flush.
 func (a *App) Closer(name string, closeFn func(ctx context.Context) error) {
 	a.register(func() {
 		a.closers = append(a.closers, &closer{name: name, fn: closeFn})
+	})
+}
+
+// CloserGroup registers ONE teardown step whose members run concurrently. The
+// group takes its registration position in the sequential closer order like
+// any Closer: the closers registered before it have finished when it starts,
+// and the ones registered after it start only when every member has finished
+// or the budget is spent.
+//
+// Each member is reported on its own as "<group>/<member>": its error as
+// ErrCloserFailed, its panic as ErrPanic, its overrun as a timeout — and a
+// failing member never stops its siblings. Use it for independent closes that
+// each block on I/O, the canonical case being Kafka readers and writers: a
+// kafka-go consumer-group Reader.Close waits out the in-flight fetch long-poll
+// (up to ReaderConfig.MaxWait, default 10 s), so closing N readers one by one
+// costs up to N×MaxWait of the budget, concurrently only one MaxWait.
+func (a *App) CloserGroup(name string, members ...NamedCloser) {
+	a.register(func() {
+		a.closers = append(a.closers, &closer{name: name, group: true, members: append([]NamedCloser(nil), members...)})
 	})
 }
 

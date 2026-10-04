@@ -57,7 +57,8 @@ func (r *report) timeout(kind, name string) {
 //  1. Servers stop in parallel, gracefully; a server still busy at the
 //     deadline is hard-stopped (Echo Close / gRPC Stop).
 //  2. The workers' context is cancelled — only now — and Run waits for them.
-//  3. Closers run sequentially in registration order.
+//  3. Closers run sequentially in registration order; the members of a
+//     CloserGroup run concurrently within the group's one step.
 //
 // The trigger is the first of: ctx ending (a signal), any server's start
 // function returning, or a worker failing. Run returns nil for a clean,
@@ -255,29 +256,50 @@ func (a *App) waitWorkers(ctx context.Context, rep *report) {
 	a.log.Info("workers stopped", zap.Int("count", len(a.workers)))
 }
 
-// runClosers is phase 3: sequential, registration order, remaining budget.
+// runClosers is phase 3: sequential, registration order, remaining budget. A
+// CloserGroup is one step of that order whose members run concurrently.
 func (a *App) runClosers(ctx context.Context, rep *report) {
 	for _, c := range a.closers {
-		if ctx.Err() != nil {
-			// Starting a closer we cannot wait for would run it concurrently
-			// with the next one and break the written order; skip it instead.
-			a.log.Warn("closer skipped: shutdown budget already spent",
-				zap.String("closer", c.name))
-			rep.timeout(kindCloser, c.name)
+		if !c.group {
+			a.runCloser(ctx, c.name, c.fn, rep)
 			continue
 		}
-		overran, err := a.callBounded(ctx, kindCloser, c.name, c.fn)
-		switch {
-		case overran || (ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded)):
-			a.log.Warn("closer did not finish within the shutdown budget",
-				zap.String("closer", c.name))
-			rep.timeout(kindCloser, c.name)
-		case err != nil:
-			a.log.Error("closer failed", zap.String("closer", c.name), zap.Error(err))
-			rep.fail(fmt.Errorf("%w: %q: %w", ErrCloserFailed, c.name, err))
-		default:
-			a.log.Info("closer done", zap.String("closer", c.name))
+		var wg sync.WaitGroup
+		for _, m := range c.members {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				a.runCloser(ctx, c.name+"/"+m.Name, m.Close, rep)
+			}()
 		}
+		// Every member's wait is bounded by ctx, so this returns at the latest
+		// when the budget ends; a member still running then is abandoned.
+		wg.Wait()
+	}
+}
+
+// runCloser runs one closer (or one group member) within the remaining budget
+// and records its outcome.
+func (a *App) runCloser(ctx context.Context, name string, fn func(context.Context) error, rep *report) {
+	if ctx.Err() != nil {
+		// Starting a closer we cannot wait for would run it concurrently
+		// with the next one and break the written order; skip it instead.
+		a.log.Warn("closer skipped: shutdown budget already spent",
+			zap.String("closer", name))
+		rep.timeout(kindCloser, name)
+		return
+	}
+	overran, err := a.callBounded(ctx, kindCloser, name, fn)
+	switch {
+	case overran || (ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded)):
+		a.log.Warn("closer did not finish within the shutdown budget",
+			zap.String("closer", name))
+		rep.timeout(kindCloser, name)
+	case err != nil:
+		a.log.Error("closer failed", zap.String("closer", name), zap.Error(err))
+		rep.fail(fmt.Errorf("%w: %q: %w", ErrCloserFailed, name, err))
+	default:
+		a.log.Info("closer done", zap.String("closer", name))
 	}
 }
 
