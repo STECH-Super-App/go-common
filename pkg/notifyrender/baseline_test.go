@@ -102,8 +102,11 @@ func TestBaselineHasNoOrphanSections(t *testing.T) {
 }
 
 func TestAllowedParamsByKey(t *testing.T) {
-	// Known section, both parts resolve to the same declared param set.
-	wantOrder := requiredParams[notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED]
+	// Known section, both parts resolve to the same declared param set:
+	// required (listing_title) PLUS optional (the cancelled_by and
+	// decline_reason discriminators, issues #35 and #62) — a translation may
+	// legitimately reference either tier.
+	wantOrder := []string{"listing_title", "cancelled_by", "decline_reason"}
 	for _, key := range []string{"order_cancelled.title", "order_cancelled.body"} {
 		got, ok := AllowedParamsByKey(key)
 		if !ok {
