@@ -43,15 +43,17 @@
 //
 // A kafka-go consumer-group Reader.Close cancels its partition readers and then
 // waits for each one's in-flight Fetch. That fetch is a long-poll: the broker
-// holds it up to ReaderConfig.MaxWait (default 10 s) when the topic is idle,
+// holds it up to ReaderConfig.MaxWait (kafka-go's default 10 s; the fleet sets
+// events.DefaultReaderMaxWait, 2 s) when the topic is idle,
 // and the connection's read deadline is set to the same MaxWait — the
 // cancellation is only observed between fetches, never inside one. So an idle
 // reader's Close costs up to one MaxWait however early its consumer stopped,
 // and N readers closed one after another cost up to N×MaxWait of the budget.
 // Register every Kafka reader and writer as members of one CloserGroup
-// ("kafka") so they cost one MaxWait together. A service that needs a faster
-// close still has to lower that reader's own MaxWait — at the price of more
-// fetch round trips on an idle topic.
+// ("kafka") so they cost one MaxWait together, and build every reader with
+// MaxWait: events.DefaultReaderMaxWait (pkg/events) so that one MaxWait is
+// ~2 s — the fleet setting, at the price of a fetch round trip every 2 s on an
+// idle topic. Leaving kafka-go's 10 s default makes the group cost up to 10 s.
 //
 // Run logs "shutdown complete" with the trigger, the duration and the
 // components that timed out. It returns nil for a clean signal-triggered

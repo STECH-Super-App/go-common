@@ -188,8 +188,9 @@ func (a *App) Closer(name string, closeFn func(ctx context.Context) error) {
 // failing member never stops its siblings. Use it for independent closes that
 // each block on I/O, the canonical case being Kafka readers and writers: a
 // kafka-go consumer-group Reader.Close waits out the in-flight fetch long-poll
-// (up to ReaderConfig.MaxWait, default 10 s), so closing N readers one by one
-// costs up to N×MaxWait of the budget, concurrently only one MaxWait.
+// (up to ReaderConfig.MaxWait — kafka-go's default 10 s, the fleet setting
+// events.DefaultReaderMaxWait 2 s), so closing N readers one by one costs up to
+// N×MaxWait of the budget, concurrently only one MaxWait.
 func (a *App) CloserGroup(name string, members ...NamedCloser) {
 	a.register(func() {
 		a.closers = append(a.closers, &closer{name: name, group: true, members: append([]NamedCloser(nil), members...)})
