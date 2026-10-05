@@ -420,8 +420,9 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_WITHDRAWN: {
 		"listing_title",
 	},
+	// cancelled_by and decline_reason are discriminators — see optionalParams.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED: {
-		"listing_title", "cancelled_by",
+		"listing_title",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_CANCELLED: {
 		"listing_title",
@@ -455,9 +456,12 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 		"organization_name", "counterparty_name",
 	},
 	// ─── delivery lifecycle (order-service delivery vertical) ───
-	// Only the three delivery types that interpolate a REQUIRED param are listed;
-	// the other 15 need no entry (the required-param loop and the baseline
-	// reverse-check both treat a nil entry as "no required params"). The
+	// Only the two delivery types that interpolate a REQUIRED param are listed;
+	// the other 16 need no entry (the required-param loop and the baseline
+	// reverse-check both treat a nil entry as "no required params").
+	// DELIVERY_REQUEST_CANCELLED left this list when its cancelled_by stopped
+	// being printed and became an arm selector (issue #24) — see optionalParams.
+	// The
 	// human-facing request number rides on 9 of the 18 delivery payloads and is
 	// declared in optionalParams instead — see the note there for why it must not
 	// be a required param.
@@ -467,11 +471,6 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 		// The emitter pre-formats the price and ships it as the payload's
 		// string final_price field; ExtractParams passes it through verbatim.
 		"final_price", "currency",
-	},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED: {
-		// cancel_reason is optional (late-cancellation only), so — mirroring
-		// admin_transfer_rejected's reason — it is neither templated nor declared.
-		"cancelled_by",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY: {
 		"route",
@@ -900,8 +899,36 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 // a delivery request may be notified about before a number is assigned. Those
 // must still render, minus the number.
 var optionalParams = map[notificationv1.NotificationType][]string{
+	// ─── rent order lifecycle ───
+	//
+	// ORDER_CANCELLED's two params are DISCRIMINATORS, optional by mechanism
+	// exactly like repair's four (see the Ремонт note below): a required param
+	// must appear as a literal {{.name}} (validate.go, baseline_test.go), and
+	// neither is ever printed — each is read only inside {{if eq …}}.
+	//
+	//   - cancelled_by ("customer" | "provider") picks «by the renter» / «by the
+	//     owner» (issue #35). order-service always sends it; the tier governs how
+	//     a template may read it, not whether it arrives.
+	//   - decline_reason is set ONLY on the renter's counter-offer decline
+	//     (reject_counter_offer) and is one of PRICE | DATES | TERMS |
+	//     FOUND_ANOTHER | OTHER (issue #62); it is empty on every other cancel.
+	//
+	// Explicit arms only, never a bare {{else}}: an absent or unrecognised token
+	// lights no arm, so the sentence drops the agent or the reason clause rather
+	// than asserting one the wire did not say.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED: {"cancelled_by", "decline_reason"},
+
+	// ─── delivery lifecycle ───
+	//
+	// DELIVERY_REQUEST_CANCELLED's cancelled_by ("customer" | "carrier") is an
+	// arm selector, optional by mechanism for the same reason as ORDER_CANCELLED
+	// above (issue #24). Its sentence is governed WHOLE by the token, so — like
+	// repair_request_cancelled — it carries a neutral default arm that names no
+	// side; two explicit arms alone would render an empty body for an unknown
+	// value. cancel_reason (late-cancellation only) is neither templated nor
+	// declared, mirroring admin_transfer_rejected's reason.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED:      {"request_no"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED:    {"request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED:    {"cancelled_by", "request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY:        {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_EXPIRED:      {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_RECEIPT_REMINDER:     {"request_no"},

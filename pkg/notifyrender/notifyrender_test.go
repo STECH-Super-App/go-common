@@ -636,7 +636,8 @@ func TestRenderOrderLifecycle_EveryLocale(t *testing.T) {
 // TestExtractParams_OrderLifecycle locks the ExtractParams mapping for all 12
 // SendOrder* payloads (order-service contracts, gen-go-lib NotificationType
 // 27-38 / oneof fields 51-62): each must extract exactly its catalog params
-// (listing_title for all, plus cancelled_by for SendOrderCancelled) and not
+// (listing_title for all, plus cancelled_by and decline_reason for
+// SendOrderCancelled) and not
 // fall through to the default ErrEmptyPayload branch.
 func TestExtractParams_OrderLifecycle(t *testing.T) {
 	r := testRendererFull(t)
@@ -728,7 +729,21 @@ func TestExtractParams_OrderLifecycle(t *testing.T) {
 					},
 				},
 			},
-			want: map[string]string{"listing_title": "Excavator", "cancelled_by": "customer"},
+			// decline_reason is surfaced even when the payload leaves it empty:
+			// Render's {{if eq}} arms decide whether a clause reaches the text.
+			want: map[string]string{"listing_title": "Excavator", "cancelled_by": "customer", "decline_reason": ""},
+		},
+		{
+			name: "order_cancelled_counter_offer_decline",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderCancelled{
+					SendOrderCancelled: &notificationv1.SendOrderCancelled{
+						OrderId: "order-1", ListingTitle: "Excavator", CancelledBy: "customer", DeclineReason: "PRICE",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator", "cancelled_by": "customer", "decline_reason": "PRICE"},
 		},
 		{
 			name: "order_auto_cancelled",
@@ -990,7 +1005,7 @@ func TestRenderDeliveryLifecycle_Baseline(t *testing.T) {
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_ACCEPTED, map[string]string{}, nil},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_DECLINED, map[string]string{}, nil},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_COUNTER_OFFER_WITHDRAWN, map[string]string{}, nil},
-		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED, map[string]string{"cancelled_by": "The customer"}, []string{"The customer"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED, map[string]string{"cancelled_by": "customer"}, []string{"The customer"}},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY, map[string]string{"route": "Almaty to Astana"}, []string{"Almaty to Astana"}},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_EXPIRED, map[string]string{}, nil},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_IN_TRANSIT, map[string]string{}, nil},
@@ -1138,12 +1153,12 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestCancelled{
 					SendDeliveryRequestCancelled: &notificationv1.SendDeliveryRequestCancelled{
-						CancelledBy: "The customer", CancelReason: "changed plans", RequestNo: "R-002",
+						CancelledBy: "customer", CancelReason: "changed plans", RequestNo: "R-002",
 					},
 				},
 			},
-			want:   map[string]string{"cancelled_by": "The customer", "request_no": "R-002"},
-			wantIn: []string{"The customer", "#R-002"},
+			want:   map[string]string{"cancelled_by": "customer", "request_no": "R-002"},
+			wantIn: []string{"The customer cancelled request #R-002."},
 		},
 		{
 			name: "loading_today",
@@ -1301,7 +1316,7 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 type deliveryRequestNoCase struct {
 	name        string
 	nt          notificationv1.NotificationType
-	otherParams map[string]string // the type's REQUIRED params, if any
+	otherParams map[string]string // the type's params other than request_no, if any
 	withNumber  string
 	without     string
 }
@@ -1321,7 +1336,7 @@ var deliveryRequestNoCases = []deliveryRequestNoCase{
 	{
 		name:        "request_cancelled",
 		nt:          notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED,
-		otherParams: map[string]string{"cancelled_by": "The customer"},
+		otherParams: map[string]string{"cancelled_by": "customer"},
 		withNumber:  "The customer cancelled request #12345.",
 		without:     "The customer cancelled the request.",
 	},
@@ -1453,8 +1468,9 @@ func TestDeliveryRequestNoIsOptionalNotRequired(t *testing.T) {
 
 // TestOptionalParamsScopedToDeclaredTypes asserts the optional tier has not
 // leaked: only the types named below declare an optional param, and no other
-// baseline string mentions request_no. The rent vertical (order_*) and every
-// platform type must stay untouched.
+// baseline string mentions request_no. Every platform type must stay untouched;
+// of the rent vertical (order_*) only ORDER_CANCELLED declares an optional param
+// — its two arm selectors, never request_no.
 //
 // It was TestOptionalParamsScopedToDelivery, a delivery-only whitelist, until
 // parts' new_address_count became the first optional param outside that
@@ -1585,6 +1601,12 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	//     The three responder-addressed rows and MATCHING_POSTING deliberately
 	//     declare no posting_no — §5 R7 keeps a seller's texts unnumbered.
 	declared[notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING] = true
+	// rent — ORDER_CANCELLED's cancelled_by («by the renter» / «by the owner»,
+	// issue #35) and decline_reason (the counter-offer decline's clause, issue
+	// #62). Both are discriminators read only inside {{if eq …}} and never
+	// printed, so — like repair's four — OPTIONAL is the only tier they can
+	// hold. No other rent type declares one.
+	declared[notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED] = true
 	for _, nt := range []notificationv1.NotificationType{
 		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_RECEIVED,
 		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN,
@@ -1626,10 +1648,12 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 }
 
 // TestRenderRentLifecycle_UnaffectedByRequestNumber renders the rent vertical
-// (order-service's order_* types) and asserts the shipped bodies are exactly
-// what they were before request numbering — no optional fill, no stray "#".
-// The two verticals share the catalog, so a regression here would be invisible
-// in the delivery tests.
+// (order-service's order_* types) and asserts no rent type declares request_no
+// and no rent body carries a stray "#". The two verticals share the catalog, so
+// a regression here would be invisible in the delivery tests. ORDER_CANCELLED
+// does declare optional params — its cancelled_by / decline_reason arm
+// selectors (issues #35, #62) — so the check is on request_no, not on the tier
+// being empty.
 func TestRenderRentLifecycle_UnaffectedByRequestNumber(t *testing.T) {
 	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
 	cases := []struct {
@@ -1644,8 +1668,8 @@ func TestRenderRentLifecycle_UnaffectedByRequestNumber(t *testing.T) {
 		},
 		{
 			notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED,
-			map[string]string{"listing_title": "Excavator XL", "cancelled_by": "The owner"},
-			"The order for 'Excavator XL' was cancelled by The owner.",
+			map[string]string{"listing_title": "Excavator XL", "cancelled_by": "provider"},
+			"The order for 'Excavator XL' was cancelled by the owner.",
 		},
 		{
 			notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED,
@@ -1660,8 +1684,8 @@ func TestRenderRentLifecycle_UnaffectedByRequestNumber(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.nt.String(), func(t *testing.T) {
-			if len(OptionalParams(tc.nt)) != 0 {
-				t.Fatalf("rent type %v unexpectedly declares optional params", tc.nt)
+			if contains(OptionalParams(tc.nt), "request_no") {
+				t.Fatalf("rent type %v unexpectedly declares request_no", tc.nt)
 			}
 			_, body, err := r.Render(tc.nt, tc.params, "en")
 			if err != nil {
@@ -2296,5 +2320,114 @@ func TestPartsUnmappedTypeStillFailsClosed(t *testing.T) {
 	}
 	if _, err := ExtractParams(env); err == nil {
 		t.Fatal("ExtractParams accepted a type with no case — the publish-time gate is gone")
+	}
+}
+
+// absentKey marks a param the arm tests leave out of the map entirely, so
+// Render's absent-optional fill is exercised next to the explicit "".
+const absentKey = "\x00absent"
+
+// armParams builds a params map, dropping every value equal to absentKey.
+func armParams(kv map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range kv {
+		if v != absentKey {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// TestRenderDeliveryRequestCancelled_SideArms is the copy lock for issue #24:
+// the delivery cancel body picks its subject from the closed cancelled_by token
+// ("customer" | "carrier") and never prints the token. Any other value — empty,
+// absent, or a token the template does not know — takes the neutral arm, which
+// names no side. request_no stays optional inside every arm.
+func TestRenderDeliveryRequestCancelled_SideArms(t *testing.T) {
+	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
+	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED
+
+	// want[side][number] — number "12" vs no number ("" and absent render alike).
+	want := map[string][2]string{
+		"customer": {"The customer cancelled request #12.", "The customer cancelled the request."},
+		"carrier":  {"The carrier cancelled request #12.", "The carrier cancelled the request."},
+		"":         {"Request #12 was cancelled.", "The request was cancelled."},
+		"admin":    {"Request #12 was cancelled.", "The request was cancelled."},
+		absentKey:  {"Request #12 was cancelled.", "The request was cancelled."},
+	}
+	for side, bodies := range want {
+		for _, number := range []string{"12", "", absentKey} {
+			wantBody := bodies[1]
+			if number == "12" {
+				wantBody = bodies[0]
+			}
+			name := strings.ReplaceAll("side="+side+"/no="+number, absentKey, "absent")
+			t.Run(name, func(t *testing.T) {
+				_, body, err := r.Render(nt, armParams(map[string]string{"cancelled_by": side, "request_no": number}), "en")
+				if err != nil {
+					t.Fatalf("Render err: %v", err)
+				}
+				if body != wantBody {
+					t.Errorf("body = %q, want %q", body, wantBody)
+				}
+				// The neutral arm must never echo a token it does not know.
+				if strings.Contains(body, "admin") {
+					t.Errorf("body %q prints the raw cancelled_by token", body)
+				}
+			})
+		}
+	}
+}
+
+// TestRenderOrderCancelled_SideAndDeclineArms is the copy lock for issues #35
+// and #62: the rent cancel body picks «by the renter» / «by the owner» from the
+// closed cancelled_by token ("customer" | "provider"), and the counter-offer
+// decline appends one clause per closed decline_reason code (PRICE | DATES |
+// TERMS | FOUND_ANOTHER | OTHER). Neither token is ever printed; an empty,
+// absent or unknown value lights no arm, so the agent or the clause is simply
+// dropped.
+func TestRenderOrderCancelled_SideAndDeclineArms(t *testing.T) {
+	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
+	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED
+
+	sides := map[string]string{
+		"customer": "The order for 'X' was cancelled by the renter.",
+		"provider": "The order for 'X' was cancelled by the owner.",
+		"":         "The order for 'X' was cancelled.",
+		"system":   "The order for 'X' was cancelled.",
+		absentKey:  "The order for 'X' was cancelled.",
+	}
+	clauses := map[string]string{
+		"PRICE":         " Counter-offer declined: the price does not suit.",
+		"DATES":         " Counter-offer declined: the dates do not suit.",
+		"TERMS":         " Counter-offer declined: the terms do not suit.",
+		"FOUND_ANOTHER": " Counter-offer declined: another option was found.",
+		"OTHER":         " Counter-offer declined: another reason.",
+		"":              "",
+		"BOGUS":         "",
+		"price":         "", // the codes are case-sensitive, like the order-service list
+		absentKey:       "",
+	}
+	rawTokens := []string{"customer", "provider", "system", "PRICE", "DATES", "TERMS", "FOUND_ANOTHER", "OTHER", "BOGUS"}
+	for side, sentence := range sides {
+		for reason, clause := range clauses {
+			wantBody := sentence + clause
+			name := strings.ReplaceAll("side="+side+"/reason="+reason, absentKey, "absent")
+			t.Run(name, func(t *testing.T) {
+				params := armParams(map[string]string{"listing_title": "X", "cancelled_by": side, "decline_reason": reason})
+				_, body, err := r.Render(nt, params, "en")
+				if err != nil {
+					t.Fatalf("Render err: %v", err)
+				}
+				if body != wantBody {
+					t.Errorf("body = %q, want %q", body, wantBody)
+				}
+				for _, tok := range rawTokens {
+					if strings.Contains(body, tok) {
+						t.Errorf("body %q prints the raw token %q", body, tok)
+					}
+				}
+			})
+		}
 	}
 }

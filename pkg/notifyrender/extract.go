@@ -313,9 +313,14 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"listing_title": p.SendOrderCounterOfferWithdrawn.GetListingTitle(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendOrderCancelled:
+		// cancelled_by and decline_reason are closed tokens the template branches
+		// on and never prints (catalog optional tier). decline_reason is "" on
+		// every cancel that is not a counter-offer decline — surface it anyway;
+		// Render's {{if eq}} arms decide whether a clause reaches the text.
 		return map[string]string{
-			"listing_title": p.SendOrderCancelled.GetListingTitle(),
-			"cancelled_by":  p.SendOrderCancelled.GetCancelledBy(),
+			"listing_title":  p.SendOrderCancelled.GetListingTitle(),
+			"cancelled_by":   p.SendOrderCancelled.GetCancelledBy(),
+			"decline_reason": p.SendOrderCancelled.GetDeclineReason(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendOrderAutoCancelled:
 		return map[string]string{
@@ -370,7 +375,9 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	case *notificationv1.NotificationEnvelope_SendDeliveryRequestCancelled:
 		// cancel_reason is optional (late-cancellation only) and not templated,
 		// mirroring admin_transfer_rejected's optional reason — surface only
-		// cancelled_by and request_no, the two declared params.
+		// cancelled_by and request_no, the two declared (optional) params.
+		// cancelled_by is a closed token ("customer" | "carrier") that picks the
+		// subject noun; the template never prints it.
 		return map[string]string{
 			"cancelled_by": p.SendDeliveryRequestCancelled.GetCancelledBy(),
 			"request_no":   p.SendDeliveryRequestCancelled.GetRequestNo(),
