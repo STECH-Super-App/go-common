@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -89,6 +90,7 @@ func testRendererFull(t *testing.T) *Renderer {
   "order_receipt_confirmed": {"title": "Receipt confirmed", "body": "Receipt was confirmed for '{{.listing_title}}'."},
   "order_auto_completed": {"title": "Order auto-completed", "body": "The order for '{{.listing_title}}' was automatically completed."},
   "order_review_window_ending": {"title": "Review window ending", "body": "The review window for '{{.listing_title}}' is ending soon."},
+  "order_review_invite": {"title": "Leave a review", "body": "How did the rental of '{{.listing_title}}' go? Rate the owner — you have 14 days."},
   "org_admin_transfer_initiated": {"title": "Admin role transfer offer", "body": "{{.from_user_name}} wants to transfer the admin role of {{.organization_name}} to you. Respond before the offer expires."},
   "org_admin_transfer_accepted": {"title": "Admin transfer accepted", "body": "{{.to_user_name}} accepted the admin role of {{.organization_name}}."},
   "org_admin_transfer_rejected": {"title": "Admin transfer declined", "body": "{{.to_user_name}} declined the admin transfer for {{.organization_name}}."},
@@ -135,6 +137,7 @@ func testRendererFull(t *testing.T) *Renderer {
   "order_receipt_confirmed": {"title": "Получение подтверждено", "body": "Получение подтверждено по «{{.listing_title}}»."},
   "order_auto_completed": {"title": "Заказ завершён автоматически", "body": "Заказ по «{{.listing_title}}» был автоматически завершён."},
   "order_review_window_ending": {"title": "Окно отзыва закрывается", "body": "Окно отзыва по «{{.listing_title}}» скоро закроется."},
+  "order_review_invite": {"title": "Оставьте отзыв", "body": "Как прошла аренда «{{.listing_title}}»? Оцените арендодателя — у вас 14 дней."},
   "org_admin_transfer_initiated": {"title": "Предложение передать права администратора", "body": "{{.from_user_name}} хочет передать вам роль администратора организации {{.organization_name}}. Ответьте до истечения срока действия запроса."},
   "org_admin_transfer_accepted": {"title": "Передача администратора принята", "body": "{{.to_user_name}} принял роль администратора организации {{.organization_name}}."},
   "org_admin_transfer_rejected": {"title": "Передача администратора отклонена", "body": "{{.to_user_name}} отклонил передачу прав администратора для {{.organization_name}}."},
@@ -590,8 +593,9 @@ func TestRenderTenantMemberRemovedAdmin_Interpolates(t *testing.T) {
 	}
 }
 
-// TestRenderOrderLifecycle_EveryLocale locks the 12 order-lifecycle catalog
-// entries (order-service contracts, gen-go-lib NotificationType 27-38): each
+// TestRenderOrderLifecycle_EveryLocale locks the 13 order-lifecycle catalog
+// entries (order-service contracts, gen-go-lib NotificationType 27-38 and
+// ORDER_REVIEW_INVITE 165): each
 // must render non-empty title/body in every locale with exactly its required
 // params. Params are listed explicitly (not read back from requiredParams) so
 // this test is red before catalog.go registers the types, and stays a real
@@ -614,6 +618,7 @@ func TestRenderOrderLifecycle_EveryLocale(t *testing.T) {
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_RECEIPT_CONFIRMED, map[string]string{"listing_title": "Excavator"}},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED, map[string]string{"listing_title": "Excavator"}},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING, map[string]string{"listing_title": "Excavator"}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_INVITE, map[string]string{"listing_title": "Excavator"}},
 	}
 	for _, tc := range cases {
 		for _, loc := range []string{"en", "ru"} {
@@ -633,12 +638,12 @@ func TestRenderOrderLifecycle_EveryLocale(t *testing.T) {
 	}
 }
 
-// TestExtractParams_OrderLifecycle locks the ExtractParams mapping for all 12
+// TestExtractParams_OrderLifecycle locks the ExtractParams mapping for all 13
 // SendOrder* payloads (order-service contracts, gen-go-lib NotificationType
-// 27-38 / oneof fields 51-62): each must extract exactly its catalog params
-// (listing_title for all, plus cancelled_by and decline_reason for
-// SendOrderCancelled) and not
-// fall through to the default ErrEmptyPayload branch.
+// 27-38 / oneof fields 51-62, plus ORDER_REVIEW_INVITE 165 / oneof field 185):
+// each must extract exactly its catalog params (listing_title for all, plus
+// cancelled_by, decline_reason and cancel_reason for SendOrderCancelled) and
+// not fall through to the default ErrEmptyPayload branch.
 func TestExtractParams_OrderLifecycle(t *testing.T) {
 	r := testRendererFull(t)
 	cases := []struct {
@@ -729,9 +734,10 @@ func TestExtractParams_OrderLifecycle(t *testing.T) {
 					},
 				},
 			},
-			// decline_reason is surfaced even when the payload leaves it empty:
+			// decline_reason and cancel_reason are surfaced even when the payload
+			// leaves them empty:
 			// Render's {{if eq}} arms decide whether a clause reaches the text.
-			want: map[string]string{"listing_title": "Excavator", "cancelled_by": "customer", "decline_reason": ""},
+			want: map[string]string{"listing_title": "Excavator", "cancelled_by": "customer", "decline_reason": "", "cancel_reason": ""},
 		},
 		{
 			name: "order_cancelled_counter_offer_decline",
@@ -743,7 +749,19 @@ func TestExtractParams_OrderLifecycle(t *testing.T) {
 					},
 				},
 			},
-			want: map[string]string{"listing_title": "Excavator", "cancelled_by": "customer", "decline_reason": "PRICE"},
+			want: map[string]string{"listing_title": "Excavator", "cancelled_by": "customer", "decline_reason": "PRICE", "cancel_reason": ""},
+		},
+		{
+			name: "order_cancelled_human_cancel",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderCancelled{
+					SendOrderCancelled: &notificationv1.SendOrderCancelled{
+						OrderId: "order-1", ListingTitle: "Excavator", CancelledBy: "provider", CancelReason: "MACHINE_FAULTY",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator", "cancelled_by": "provider", "decline_reason": "", "cancel_reason": "MACHINE_FAULTY"},
 		},
 		{
 			name: "order_auto_cancelled",
@@ -799,6 +817,18 @@ func TestExtractParams_OrderLifecycle(t *testing.T) {
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendOrderReviewWindowEnding{
 					SendOrderReviewWindowEnding: &notificationv1.SendOrderReviewWindowEnding{
+						OrderId: "order-1", ListingTitle: "Excavator",
+					},
+				},
+			},
+			want: map[string]string{"listing_title": "Excavator"},
+		},
+		{
+			name: "order_review_invite",
+			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_INVITE,
+			env: &notificationv1.NotificationEnvelope{
+				Payload: &notificationv1.NotificationEnvelope_SendOrderReviewInvite{
+					SendOrderReviewInvite: &notificationv1.SendOrderReviewInvite{
 						OrderId: "order-1", ListingTitle: "Excavator",
 					},
 				},
@@ -1312,7 +1342,11 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 // deliveryRequestNoCase pins the EXACT rendered body for one request_no-bearing
 // delivery type in both states. Exact strings (not substring probes) are the
 // point: they are the reviewable record of the shipped copy, and `without` is
-// byte-identical to what the type rendered before numbering shipped.
+// what the type renders for a directive emitted before numbering shipped. Two
+// sentences were rewritten after numbering: request_cancelled names the side
+// (issue #24), and auto_confirmed lost its «you can leave a review» sentence
+// because it reaches both sides — the customer's invitation is review_invite,
+// emitted beside it on both completions (З-08, 06.10.2026).
 type deliveryRequestNoCase struct {
 	name        string
 	nt          notificationv1.NotificationType
@@ -1362,8 +1396,8 @@ var deliveryRequestNoCases = []deliveryRequestNoCase{
 	{
 		name:       "auto_confirmed",
 		nt:         notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_AUTO_CONFIRMED,
-		withNumber: "Request #12345 was auto-confirmed. You can leave a review within 14 days.",
-		without:    "The request was auto-confirmed. You can leave a review within 14 days.",
+		withNumber: "Request #12345 was auto-confirmed.",
+		without:    "The request was auto-confirmed.",
 	},
 	{
 		name:       "review_invite",
@@ -1470,7 +1504,7 @@ func TestDeliveryRequestNoIsOptionalNotRequired(t *testing.T) {
 // leaked: only the types named below declare an optional param, and no other
 // baseline string mentions request_no. Every platform type must stay untouched;
 // of the rent vertical (order_*) only ORDER_CANCELLED declares an optional param
-// — its two arm selectors, never request_no.
+// — its three arm selectors, never request_no.
 //
 // It was TestOptionalParamsScopedToDelivery, a delivery-only whitelist, until
 // parts' new_address_count became the first optional param outside that
@@ -1602,11 +1636,17 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	//     declare no posting_no — §5 R7 keeps a seller's texts unnumbered.
 	declared[notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING] = true
 	// rent — ORDER_CANCELLED's cancelled_by («by the renter» / «by the owner»,
-	// issue #35) and decline_reason (the counter-offer decline's clause, issue
-	// #62). Both are discriminators read only inside {{if eq …}} and never
-	// printed, so — like repair's four — OPTIONAL is the only tier they can
-	// hold. No other rent type declares one.
+	// issue #35), decline_reason (the counter-offer decline's clause, issue #62)
+	// and cancel_reason (the human cancel's closed-list clause, #58). All three
+	// are discriminators read only inside {{if eq …}} and never printed, so —
+	// like repair's four — OPTIONAL is the only tier they can hold. No other rent
+	// type declares one; ORDER_REVIEW_INVITE in particular declares none. The
+	// param SET is pinned too, so a fourth selector cannot join silently.
 	declared[notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED] = true
+	if got, want := OptionalParams(notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED),
+		[]string{"cancelled_by", "decline_reason", "cancel_reason"}; !slices.Equal(got, want) {
+		t.Errorf("ORDER_CANCELLED optional params = %v, want %v", got, want)
+	}
 	for _, nt := range []notificationv1.NotificationType{
 		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_RECEIVED,
 		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN,
@@ -1651,9 +1691,9 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 // (order-service's order_* types) and asserts no rent type declares request_no
 // and no rent body carries a stray "#". The two verticals share the catalog, so
 // a regression here would be invisible in the delivery tests. ORDER_CANCELLED
-// does declare optional params — its cancelled_by / decline_reason arm
-// selectors (issues #35, #62) — so the check is on request_no, not on the tier
-// being empty.
+// does declare optional params — its cancelled_by / decline_reason /
+// cancel_reason arm selectors (issues #35, #62, #58) — so the check is on
+// request_no, not on the tier being empty.
 func TestRenderRentLifecycle_UnaffectedByRequestNumber(t *testing.T) {
 	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
 	cases := []struct {
@@ -1680,6 +1720,11 @@ func TestRenderRentLifecycle_UnaffectedByRequestNumber(t *testing.T) {
 			notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING,
 			map[string]string{"listing_title": "Excavator XL"},
 			"Your review window for 'Excavator XL' ends in 2 days.",
+		},
+		{
+			notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_INVITE,
+			map[string]string{"listing_title": "Excavator XL"},
+			"How did the rental of 'Excavator XL' go? Rate the owner — you have 14 days.",
 		},
 	}
 	for _, tc := range cases {
@@ -2379,14 +2424,19 @@ func TestRenderDeliveryRequestCancelled_SideArms(t *testing.T) {
 	}
 }
 
-// TestRenderOrderCancelled_SideAndDeclineArms is the copy lock for issues #35
-// and #62: the rent cancel body picks «by the renter» / «by the owner» from the
-// closed cancelled_by token ("customer" | "provider"), and the counter-offer
-// decline appends one clause per closed decline_reason code (PRICE | DATES |
-// TERMS | FOUND_ANOTHER | OTHER). Neither token is ever printed; an empty,
-// absent or unknown value lights no arm, so the agent or the clause is simply
-// dropped.
-func TestRenderOrderCancelled_SideAndDeclineArms(t *testing.T) {
+// TestRenderOrderCancelled_SideDeclineAndCancelArms is the copy lock for
+// issues #35, #62 and #58: the rent cancel body picks «by the renter» / «by the
+// owner» from the closed cancelled_by token ("customer" | "provider"); the
+// counter-offer decline appends one clause per closed decline_reason code
+// (PRICE | DATES | TERMS | FOUND_ANOTHER | OTHER); and a human rent cancel
+// appends one clause per closed cancel_reason code of either side's list
+// (renter: CHANGED_PLANS | FOUND_ANOTHER | WRONG_DETAILS | OTHER; lessor:
+// MACHINE_UNAVAILABLE | MACHINE_FAULTY | TERMS_NOT_SUITABLE |
+// CUSTOMER_UNREACHABLE | OTHER — А-16 as amended 06.10.2026). No token is ever
+// printed; an empty, absent or unknown value lights no arm, so the agent or the
+// clause is simply dropped. The producer never sets decline_reason and
+// cancel_reason together, so each matrix holds the other one empty or absent.
+func TestRenderOrderCancelled_SideDeclineAndCancelArms(t *testing.T) {
 	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
 	nt := notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED
 
@@ -2397,7 +2447,7 @@ func TestRenderOrderCancelled_SideAndDeclineArms(t *testing.T) {
 		"system":   "The order for 'X' was cancelled.",
 		absentKey:  "The order for 'X' was cancelled.",
 	}
-	clauses := map[string]string{
+	declineClauses := map[string]string{
 		"PRICE":         " Counter-offer declined: the price does not suit.",
 		"DATES":         " Counter-offer declined: the dates do not suit.",
 		"TERMS":         " Counter-offer declined: the terms do not suit.",
@@ -2408,26 +2458,73 @@ func TestRenderOrderCancelled_SideAndDeclineArms(t *testing.T) {
 		"price":         "", // the codes are case-sensitive, like the order-service list
 		absentKey:       "",
 	}
-	rawTokens := []string{"customer", "provider", "system", "PRICE", "DATES", "TERMS", "FOUND_ANOTHER", "OTHER", "BOGUS"}
+	cancelClauses := map[string]string{
+		"CHANGED_PLANS":        " Reason: plans changed.",
+		"FOUND_ANOTHER":        " Reason: another option was found.",
+		"WRONG_DETAILS":        " Reason: the request details were wrong.",
+		"MACHINE_UNAVAILABLE":  " Reason: the equipment is booked for these dates.",
+		"MACHINE_FAULTY":       " Reason: the equipment is faulty.",
+		"TERMS_NOT_SUITABLE":   " Reason: the request terms do not suit.",
+		"CUSTOMER_UNREACHABLE": " Reason: the renter cannot be reached.",
+		"OTHER":                " Reason: other — see the order card.",
+		"":                     "",
+		"BOGUS":                "",
+		"changed_plans":        "", // case-sensitive, like the order-service lists
+		"PRICE":                "", // a decline code is not a cancel code
+		absentKey:              "",
+	}
+	rawTokens := []string{
+		"customer", "provider", "system", "PRICE", "DATES", "TERMS", "FOUND_ANOTHER", "OTHER", "BOGUS",
+		"CHANGED_PLANS", "WRONG_DETAILS", "MACHINE_UNAVAILABLE", "MACHINE_FAULTY", "TERMS_NOT_SUITABLE",
+		"CUSTOMER_UNREACHABLE", "changed_plans",
+	}
+	check := func(t *testing.T, params map[string]string, wantBody string) {
+		t.Helper()
+		_, body, err := r.Render(nt, armParams(params), "en")
+		if err != nil {
+			t.Fatalf("Render err: %v", err)
+		}
+		if body != wantBody {
+			t.Errorf("body = %q, want %q", body, wantBody)
+		}
+		for _, tok := range rawTokens {
+			if strings.Contains(body, tok) {
+				t.Errorf("body %q prints the raw token %q", body, tok)
+			}
+		}
+	}
+
+	// The counter-offer decline (reject_counter_offer): cancel_reason is empty.
 	for side, sentence := range sides {
-		for reason, clause := range clauses {
-			wantBody := sentence + clause
-			name := strings.ReplaceAll("side="+side+"/reason="+reason, absentKey, "absent")
+		for reason, clause := range declineClauses {
+			name := strings.ReplaceAll("decline/side="+side+"/reason="+reason, absentKey, "absent")
 			t.Run(name, func(t *testing.T) {
-				params := armParams(map[string]string{"listing_title": "X", "cancelled_by": side, "decline_reason": reason})
-				_, body, err := r.Render(nt, params, "en")
-				if err != nil {
-					t.Fatalf("Render err: %v", err)
-				}
-				if body != wantBody {
-					t.Errorf("body = %q, want %q", body, wantBody)
-				}
-				for _, tok := range rawTokens {
-					if strings.Contains(body, tok) {
-						t.Errorf("body %q prints the raw token %q", body, tok)
-					}
-				}
+				check(t, map[string]string{
+					"listing_title": "X", "cancelled_by": side, "decline_reason": reason, "cancel_reason": "",
+				}, sentence+clause)
 			})
 		}
 	}
+	// The human rent cancel (trigger `cancel`): decline_reason is empty.
+	for side, sentence := range sides {
+		for reason, clause := range cancelClauses {
+			name := strings.ReplaceAll("cancel/side="+side+"/reason="+reason, absentKey, "absent")
+			t.Run(name, func(t *testing.T) {
+				check(t, map[string]string{
+					"listing_title": "X", "cancelled_by": side, "decline_reason": "", "cancel_reason": reason,
+				}, sentence+clause)
+			})
+		}
+	}
+	// A system cancel from an older producer: every discriminator empty.
+	t.Run("all_discriminators_empty", func(t *testing.T) {
+		check(t, map[string]string{
+			"listing_title": "X", "cancelled_by": "", "decline_reason": "", "cancel_reason": "",
+		}, "The order for 'X' was cancelled.")
+	})
+	// A producer on the pre-#58 contract sends neither reason key at all.
+	t.Run("both_reasons_absent", func(t *testing.T) {
+		check(t, map[string]string{"listing_title": "X", "cancelled_by": "provider"},
+			"The order for 'X' was cancelled by the owner.")
+	})
 }

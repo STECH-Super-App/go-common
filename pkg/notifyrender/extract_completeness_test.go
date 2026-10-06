@@ -163,7 +163,7 @@ func TestExtractParamsReadsEveryDeclaredStringField(t *testing.T) {
 // meant to be updated in the same commit that adds the arm.
 func TestExtractParamsCompletenessCensus(t *testing.T) {
 	oneof := (&notificationv1.NotificationEnvelope{}).ProtoReflect().Descriptor().Oneofs().ByName("payload")
-	const want = 174
+	const want = 175 // 175: SendOrderReviewInvite (З-08, 06.10.2026)
 	if got := oneof.Fields().Len(); got != want {
 		names := make([]string, 0, oneof.Fields().Len())
 		for i := 0; i < oneof.Fields().Len(); i++ {
