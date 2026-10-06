@@ -287,7 +287,7 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"ip":          p.SendNewDeviceLogin.GetIp(),
 		}, nil
 
-	// ─── order lifecycle payloads (order-service contracts, oneof fields 51-62) ───
+	// ─── order lifecycle payloads (order-service contracts, oneof fields 51-62, 185) ───
 	case *notificationv1.NotificationEnvelope_SendOrderRequestCreated:
 		return map[string]string{
 			"listing_title": p.SendOrderRequestCreated.GetListingTitle(),
@@ -313,14 +313,17 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"listing_title": p.SendOrderCounterOfferWithdrawn.GetListingTitle(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendOrderCancelled:
-		// cancelled_by and decline_reason are closed tokens the template branches
-		// on and never prints (catalog optional tier). decline_reason is "" on
-		// every cancel that is not a counter-offer decline — surface it anyway;
-		// Render's {{if eq}} arms decide whether a clause reaches the text.
+		// cancelled_by, decline_reason and cancel_reason are closed tokens the
+		// template branches on and never prints (catalog optional tier).
+		// decline_reason is "" on every cancel that is not a counter-offer
+		// decline, cancel_reason "" on every cancel that is not a human rent
+		// cancel — surface both anyway; Render's {{if eq}} arms decide whether a
+		// clause reaches the text.
 		return map[string]string{
 			"listing_title":  p.SendOrderCancelled.GetListingTitle(),
 			"cancelled_by":   p.SendOrderCancelled.GetCancelledBy(),
 			"decline_reason": p.SendOrderCancelled.GetDeclineReason(),
+			"cancel_reason":  p.SendOrderCancelled.GetCancelReason(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendOrderAutoCancelled:
 		return map[string]string{
@@ -341,6 +344,10 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	case *notificationv1.NotificationEnvelope_SendOrderReviewWindowEnding:
 		return map[string]string{
 			"listing_title": p.SendOrderReviewWindowEnding.GetListingTitle(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderReviewInvite:
+		return map[string]string{
+			"listing_title": p.SendOrderReviewInvite.GetListingTitle(),
 		}, nil
 
 	// ─── delivery lifecycle payloads (order-service delivery vertical) ───

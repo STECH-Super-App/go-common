@@ -10,7 +10,7 @@ require (
 )
 
 require (
-	github.com/STECH-Super-App/gen-go-lib v0.0.0-20261005003330-396524e4cbe9
+	github.com/STECH-Super-App/gen-go-lib v0.0.0-20261006003722-c7d14d7d2f62
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/labstack/echo/v4 v4.15.1

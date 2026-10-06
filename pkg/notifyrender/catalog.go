@@ -38,7 +38,8 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_TENANT_MEMBER_LEFT:           "tenant_member_left",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_MANAGER:  "member_role_changed_manager",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_OPERATOR: "member_role_changed_operator",
-	// order lifecycle (order-service contracts, gen-go-lib NotificationType 27-38).
+	// order lifecycle (order-service contracts, gen-go-lib NotificationType 27-38,
+	// plus ORDER_REVIEW_INVITE 165).
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED:         "order_request_created",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_ACCEPTED:        "order_request_accepted",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TERMS_AGREED:            "order_terms_agreed",
@@ -51,6 +52,7 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_RECEIPT_CONFIRMED:       "order_receipt_confirmed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_AUTO_COMPLETED:          "order_auto_completed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING:    "order_review_window_ending",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_INVITE:           "order_review_invite",
 	// organisation admin-transfer lifecycle (handoff): in-app + email + push.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_INITIATED: "org_admin_transfer_initiated",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_ACCEPTED:  "org_admin_transfer_accepted",
@@ -420,7 +422,8 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_COUNTER_OFFER_WITHDRAWN: {
 		"listing_title",
 	},
-	// cancelled_by and decline_reason are discriminators — see optionalParams.
+	// cancelled_by, decline_reason and cancel_reason are discriminators — see
+	// optionalParams.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED: {
 		"listing_title",
 	},
@@ -437,6 +440,11 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 		"listing_title",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_WINDOW_ENDING: {
+		"listing_title",
+	},
+	// З-08: the renter is invited to review on BOTH successful completions —
+	// confirm_receipt and timer_a_autocomplete — never on a cancel.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_INVITE: {
 		"listing_title",
 	},
 	// ─── organisation admin-transfer lifecycle (handoff) ───
@@ -901,7 +909,7 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 var optionalParams = map[notificationv1.NotificationType][]string{
 	// ─── rent order lifecycle ───
 	//
-	// ORDER_CANCELLED's two params are DISCRIMINATORS, optional by mechanism
+	// ORDER_CANCELLED's three params are DISCRIMINATORS, optional by mechanism
 	// exactly like repair's four (see the Ремонт note below): a required param
 	// must appear as a literal {{.name}} (validate.go, baseline_test.go), and
 	// neither is ever printed — each is read only inside {{if eq …}}.
@@ -912,11 +920,19 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	//   - decline_reason is set ONLY on the renter's counter-offer decline
 	//     (reject_counter_offer) and is one of PRICE | DATES | TERMS |
 	//     FOUND_ANOTHER | OTHER (issue #62); it is empty on every other cancel.
+	//   - cancel_reason is set ONLY on a human rent cancel (trigger `cancel`,
+	//     either side) and is one code of the renter's list (CHANGED_PLANS |
+	//     FOUND_ANOTHER | WRONG_DETAILS | OTHER) or the lessor's list
+	//     (MACHINE_UNAVAILABLE | MACHINE_FAULTY | TERMS_NOT_SUITABLE |
+	//     CUSTOMER_UNREACHABLE | OTHER) — А-16 as amended 06.10.2026. It is empty
+	//     on a counter-offer decline and on every system cancel. decline_reason
+	//     and cancel_reason are never both set; they are separate params because
+	//     FOUND_ANOTHER and OTHER mean different sentences in the two lists.
 	//
 	// Explicit arms only, never a bare {{else}}: an absent or unrecognised token
 	// lights no arm, so the sentence drops the agent or the reason clause rather
 	// than asserting one the wire did not say.
-	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED: {"cancelled_by", "decline_reason"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_CANCELLED: {"cancelled_by", "decline_reason", "cancel_reason"},
 
 	// ─── delivery lifecycle ───
 	//
@@ -925,8 +941,15 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	// above (issue #24). Its sentence is governed WHOLE by the token, so — like
 	// repair_request_cancelled — it carries a neutral default arm that names no
 	// side; two explicit arms alone would render an empty body for an unknown
-	// value. cancel_reason (late-cancellation only) is neither templated nor
-	// declared, mirroring admin_transfer_rejected's reason.
+	// value. cancel_reason is declared on the wire but no producer fills it (the
+	// late-cancel push rider is not built; the code and comment live on the
+	// request card), so it is neither templated nor declared here, mirroring
+	// admin_transfer_rejected's reason.
+	//
+	// DELIVERY_AUTO_CONFIRMED reaches BOTH sides, so its text carries no review
+	// call to action — the carrier cannot review the customer. The customer's
+	// invitation is DELIVERY_REVIEW_INVITE, emitted beside it on the 48 h
+	// auto-confirm exactly as on the human confirm (З-08, 06.10.2026).
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED:      {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED:    {"cancelled_by", "request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY:        {"request_no"},

@@ -102,22 +102,27 @@ func TestBaselineHasNoOrphanSections(t *testing.T) {
 }
 
 func TestAllowedParamsByKey(t *testing.T) {
-	// Known section, both parts resolve to the same declared param set:
-	// required (listing_title) PLUS optional (the cancelled_by and
-	// decline_reason discriminators, issues #35 and #62) — a translation may
-	// legitimately reference either tier.
-	wantOrder := []string{"listing_title", "cancelled_by", "decline_reason"}
-	for _, key := range []string{"order_cancelled.title", "order_cancelled.body"} {
-		got, ok := AllowedParamsByKey(key)
-		if !ok {
-			t.Fatalf("%s: expected ok", key)
-		}
-		if len(got) != len(wantOrder) {
-			t.Fatalf("%s: params = %v, want %v", key, got, wantOrder)
-		}
-		for _, p := range wantOrder {
-			if !contains(got, p) {
-				t.Errorf("%s: missing declared param %q", key, p)
+	// Known sections, both parts resolve to the same declared param set:
+	// required PLUS optional — a translation may legitimately reference either
+	// tier. order_cancelled carries listing_title plus its three discriminators
+	// (cancelled_by #35, decline_reason #62, cancel_reason #58);
+	// order_review_invite (З-08) carries listing_title alone.
+	for section, want := range map[string][]string{
+		"order_cancelled":     {"listing_title", "cancelled_by", "decline_reason", "cancel_reason"},
+		"order_review_invite": {"listing_title"},
+	} {
+		for _, key := range []string{section + ".title", section + ".body"} {
+			got, ok := AllowedParamsByKey(key)
+			if !ok {
+				t.Fatalf("%s: expected ok", key)
+			}
+			if len(got) != len(want) {
+				t.Fatalf("%s: params = %v, want %v", key, got, want)
+			}
+			for _, p := range want {
+				if !contains(got, p) {
+					t.Errorf("%s: missing declared param %q", key, p)
+				}
 			}
 		}
 	}
