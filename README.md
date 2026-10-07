@@ -447,16 +447,39 @@ Typed consumer dispatcher. Registers proto-typed handlers keyed on the proto FQN
 - `NewDispatcher(reader, dlq, opts ...)` — DLQ is a **required** positional arg; no code path drops a failed message. Options: `WithRetry(w)`, `WithDedup(d)` (takes any value satisfying `Process(ctx, id, fn) error` — typically `*outbox.Deduplicator`), `WithMaxRetries(n)` (default 3), `WithLogger(l)`, `WithGroup(id)`.
 - `WithGroup(id)` — the consumer group id used as the `group` label on every consumer metric. Pass the Kafka `GroupID` **verbatim**, exactly the string the `kafka.ReaderConfig` got: only that value matches kafka-exporter's `consumergroup` label, which is what lets a lag panel and a dead-letter counter sit on the same dashboard row. Do not pass the DLQ short name — a repo can have both and they differ (`order-review-events-consumer` vs `order`). Unset means `GroupUnknown` (`"unknown"`).
 - `Handle[T proto.Message](d *Dispatcher, fn func(ctx, T) error)` — register a typed handler. Routing key is derived from `proto.MessageName(*new(T))`; protojson-unmarshal into a fresh `T` per message.
-- `d.Run(ctx) error` — poll loop; returns `ctx.Err()` on cancel and **`nil` once the reader is closed** (kafka-go answers a closed reader with `io.EOF` — before, `Run` busy-looped on it). Any other fetch error is retried with a capped exponential backoff (100 ms doubling to 5 s, ctx-aware, reset by a successful fetch), so a broker outage is not a hot loop. **A cancel finishes the message in flight:** `ctx` governs only fetching — it is checked before every fetch (kafka-go may hand out a buffered message even on a cancelled ctx) and passed to `FetchMessage` — while an already-fetched message's handler, dedup transaction, retry/DLQ write and offset commit run on `context.WithoutCancel(ctx)` (values and trace kept), so a shutdown never fails the steps that record a side effect the handler already performed. No extra timeout: the clients' own timeouts and lifecycle's budget bound it. Register it directly as a `pkg/lifecycle` worker: `app.Worker("…-consumer", disp.Run)` — no draining wrapper needed.
+- `d.Run(ctx) error` — poll loop that handles one message at a time; the commit guarantees rely on that, so `Run` is not for concurrent use on one `Dispatcher`. Returns `ctx.Err()` on cancel and **`nil` once the reader is closed** (kafka-go answers a closed reader with `io.EOF` — before, `Run` busy-looped on it). Any other fetch error is retried with a capped exponential backoff (100 ms doubling to 5 s, ctx-aware, reset by a successful fetch), so a broker outage is not a hot loop. **A cancel finishes the message in flight:** `ctx` governs only fetching — it is checked before every fetch (kafka-go may hand out a buffered message even on a cancelled ctx) and passed to `FetchMessage` — while an already-fetched message's handler, dedup transaction, retry/DLQ write and offset commit run on `context.WithoutCancel(ctx)` (values and trace kept), so a shutdown never fails the steps that record a side effect the handler already performed. No extra timeout: the clients' own timeouts and lifecycle's budget bound it. It also returns — at once, whatever the state of `ctx` — when a handler leaves its message uncommitted (`ErrLeaveUncommitted`, below). Register it directly as a `pkg/lifecycle` worker: `app.Worker("…-consumer", disp.Run)` — no draining wrapper needed, unless its handlers can return `ErrLeaveUncommitted` (then map that return, below).
 - `DefaultReaderMaxWait` (2 s) — set it as `kafka.ReaderConfig.MaxWait` on **every** consumer reader. kafka-go's default is 10 s, and a reader's `Close` waits out the in-flight fetch long-poll, so with all readers in one lifecycle `CloserGroup("kafka", …)` the shutdown cost is one `MaxWait`: ~2 s instead of 10 s. Delivery latency is unaffected (a fetch returns as soon as data arrives; `MaxWait` bounds only an empty fetch). Trade-off: an idle consumer polls the broker every 2 s.
 - `TopicName(eventsv1.Topic) string` — converts the proto `Topic` enum to its wire name (e.g. `TOPIC_USER_EVENTS` → `"user-events"`).
 - `ErrPoisonPill` — sentinel for non-retryable handler errors (wrap with `%w`; goes straight to DLQ without consuming retry budget).
+- `ErrLeaveUncommitted` — sentinel for a handler that must stop **without its message being consumed**, typically one paused on a Postgres outage when the process starts shutting down. Handlers run on a context without `Run`'s cancellation, so such a handler watches its own shutdown signal (e.g. lifecycle's `app.Stopping()`) and then returns an error wrapping it. The dispatcher commits no offset, writes no retry or DLQ copy and counts no failure; the error reaches the deduplicator, whose claim rolls back with it (`outbox.Deduplicator` returns it unchanged from a rolled-back transaction). `Run` returns at once with an error wrapping `ErrLeaveUncommitted` and the handler's error, and stays stopped — a later `Run` on that dispatcher returns the same error without fetching — because kafka-go commits a partition by position (`offset+1`): committing any later message of that partition would consume the one left behind. Kafka redelivers it once the reader is closed and the partition moves on (to another pod, or to this one after its restart). It outranks every classification below, `ErrPoisonPill` included; a panic never leaves a message uncommitted. It is visible as one Warn line, `handler left the message uncommitted; dispatcher stopping` (`event_id`, `topic`, `group`, `partition`, `offset`, `error`), and a `message left uncommitted` event on the consumer span, which keeps an unset status.
+
+  **Once the process is stopping, callers treat that return as a stop, not a fault** — nothing was lost. `pkg/lifecycle` reports any worker error except `context.Canceled` as `ErrWorkerFailed` (a failing exit), so a worker whose handlers can leave a message maps it to `nil`, but only after shutdown has begun:
+
+  ```go
+  app.Worker("user-events-consumer", func(ctx context.Context) error {
+      err := disp.Run(ctx)
+      if errors.Is(err, events.ErrLeaveUncommitted) {
+          select {
+          case <-app.Stopping():
+              return nil // a stop: the message is redelivered after the restart
+          default:
+          }
+      }
+      return err
+  })
+  ```
+
+  The `Stopping()` check is load-bearing. Before shutdown, lifecycle takes a worker's `nil` as `worker returned early without error; continuing`: the process would run on with the dispatcher stopped, and its reader — never closed, so still heartbeating — would hold its partitions and consume none of them, wedging the group silently. Returned as an error, the stop makes lifecycle shut the process down, and the restart redelivers the message. A stop that races the start of shutdown is at worst reported as a worker failure; it is never dropped.
+
+  With `WithDedup(outbox.NewDeduplicator(pool))`, an outage already under way when a message arrives fails `pool.Begin` before the handler runs, and the message is routed as an ordinary retryable failure — so a handler meant to pause on a Postgres outage must make the dedup call itself (`Process`, with the `event_id` from `envelope.HeadersFromContext`) instead of passing `WithDedup`.
 
 **Failure classification (→ DLQ with `x-dlq-reason`):**
 - `ErrPoisonPill` → `poison_pill`
 - `protojson.Unmarshal` failure → `unmarshal_error`
 - Handler panic → `handler_panic` (panic is recovered and converted to an error)
 - Any other error → `max_retries` after the retry budget is exhausted; forwarded to retry topic (if configured) otherwise
+
+`ErrLeaveUncommitted` is checked before all of these and is not a failure-path outcome: no DLQ, no retry, no commit — `Run` stops.
 
 **Every DLQ message carries:** `x-dlq-reason`, `x-dlq-error` (truncated), `x-dlq-first-seen-at`, `x-dlq-last-seen-at`, plus the original envelope.
 
@@ -470,6 +493,8 @@ Typed consumer dispatcher. Registers proto-typed handlers keyed on the proto FQN
 | `events_consumer_dead_lettered_total` | `topic`, `group`, `reason` | Written to the DLQ, by failure reason |
 | `events_consumer_dedup_hits_total` | `topic`, `group` | Redelivery skipped because the `event_id` was already processed |
 | `events_consumer_failurepath_errors_total` | `topic`, `group` | **The DLQ/retry write itself failed** and the offset was left uncommitted — the group is wedged, not merely poisoned |
+
+A message a handler left uncommitted (`ErrLeaveUncommitted`) moves none of these families: it was neither processed nor failed. The Warn line and the span event above record it.
 
 **Tracing + logging:** each message is handled inside a consumer span that continues the producer's trace (extracted from the `traceparent` envelope header as a **remote parent**), and the dispatcher's log lines carry `event_id`, `topic` and — when a span is active — `trace_id`/`span_id`. The same child logger is put on the handler's context, so `logger.FromContext(ctx)` works on the consumer path exactly as it does on the HTTP path.
 
