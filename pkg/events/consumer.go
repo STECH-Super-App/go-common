@@ -42,6 +42,11 @@ type Writer interface {
 // *outbox.Deduplicator satisfies this by inserting the event_id FIRST
 // (INSERT ... ON CONFLICT DO NOTHING) inside a DB transaction and running fn
 // only for the deliverer that actually took the row.
+//
+// When fn fails, Process must roll the claim back and return fn's error as it
+// is or wrapped with %w: the dispatcher classifies what Process returns, so
+// ErrPoisonPill and ErrLeaveUncommitted have to survive the trip.
+// *outbox.Deduplicator returns it unchanged and its transaction rolls back.
 type Deduplicator interface {
 	Process(ctx context.Context, eventID string, fn func() error) error
 }
@@ -63,6 +68,10 @@ type Dispatcher struct {
 	logProvided bool
 	group       string
 	handlers    map[string]handlerFn
+	// left is set once a handler has left a message uncommitted. From then on
+	// Run returns it without fetching: the reader has already moved past that
+	// message, so any later fetch-and-commit would consume it.
+	left error
 }
 
 // GroupUnknown is the group label value used when WithGroup was not supplied.
@@ -131,7 +140,8 @@ func WithGroup(id string) DispatcherOption {
 // path drops a failed message on the floor: a failed message is forwarded to
 // the retry topic (when WithRetry is set and budget remains) or otherwise
 // dead-lettered, and if that forwarding write fails the source offset is left
-// uncommitted so Kafka redelivers.
+// uncommitted so Kafka redelivers. The one failure that is not forwarded is a
+// handler's ErrLeaveUncommitted: that message stays uncommitted and Run stops.
 func NewDispatcher(reader Reader, dlq Writer, opts ...DispatcherOption) *Dispatcher {
 	d := &Dispatcher{
 		reader:     reader,
@@ -190,9 +200,11 @@ const (
 	fetchBackoffCap     = 5 * time.Second
 )
 
-// Run polls the reader until ctx is cancelled or the reader is closed. Each
-// message is routed to its registered handler; on error, retry/DLQ rules
-// apply.
+// Run polls the reader until ctx is cancelled, the reader is closed, or a
+// handler leaves its message uncommitted. Each message is routed to its
+// registered handler; on error, retry/DLQ rules apply. Messages are handled one
+// at a time, which the commit guarantees below rely on, so Run is not for
+// concurrent use on one Dispatcher.
 //
 // Shutdown finishes the message in flight. ctx governs only the FETCH of the
 // next message: it is checked before every fetch and passed to FetchMessage,
@@ -213,12 +225,55 @@ const (
 // ctx.Done when both are ready, so a cancelled fetch can still hand out — and
 // Run would then fully process — one more message per loop.
 //
-// Returns ctx.Err() on cancel, and nil when the reader has been closed
-// (kafka-go answers every FetchMessage on a closed reader with io.EOF — a
-// closed reader is a shutdown, not a fault, and retrying it would spin
-// forever). Any other fetch error is logged and retried with a capped
-// exponential backoff, so a broker outage is not a hot loop.
+// A handler that returns an error wrapping ErrLeaveUncommitted stops Run at
+// once, whatever the state of ctx: that message is not committed and not
+// forwarded to the retry topic or the DLQ, and nothing more is fetched. The
+// stop is mandatory, not a policy: kafka-go commits a partition by position
+// (offset+1), so committing any later message of that partition would mark
+// the one left behind as consumed. For the same reason it is permanent — the
+// reader has already moved past that message, so a later Run on this
+// Dispatcher returns the same error without fetching. Kafka redelivers the
+// message once this reader is closed and its partition moves to another
+// consumer, or to this service after its restart.
+//
+// Once the process is stopping, callers treat that return as a stop, not a
+// fault: nothing was lost, so it is neither a consumer failure to log nor a
+// reason for a failing exit. pkg/lifecycle reports a worker's error as
+// ErrWorkerFailed unless it is context.Canceled, so a worker built on this Run
+// maps it to nil — but only after shutdown has begun:
+//
+//	app.Worker("user-events-consumer", func(ctx context.Context) error {
+//		err := disp.Run(ctx)
+//		if errors.Is(err, events.ErrLeaveUncommitted) {
+//			select {
+//			case <-app.Stopping():
+//				return nil // a stop: the message is redelivered after the restart
+//			default:
+//			}
+//		}
+//		return err
+//	})
+//
+// The Stopping check is load-bearing. Before shutdown, lifecycle takes a
+// worker's nil as "returned early without error; continuing": the process
+// would run on with this dispatcher stopped, and its reader — never closed, so
+// still heartbeating — would hold its partitions and consume none of them,
+// wedging the group silently. Returned as an error, the stop makes lifecycle
+// shut the process down, and the restart redelivers the message. A stop that
+// races the start of shutdown is at worst reported as a worker failure; it is
+// never dropped.
+//
+// Returns ctx.Err() on cancel; nil when the reader has been closed (kafka-go
+// answers every FetchMessage on a closed reader with io.EOF — a closed reader
+// is a shutdown, not a fault, and retrying it would spin forever); and, when a
+// handler left its message uncommitted, an error wrapping both
+// ErrLeaveUncommitted and the handler's error. Any other fetch error is logged
+// and retried with a capped exponential backoff, so a broker outage is not a
+// hot loop.
 func (d *Dispatcher) Run(ctx context.Context) error {
+	if d.left != nil {
+		return d.left
+	}
 	backoff := fetchBackoffInitial
 	for {
 		if err := ctx.Err(); err != nil {
@@ -241,7 +296,10 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			continue
 		}
 		backoff = fetchBackoffInitial
-		d.handleOne(context.WithoutCancel(ctx), msg)
+		if err := d.handleOne(context.WithoutCancel(ctx), msg); err != nil {
+			d.left = err
+			return err
+		}
 	}
 }
 
@@ -263,7 +321,11 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) {
+// handleOne takes one fetched message to its end: commit it, forward it to the
+// retry topic or the DLQ, or — when the handler returned ErrLeaveUncommitted —
+// none of these. It returns a non-nil error only in that last case, and Run
+// then stops.
+func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) error {
 	h := envelope.FromKafka(msg.Headers)
 	fqn := h.EventType()
 
@@ -280,7 +342,7 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) {
 		msgLog.Debug("no handler for event type; skipping",
 			zap.String("event_type", fqn))
 		_ = d.reader.CommitMessages(ctx, msg)
-		return
+		return nil
 	}
 
 	// Attach envelope headers to the context so handlers can read fields that
@@ -334,7 +396,22 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) {
 			dedupHitsTotal.WithLabelValues(msg.Topic, d.group).Inc()
 		}
 		_ = d.reader.CommitMessages(ctx, msg)
-		return
+		return nil
+	}
+
+	// The handler asked for this message not to be consumed: no commit, no
+	// retry or DLQ copy, no failure counted. Checked before classify, so it
+	// outranks ErrPoisonPill. The deduplicator has already rolled its claim
+	// back, having seen this same error.
+	if errors.Is(err, ErrLeaveUncommitted) {
+		span.AddEvent("message left uncommitted")
+		msgLog.Warn("handler left the message uncommitted; dispatcher stopping",
+			zap.String("group", d.group),
+			zap.Int("partition", msg.Partition),
+			zap.Int64("offset", msg.Offset),
+			zap.Error(err))
+		return fmt.Errorf("events: dispatcher stopped; %s partition %d offset %d left uncommitted: %w",
+			msg.Topic, msg.Partition, msg.Offset, err)
 	}
 
 	span.RecordError(err)
@@ -349,9 +426,10 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) {
 		msgLog.Error("failure-path write failed; leaving offset uncommitted for redelivery",
 			zap.String("dlq_reason", string(reason)),
 			zap.Error(werr))
-		return
+		return nil
 	}
 	_ = d.reader.CommitMessages(ctx, msg)
+	return nil
 }
 
 // startConsumerSpan continues the producing request's trace across the Kafka
