@@ -88,8 +88,23 @@ var repairBankTypes = []notificationv1.NotificationType{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED,
 }
 
+// repairModerationTypes is the third repair family and the only one neither
+// order-service nor sale-service produces: review-service's two moderation
+// notices (enum values 170–171), the repair twins of parts' 120 and 131. They go
+// to a PERSON — the review's author, the complaint's filer: person-addressed per
+// rule N of 08.10.2026; repair deal notices not migrated yet, so for now they are
+// the only REPAIR_* types that are. They still take exactly [IN_APP, PUSH].
+//
+// 171 has no required param — its one field, `outcome`, is read as two optional
+// flags — so it could not sit in repairDealTypes, whose completeness test demands
+// a non-empty required contract.
+var repairModerationTypes = []notificationv1.NotificationType{
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_HIDDEN,
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_COMPLAINT_RESOLVED,
+}
+
 // TestRepairCatalogCoversEveryDeclaredType walks the proto enum instead of the
-// two lists above, so it sees a thirty-second repair type the moment gen-go-lib
+// three lists above, so it sees a thirty-fourth repair type the moment gen-go-lib
 // carries one — which is exactly when somebody needs to be told that a template
 // is owed BEFORE the producer lands (D-9's ordering gate, and the reason
 // notifyoutbox validates inside the caller's transaction).
@@ -113,11 +128,13 @@ func TestRepairCatalogCoversEveryDeclaredType(t *testing.T) {
 			t.Errorf("%s (%q): baseline has no body", name, key)
 		}
 	}
-	if declared != 31 {
-		t.Errorf("proto declares %d NOTIFICATION_TYPE_REPAIR_* values, expected 31 (master §3.3, values 134–164) — a type was added or removed, and this test is the place that has to notice", declared)
+	// 31 → 33 with proto push 1 (tracker wave, 10.2026): review-service's
+	// REPAIR_REVIEW_HIDDEN (170) and REPAIR_REVIEW_COMPLAINT_RESOLVED (171).
+	if declared != 33 {
+		t.Errorf("proto declares %d NOTIFICATION_TYPE_REPAIR_* values, expected 33 (master §3.3's 31, values 134–164, plus review moderation's 170–171) — a type was added or removed, and this test is the place that has to notice", declared)
 	}
-	if got := len(repairDealTypes) + len(repairBankTypes); got != declared {
-		t.Errorf("the two hand-written family lists cover %d types, the proto declares %d", got, declared)
+	if got := len(repairDealTypes) + len(repairBankTypes) + len(repairModerationTypes); got != declared {
+		t.Errorf("the three hand-written family lists cover %d types, the proto declares %d", got, declared)
 	}
 }
 
@@ -369,33 +386,54 @@ func repairBankEnvelopes() []repairCase {
 	})
 }
 
-// repairEnvelopes is every repair directive on the wire, both producers.
-func repairEnvelopes() []repairCase {
-	return append(repairDealEnvelopes(), repairBankEnvelopes()...)
+// repairModerationEnvelopes mirrors the two directives review-service writes
+// into review_service.outbox_messages when a moderator hides a repair review or
+// rules on a complaint against one. Person-addressed, [IN_APP, PUSH].
+func repairModerationEnvelopes() []repairCase {
+	return stamp([]repairCase{
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_HIDDEN, "REVIEW_HIDDEN", &notificationv1.NotificationEnvelope{
+			Payload: &notificationv1.NotificationEnvelope_SendRepairReviewHidden{
+				SendRepairReviewHidden: &notificationv1.SendRepairReviewHidden{
+					ReviewId: "01920070-0001-7000-8000-000000700001", Reason: "Оскорбления в тексте отзыва",
+				}}}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_COMPLAINT_RESOLVED, "REVIEW_COMPLAINT_RESOLVED", &notificationv1.NotificationEnvelope{
+			Payload: &notificationv1.NotificationEnvelope_SendRepairReviewComplaintResolved{
+				SendRepairReviewComplaintResolved: &notificationv1.SendRepairReviewComplaintResolved{
+					ReviewId: "01920070-0001-7000-8000-000000700001", Outcome: "NO_VIOLATION",
+				}}}},
+	})
 }
 
-// repairTypes is every repair type master §3.3 declares, both families, in row
-// order. TestRepairCatalogCoversEveryDeclaredType is what pins this union to
-// the proto enum; everything below may therefore treat it as «the 31».
+// repairEnvelopes is every repair directive on the wire, all three producers.
+func repairEnvelopes() []repairCase {
+	all := append(repairDealEnvelopes(), repairBankEnvelopes()...)
+	return append(all, repairModerationEnvelopes()...)
+}
+
+// repairTypes is every repair type the proto declares, all three families: master
+// §3.3's in row order, then review moderation's two.
+// TestRepairCatalogCoversEveryDeclaredType is what pins this union to the proto
+// enum; everything below may therefore treat it as «the 33».
 func repairTypes() []notificationv1.NotificationType {
-	all := make([]notificationv1.NotificationType, 0, len(repairDealTypes)+len(repairBankTypes))
+	all := make([]notificationv1.NotificationType, 0, len(repairDealTypes)+len(repairBankTypes)+len(repairModerationTypes))
 	all = append(all, repairDealTypes...)
-	return append(all, repairBankTypes...)
+	all = append(all, repairBankTypes...)
+	return append(all, repairModerationTypes...)
 }
 
 // TestRepairEveryMappedTypeHasAnExtractArm is the half the two fixture lists
 // cannot cover: they would still pass if somebody deleted a case, because a
 // missing arm is simply a missing fixture. This asserts the SET — so a
-// thirty-second type fails HERE rather than on notification.events.dlq.inbox.
+// thirty-fourth type fails HERE rather than on notification.events.dlq.inbox.
 //
 // IT TIES THE TWO INDEXES BOTH WAYS, and each direction catches a different
 // mistake:
 //
-//   - forward — every one of the 31 declared types has EXACTLY ONE wire fixture
+//   - forward — every one of the 33 declared types has EXACTLY ONE wire fixture
 //     and an ExtractParams arm that claims it. One fixture, not «at least one»:
 //     a duplicated case would keep the totals right while another type sits
 //     uncovered.
-//   - reverse — every fixture's type is one of the 31, so a fixture cannot be
+//   - reverse — every fixture's type is one of the 33, so a fixture cannot be
 //     parked against a type no family list declares and quietly inflate the
 //     render loop's subtest count.
 //
@@ -433,12 +471,12 @@ func TestRepairEveryMappedTypeHasAnExtractArm(t *testing.T) {
 
 	for nt, cases := range fixtures {
 		if !declared[nt] {
-			t.Errorf("fixture(s) %v carry type %s, which neither repairDealTypes nor repairBankTypes declares", caseNames(cases), nt)
+			t.Errorf("fixture(s) %v carry type %s, which no repair family list declares", caseNames(cases), nt)
 		}
 	}
 
-	if len(declared) != 31 {
-		t.Errorf("the two family lists declare %d distinct types, want 31 (master §3.3, values 134–164)", len(declared))
+	if len(declared) != 33 {
+		t.Errorf("the three family lists declare %d distinct types, want 33 (master §3.3's 134–164 plus review moderation's 170–171)", len(declared))
 	}
 
 	// The catalog's own index, walked independently: a repair_ section that no
@@ -448,7 +486,7 @@ func TestRepairEveryMappedTypeHasAnExtractArm(t *testing.T) {
 			continue
 		}
 		if !declared[nt] {
-			t.Errorf("%s (%q) has a catalog entry but appears in neither family list", nt, key)
+			t.Errorf("%s (%q) has a catalog entry but appears in no family list", nt, key)
 		}
 	}
 }
@@ -727,8 +765,8 @@ func TestRepairTemplatesDegradeCleanlyWithEveryOptionalAbsent(t *testing.T) {
 			t.Logf("%s", body)
 		})
 	}
-	if covered != 31 {
-		t.Errorf("the catalog carries %d repair_ sections, want 31 (master §3.3, values 134–164)", covered)
+	if covered != 33 {
+		t.Errorf("the catalog carries %d repair_ sections, want 33 (master §3.3's 134–164 plus review moderation's 170–171)", covered)
 	}
 }
 

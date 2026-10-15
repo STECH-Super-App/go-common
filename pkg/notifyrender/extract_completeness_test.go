@@ -70,6 +70,9 @@ var notTemplated = map[string]string{
 	"SendPartsOrderFulfilmentOverdueBuyer.fulfilment_kind":  "consumed into the pickup/carrier flags via flagWhen",
 	"SendPartsOrderFulfilmentOverdueSeller.fulfilment_kind": "consumed into the pickup/carrier flags via flagWhen",
 	"SendPartsReviewComplaintResolved.outcome":              "consumed into outcome_hidden / outcome_no_violation via flagWhen",
+	"SendOrderReviewComplaintResolved.outcome":              "consumed into outcome_hidden / outcome_no_violation via flagWhen — 131's rent twin (167)",
+	"SendDeliveryReviewComplaintResolved.outcome":           "consumed into outcome_hidden / outcome_no_violation via flagWhen — 131's delivery twin (169)",
+	"SendRepairReviewComplaintResolved.outcome":             "consumed into outcome_hidden / outcome_no_violation via flagWhen — 131's repair twin (171)",
 	"SendPartsOrderContactHandover.tenant_name":             "on the wire, empty by contract: C31 bars a tenant name from a directive, so 123 renders its COLLAPSED form («вашей команды»)",
 	"SendPartsOrderContactHandover.from_user_name":          "on the wire, empty by contract — same C31 collapse as tenant_name",
 	"SendWalletOperationDecided.reason":                     "read by nothing: the text names amount, currency and decision",
@@ -163,7 +166,12 @@ func TestExtractParamsReadsEveryDeclaredStringField(t *testing.T) {
 // meant to be updated in the same commit that adds the arm.
 func TestExtractParamsCompletenessCensus(t *testing.T) {
 	oneof := (&notificationv1.NotificationEnvelope{}).ProtoReflect().Descriptor().Oneofs().ByName("payload")
-	const want = 175 // 175: SendOrderReviewInvite (З-08, 06.10.2026)
+	// 175: SendOrderReviewInvite (З-08, 06.10.2026).
+	// 181: review-service's six review-moderation arms, 186–191 — send_order_,
+	//      send_delivery_ and send_repair_review_hidden / _complaint_resolved.
+	// 182: send_parts_shop_return_terms_cleared, 192 (Р44, owner decision of
+	//      08.09.2026).
+	const want = 182
 	if got := oneof.Fields().Len(); got != want {
 		names := make([]string, 0, oneof.Fields().Len())
 		for i := 0; i < oneof.Fields().Len(); i++ {

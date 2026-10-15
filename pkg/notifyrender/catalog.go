@@ -39,7 +39,10 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_MANAGER:  "member_role_changed_manager",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_MEMBER_ROLE_CHANGED_OPERATOR: "member_role_changed_operator",
 	// order lifecycle (order-service contracts, gen-go-lib NotificationType 27-38,
-	// plus ORDER_REVIEW_INVITE 165).
+	// plus ORDER_REVIEW_INVITE 165). The rent family's two review-moderation
+	// types, ORDER_REVIEW_HIDDEN 166 and ORDER_REVIEW_COMPLAINT_RESOLVED 167, are
+	// review-service's, not order-service's, and sit in the «Отзывы: модерация»
+	// block at the end of this map beside their delivery and repair twins.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_CREATED:         "order_request_created",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REQUEST_ACCEPTED:        "order_request_accepted",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_TERMS_AGREED:            "order_terms_agreed",
@@ -98,8 +101,10 @@ var typeKey = map[notificationv1.NotificationType]string{
 	// every parts directive until these entries landed, reproduced in
 	// parts_liveproof_test.go.
 	//
-	// Sixty-three SendParts* directives are declared in directives.proto. The
-	// twelve below are the ones a producer can actually emit: the TEN written by
+	// Sixty-four SendParts* directives are declared in directives.proto (the
+	// sixty-fourth, 172 PARTS_SHOP_RETURN_TERMS_CLEARED, is the owner's late arm
+	// of 08.09.2026, mapped in the shop-level block below). The twelve below are
+	// the ones a producer can actually emit: the TEN written by
 	// sale-service's PartsNotificationDirectiveBuilder (eight from the storefront
 	// clock and the admin sanction pair; two of the ten — the shop-level lifts —
 	// are built and unit-tested with their route still pending), plus the price-file
@@ -107,12 +112,27 @@ var typeKey = map[notificationv1.NotificationType]string{
 	// already written and verified. The other 51 land the same way, one at a time,
 	// when their producer does.
 	//
-	// NO PARTS TEMPLATE NAMES THE SHOP. OWNER-ANSWERS-2026-08-31 B-5 removed
-	// `shop_name` from all 53 SendParts* messages (reserved, not blanked): М-01
-	// makes the shop's name the COMPANY's name, and every payload already carries
-	// the tenant the client resolves it from. A push has no client to hydrate it,
-	// and the owner ruled removal knowing that — so these strings address the
-	// recipient's own shop as «your shop» rather than re-adding a field.
+	// THE SHOP IS NAMED WHERE IT IS THE SUBJECT (owner ruling of 07.09.2026,
+	// «Уведомления запчастей» :75), and only there. Twenty parts texts read the
+	// OPTIONAL param `shop_display_name` — 69, 70, 71, 72, 73, 74, 75, 78, 79, 80,
+	// 104, 117, 118, 120, 121, 126, 127, 128, 130 and 172 — carried by a NEW proto
+	// field of that name on each of their payloads.
+	//
+	//   - The value is the shop's COMPANY display name (М-01), current when the
+	//     PRODUCER builds the directive (tenant-service ResolveTenantDisplay),
+	//     resolved outside the producer's write transaction and never stored. A
+	//     sent notice keeps the text it was sent with: inbox-service renders at
+	//     insert.
+	//   - It is OPTIONAL and must stay so. If the directory cannot answer, the
+	//     producer sends "" and the template renders today's nameless edition
+	//     («your shop», «the shop») byte for byte; a REQUIRED name would turn a
+	//     tenant-service outage into a rolled-back order transition or a
+	//     dead-lettered sale notice.
+	//   - `shop_name` itself stays REMOVED. OWNER-ANSWERS-2026-08-31 B-5 reserved
+	//     it by number and name on all 53 SendParts* messages that carried it, and
+	//     it stays reserved; the name came back on 07.09.2026 as a new field with
+	//     a new tag, never as the old one. The other forty-four parts texts still
+	//     name no shop — the ruling names the shop only where it is the subject.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_HIDDEN_BY_ADMIN:          "parts_offer_hidden_by_admin",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_SANCTION_LIFTED:          "parts_offer_sanction_lifted",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED:           "parts_shop_sanction_lifted",
@@ -134,17 +154,21 @@ var typeKey = map[notificationv1.NotificationType]string{
 	// an unmapped type does not degrade, it dead-letters on first delivery and
 	// fails the transaction that published it.
 	//
-	// ALL SIXTY-THREE ARE MAPPED since 07.09.2026. The two that used to be absent
-	// here — PARTS_ORDER_CONTACT_HANDOVER (123) and PARTS_SHOP_VERIFICATION_REVOKED
-	// (124) — are below, each beside its own family, and the note that used to
-	// stand here was wrong about the first of them:
+	// ALL SIXTY-THREE ARE MAPPED since 07.09.2026 — sixty-four with 172, mapped
+	// by the first go-common release whose gen-go-lib pin carries it. The two
+	// that used to be absent here — PARTS_ORDER_CONTACT_HANDOVER (123) and
+	// PARTS_SHOP_VERIFICATION_REVOKED (124) — are below, each beside its own
+	// family, and the note that used to stand here was wrong about the first of
+	// them:
 	//   * 123 (Р47) HAS Russian. «Правила запчастей» ^m18 carries the sentence;
 	//     it is the notification MATRIX that has no row for it. It renders in its
 	//     COLLAPSED form — «вашей команды», not «команды [название]» — because
-	//     C31 bars a tenant name from any directive and order-service holds no
-	//     display names to put there. That divergence is recorded, and reversing
-	//     it is one line here plus a name resolution the write path does not
-	//     currently make.
+	//     C31 bars a TEAM name from any directive. Under the owner ruling of
+	//     07.09.2026 order-service resolves a display name for one purpose only —
+	//     the SHOP's, for its three shop-subject texts (117, 118, 126) — and never
+	//     the team's, so 123's `tenant_name` stays empty. That divergence is
+	//     recorded, and reversing it is one line here plus a team-name resolution
+	//     the write path does not make.
 	//   * 124 (Р51) genuinely has none, in any of the five tables. Its English is
 	//     composed from the rule and from its own mirror image; the RUSSIAN is
 	//     still owed by the owner and is NOT invented here.
@@ -159,12 +183,20 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_PUBLISHED_RETRO: "parts_positions_published_retro",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_REJECTED:        "parts_positions_rejected",
 	// ── М-20 shop-level sanction and the Р40 badge (78, 80), plus Р56·В-52's
-	// buyer-facing notice (126). The two seller arms address «your shop»; the
-	// buyer arm keys on the buyer's own order number, which is the half B-5 left
-	// standing (see the proto's own note on that message).
+	// buyer-facing notice (126). The two seller arms name the shop when the
+	// producer sends its display name and fall back to «your shop» when it does
+	// not; the buyer arm keys on the buyer's own order number, which is the half
+	// B-5 left standing (see the proto's own note on that message), and names the
+	// shop the same optional way.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_HIDDEN_BY_ADMIN:          "parts_shop_hidden_by_admin",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFIED_BADGE_REVOKED:   "parts_shop_verified_badge_revoked",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_UNAVAILABLE_ORDER_NOTICE: "parts_shop_unavailable_order_notice",
+	// Р44's moderator clearing of a shop's additional return terms (172), the
+	// owner's late arm of 08.09.2026 — the sixty-fourth parts type. A must-deliver
+	// seller notice (notification-service reserves it), deep-linked to PRT-10 with
+	// {shop_id}; the moderator's reason travels only on
+	// events.parts.v1.ShopReturnTermsModerated and never reaches the seller's text.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_RETURN_TERMS_CLEARED: "parts_shop_return_terms_cleared",
 	// Р51's revocation arm (124), the fourth shop-level text and the one the
 	// vault never wrote. ⚠ ITS RUSSIAN IS STILL OWED BY THE OWNER: «Уведомления
 	// запчастей.md» carries no row for it in any of its five text tables, so the
@@ -309,6 +341,23 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_CUSTOMER:  "repair_posting_expired_customer",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_RESPONDER: "repair_posting_expired_responder",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED:         "repair_posting_cancelled",
+	// ── Отзывы: модерация (review-service) — 166–171. A moderator's hide and a
+	// complaint's ruling, in the three verticals that had no notice for them
+	// (parts keeps its own 119/120/131). review-service is the ONLY producer, and
+	// every one of the six is PERSON-addressed: the hidden notice goes to the
+	// review's author, the resolved notice to the person who filed the complaint.
+	// ORDER_ is rent, by the family convention 165 already follows.
+	//
+	// 170/171 are person-addressed per rule N of 08.10.2026; repair deal notices
+	// not migrated yet — so for now they are the only person-addressed REPAIR_*
+	// types. They still take exactly [IN_APP, PUSH], because notifyoutbox's
+	// REPAIR_ name guard applies to them like to every other repair type.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_HIDDEN:                "order_review_hidden",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_COMPLAINT_RESOLVED:    "order_review_complaint_resolved",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_HIDDEN:             "delivery_review_hidden",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_COMPLAINT_RESOLVED: "delivery_review_complaint_resolved",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_HIDDEN:               "repair_review_hidden",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_COMPLAINT_RESOLVED:   "repair_review_complaint_resolved",
 	// SYSTEM is reserved; not in the catalog.
 	// PLATFORM_MESSAGE (slice 5) is verbatim free-text; deliberately NOT in the
 	// catalog — it has no template. See notifyrender.IsVerbatim / RenderVerbatim.
@@ -594,15 +643,21 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 		"rejected_count",
 	},
 	// ── М-20 shop-level sanction and the Р40 badge (78, 80), plus Р56·В-52's
-	// buyer-facing notice (126). The two seller arms address «your shop»; the
-	// buyer arm keys on the buyer's own order number, which is the half B-5 left
-	// standing (see the proto's own note on that message).
+	// buyer-facing notice (126). The two seller arms name the shop when the
+	// producer sends its display name and fall back to «your shop» when it does
+	// not; the buyer arm keys on the buyer's own order number, which is the half
+	// B-5 left standing (see the proto's own note on that message). The name is
+	// never required on any of them — see optionalParams.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_HIDDEN_BY_ADMIN: {
 		"reason",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_UNAVAILABLE_ORDER_NOTICE: {
 		"order_no",
 	},
+	// Р44's return-terms clearing (172) requires nothing: its one field is the
+	// shop's display name, which is optional on every shop-subject text, and the
+	// moderator's reason never reaches the seller.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_RETURN_TERMS_CLEARED: nil,
 	// ── The order lifecycle (81–102), which order-service emits off the PARTS
 	// order aggregate. Every one of them carries `order_no` and every one of them
 	// declares it REQUIRED — the delivery vertical's `request_no` is optional only
@@ -887,6 +942,22 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED: {
 		"machinery",
 	},
+	// ── Отзывы: модерация (review-service) — 166–171 ───
+	//
+	// The three hidden notices REQUIRE the moderator's `reason`, exactly as parts'
+	// 120 does: a hide is refused without one, so an empty reason is a producer
+	// bug to reject at publish time rather than a «Reason: .» to render. The
+	// three resolved notices require nothing — their only field, `outcome`, is
+	// read as two flags (see optionalParams), the same tiering as parts' 131.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_HIDDEN: {
+		"reason",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_HIDDEN: {
+		"reason",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_HIDDEN: {
+		"reason",
+	},
 }
 
 // optionalParams declares params that MAY arrive empty (or absent) and are
@@ -984,6 +1055,22 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	// the “upload a fresh price list” instruction — which the generic branch
 	// cannot express. Both are optional and both are read only behind an {{if}}.
 	//
+	// `remaining_only_paused` and `remaining_only_verification_revoked` are two
+	// more flags DERIVED FROM THE SAME LIST, on 79 only (vault «Уведомления
+	// запчастей» :132, owner ruling of 07.09.2026): a lift that leaves ONLY the
+	// owner's own pause gets «…Предложения вернутся, когда вы возобновите
+	// продажи», one that leaves ONLY the legal entity's block gets «…после
+	// разблокировки юрлица». «Only» is exact — the distinct set of remaining
+	// causes is that one cause and nothing else — so two remaining causes, or an
+	// unknown one, light neither and keep the generic pointer. Price age still
+	// wins over both when it is among the causes (as ruled for 125), and 125
+	// itself gains neither flag.
+	//
+	// `shop_display_name` is the shop's company display name (М-01) on the twenty
+	// shop-subject texts — see typeKey's parts header for the ruling. It is
+	// optional on every one of them, and every template reads it behind an {{if}}
+	// whose {{else}} is the nameless text that shipped before the field existed.
+	//
 	// `new_address_count` carries Р31's SECOND EDITION of «Прайс обработан»
 	// («Новых адресов: N — проверьте настройку самовывоза»), owed only when the
 	// file introduced one. ExtractParams must emit "" and not "0" for a zero
@@ -992,15 +1079,19 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	// the second edition to every import. Empty is the only value that switches a
 	// guard off — which is why countOrEmpty exists and why a REQUIRED count must
 	// never use it.
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_HIDDEN_BY_ADMIN:       {"product_name"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_SANCTION_LIFTED:       {"product_name"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED:        {"remaining_causes", "remaining_price_stale"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_HIDDEN_BY_ADMIN: {"product_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_SANCTION_LIFTED: {"product_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED: {
+		"remaining_causes", "remaining_price_stale",
+		"remaining_only_paused", "remaining_only_verification_revoked",
+		"shop_display_name",
+	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED:  {"remaining_causes", "remaining_price_stale"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_BACK_IN_STOCK:         {"product_name", "price"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_FAVORITE_PRICE_DROPPED:      {"product_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_BACK_IN_STOCK:         {"product_name", "price", "shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_FAVORITE_PRICE_DROPPED:      {"product_name", "shop_display_name"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_OFFER_APPEARED: {"product_name", "price_from"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SUBSCRIPTION_EXPIRING:       {"product_name"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED:        {"new_address_count"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED:        {"new_address_count", "shop_display_name"},
 
 	// ─── D-16a ───
 	//
@@ -1024,6 +1115,42 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_ADDED:       {"machinery_type", "brand", "model"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED:    {"machinery_type", "brand", "model"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_COMPLAINT_RESOLVED:       {"outcome_hidden", "outcome_no_violation"},
+
+	// ─── the shop's display name on the other sixteen shop-subject texts ───
+	//
+	// The twenty texts the owner ruling of 07.09.2026 names the shop on are the
+	// four above that already carried an optional tier (69, 79, 121, 130 — the
+	// name is appended there) plus these sixteen, whose ONLY optional param it
+	// is. Optional and never required, for the reason typeKey's parts header
+	// gives: a tenant-service outage must degrade to today's nameless wording,
+	// not roll back an order transition or dead-letter a sale notice. 172 is
+	// among the sixteen because its one field is the name.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED:               {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_MATCHED:                    {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_PUBLISHED_RETRO:            {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_REJECTED:                   {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_STALE_WARNING:             {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFERS_HIDDEN_PRICE_LIST_STALE:       {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_HIDDEN_BY_ADMIN:                 {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFIED_BADGE_REVOKED:          {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_RECEIVED:              {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_INVITE:                        {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_REMINDER:                      {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_HIDDEN_BY_COMPLAINT:           {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_UNAVAILABLE_ORDER_NOTICE:        {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_SHOP_CLOSED: {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_BY_SHOP:     {"shop_display_name"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_RETURN_TERMS_CLEARED:            {"shop_display_name"},
+
+	// ─── Отзывы: модерация (review-service) ───
+	//
+	// The three resolved notices (167, 169, 171) carry В-66's outcome as the same
+	// PAIRED flags parts' 131 does, and for the same reason: an absent or unknown
+	// `outcome` lights neither clause, so a complaint with no recorded ruling is
+	// never reported as resolved in either party's favour.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_COMPLAINT_RESOLVED:    {"outcome_hidden", "outcome_no_violation"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_COMPLAINT_RESOLVED: {"outcome_hidden", "outcome_no_violation"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_COMPLAINT_RESOLVED:   {"outcome_hidden", "outcome_no_violation"},
 	// ─── Ремонт ───
 	//
 	// `request_no` repeats delivery's Д-13 reasoning: the human-facing number is

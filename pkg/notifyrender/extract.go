@@ -434,10 +434,14 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	// countOrEmpty instead; see its doc comment for why the two cannot share a
 	// formatter.
 	//
-	// NO ARM READS A SHOP NAME. `shop_name` is `reserved` on all 53 SendParts*
-	// messages (OWNER-ANSWERS-2026-08-31 B-5) because М-01 makes the shop's name
-	// the company's name and every payload already carries the tenant a client
-	// resolves it from. Re-adding one here is foreclosed, not merely unnecessary.
+	// THE SHOP'S NAME IS READ FROM `shop_display_name` ON THE TWENTY SHOP-SUBJECT
+	// TEXTS AND NOWHERE ELSE (owner ruling of 07.09.2026). `shop_name` stays
+	// `reserved` on all 53 SendParts* messages that carried it
+	// (OWNER-ANSWERS-2026-08-31 B-5); the name came back as a NEW field with a new
+	// tag, filled by the producer with the company's CURRENT display name (М-01)
+	// when it builds the directive. Every arm passes it through unconditionally —
+	// "" when the producer's directory lookup failed — and the template's {{if}}
+	// decides whether it reaches the text. No other arm reads a name.
 	//
 	// NO ARM READS A CURRENT-PRICE `currency` EITHER. DECISIONS §30.2 removed
 	// currency everywhere; three of these payloads still DECLARE the field because
@@ -467,12 +471,23 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	// price age among them?» — Go's text/template has no substring test in its
 	// default function set and this package registers none. Deriving the second
 	// param HERE costs no contract change, because the list never left.
+	//
+	// 79 derives TWO MORE from the same list (vault «Уведомления запчастей» :132,
+	// owner ruling of 07.09.2026): `remaining_only_paused` and
+	// `remaining_only_verification_revoked`, which carry the resume tail and the
+	// legal-entity tail. They ask «is this the ONLY cause left?», which is
+	// causeOnly's question rather than causePresent's — see its doc comment for
+	// why exclusivity is the right reading there and membership is the right
+	// reading for price age. 125, below, gains neither: its tails are unchanged.
 	case *notificationv1.NotificationEnvelope_SendPartsShopSanctionLifted:
 		causes := p.SendPartsShopSanctionLifted.GetRemainingCauses()
 
 		return map[string]string{
-			"remaining_causes":      causesOrEmpty(causes),
-			"remaining_price_stale": causePresent(causes, causePriceStale),
+			"remaining_causes":                    causesOrEmpty(causes),
+			"remaining_price_stale":               causePresent(causes, causePriceStale),
+			"remaining_only_paused":               causeOnly(causes, causeShopPaused),
+			"remaining_only_verification_revoked": causeOnly(causes, causeShopVerificationRevoked),
+			"shop_display_name":                   p.SendPartsShopSanctionLifted.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsShopVerificationRestored:
 		causes := p.SendPartsShopVerificationRestored.GetRemainingCauses()
@@ -483,14 +498,16 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsOfferBackInStock:
 		return map[string]string{
-			"product_name": p.SendPartsOfferBackInStock.GetProductName(),
-			"price":        p.SendPartsOfferBackInStock.GetPrice(),
+			"product_name":      p.SendPartsOfferBackInStock.GetProductName(),
+			"price":             p.SendPartsOfferBackInStock.GetPrice(),
+			"shop_display_name": p.SendPartsOfferBackInStock.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsFavoritePriceDropped:
 		return map[string]string{
-			"product_name": p.SendPartsFavoritePriceDropped.GetProductName(),
-			"old_price":    p.SendPartsFavoritePriceDropped.GetOldPrice(),
-			"new_price":    p.SendPartsFavoritePriceDropped.GetNewPrice(),
+			"product_name":      p.SendPartsFavoritePriceDropped.GetProductName(),
+			"old_price":         p.SendPartsFavoritePriceDropped.GetOldPrice(),
+			"new_price":         p.SendPartsFavoritePriceDropped.GetNewPrice(),
+			"shop_display_name": p.SendPartsFavoritePriceDropped.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsSubscriptionOfferAppeared:
 		return map[string]string{
@@ -508,10 +525,12 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	case *notificationv1.NotificationEnvelope_SendPartsPriceListStaleWarning:
 		return map[string]string{
 			"days_since_upload": strconv.Itoa(int(p.SendPartsPriceListStaleWarning.GetDaysSinceUpload())),
+			"shop_display_name": p.SendPartsPriceListStaleWarning.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsOffersHiddenPriceListStale:
 		return map[string]string{
 			"days_since_upload": strconv.Itoa(int(p.SendPartsOffersHiddenPriceListStale.GetDaysSinceUpload())),
+			"shop_display_name": p.SendPartsOffersHiddenPriceListStale.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsPriceListProcessed:
 		return map[string]string{
@@ -519,16 +538,18 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"matching_count":    strconv.Itoa(int(p.SendPartsPriceListProcessed.GetMatchingCount())),
 			"error_count":       strconv.Itoa(int(p.SendPartsPriceListProcessed.GetErrorCount())),
 			"new_address_count": countOrEmpty(p.SendPartsPriceListProcessed.GetNewAddressCount()),
+			"shop_display_name": p.SendPartsPriceListProcessed.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsPriceListFileFailed:
 		return map[string]string{
-			"file_name": p.SendPartsPriceListFileFailed.GetFileName(),
+			"file_name":         p.SendPartsPriceListFileFailed.GetFileName(),
+			"shop_display_name": p.SendPartsPriceListFileFailed.GetShopDisplayName(),
 		}, nil
 
 	// ─── D-16a: the order, sourcing, catalogue, review and shop-level arms ───
 	//
-	// Same three prohibitions as above — no shop name, no currency, no id — and one
-	// addition of its own.
+	// Same prohibitions as above — no currency, no id; the shop's display name only
+	// on the twenty shop-subject texts — and one addition of its own.
 	//
 	// AN ENUM ON THE WIRE BECOMES A PAIR OF FLAGS HERE, NEVER A PARAM. Four fields
 	// pick between editions of a sentence rather than appearing in one:
@@ -548,25 +569,41 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	// mode a push may have. TestPartsBranchFlagsNeverAssertTheWrongEdition pins it.
 	case *notificationv1.NotificationEnvelope_SendPartsPositionsMatched:
 		return map[string]string{
-			"published_count": strconv.Itoa(int(p.SendPartsPositionsMatched.GetPublishedCount())),
+			"published_count":   strconv.Itoa(int(p.SendPartsPositionsMatched.GetPublishedCount())),
+			"shop_display_name": p.SendPartsPositionsMatched.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsPositionsPublishedRetro:
 		return map[string]string{
-			"published_count": strconv.Itoa(int(p.SendPartsPositionsPublishedRetro.GetPublishedCount())),
+			"published_count":   strconv.Itoa(int(p.SendPartsPositionsPublishedRetro.GetPublishedCount())),
+			"shop_display_name": p.SendPartsPositionsPublishedRetro.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsPositionsRejected:
 		return map[string]string{
-			"rejected_count": strconv.Itoa(int(p.SendPartsPositionsRejected.GetRejectedCount())),
+			"rejected_count":    strconv.Itoa(int(p.SendPartsPositionsRejected.GetRejectedCount())),
+			"shop_display_name": p.SendPartsPositionsRejected.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsShopHiddenByAdmin:
 		return map[string]string{
-			"reason": p.SendPartsShopHiddenByAdmin.GetReason(),
+			"reason":            p.SendPartsShopHiddenByAdmin.GetReason(),
+			"shop_display_name": p.SendPartsShopHiddenByAdmin.GetShopDisplayName(),
 		}, nil
+	// The Р40 badge revocation (80) carried no field until the shop's name came
+	// back: the arm used to return an empty map, and now returns the name alone.
 	case *notificationv1.NotificationEnvelope_SendPartsShopVerifiedBadgeRevoked:
-		return map[string]string{}, nil
+		return map[string]string{
+			"shop_display_name": p.SendPartsShopVerifiedBadgeRevoked.GetShopDisplayName(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsShopUnavailableOrderNotice:
 		return map[string]string{
-			"order_no": p.SendPartsShopUnavailableOrderNotice.GetOrderNo(),
+			"order_no":          p.SendPartsShopUnavailableOrderNotice.GetOrderNo(),
+			"shop_display_name": p.SendPartsShopUnavailableOrderNotice.GetShopDisplayName(),
+		}, nil
+	// Р44's return-terms clearing (172): the shop's name is the message's only
+	// field. The moderator's reason rides events.parts.v1.ShopReturnTermsModerated
+	// and never this directive, so there is nothing else to read.
+	case *notificationv1.NotificationEnvelope_SendPartsShopReturnTermsCleared:
+		return map[string]string{
+			"shop_display_name": p.SendPartsShopReturnTermsCleared.GetShopDisplayName(),
 		}, nil
 	// Р51's revocation (124) carries NOTHING: `shop_name` was its only field and
 	// B-5 reserved it, so the message is empty by construction. An empty map is
@@ -710,10 +747,11 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	// the same treatment SOURCING_REQUEST_CREATED's `request_no` gets.
 	//
 	// `tenant_name` and `from_user_name` are on the wire and are NOT read here.
-	// C31 bars a tenant name from any directive, order-service holds no display
-	// names at all (every name on this platform is client-hydrated from an id),
-	// and the producer leaves both empty by construction — so the copy says «your
-	// team» and reading them would only put "" onto a template.
+	// C31 bars a TEAM name from any directive, and the producer leaves both empty
+	// by construction: the one display name order-service resolves (owner ruling
+	// of 07.09.2026) is a SHOP's, for its three shop-subject texts, never a team's
+	// or a person's — so the copy says «your team» and reading them would only
+	// put "" onto a template.
 	case *notificationv1.NotificationEnvelope_SendPartsOrderContactHandover:
 		return map[string]string{
 			"orders_moved":  strconv.Itoa(int(p.SendPartsOrderContactHandover.GetOrdersMoved())),
@@ -738,9 +776,10 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsSourcingQuoteReceived:
 		return map[string]string{
-			"request_no":     p.SendPartsSourcingQuoteReceived.GetRequestNo(),
-			"position_count": strconv.Itoa(int(p.SendPartsSourcingQuoteReceived.GetPositionCount())),
-			"total":          p.SendPartsSourcingQuoteReceived.GetTotal(),
+			"request_no":        p.SendPartsSourcingQuoteReceived.GetRequestNo(),
+			"position_count":    strconv.Itoa(int(p.SendPartsSourcingQuoteReceived.GetPositionCount())),
+			"total":             p.SendPartsSourcingQuoteReceived.GetTotal(),
+			"shop_display_name": p.SendPartsSourcingQuoteReceived.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsSourcingNoQuotesYet:
 		return map[string]string{
@@ -781,11 +820,13 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsSourcingQuoteWithdrawnShopClosed:
 		return map[string]string{
-			"request_no": p.SendPartsSourcingQuoteWithdrawnShopClosed.GetRequestNo(),
+			"request_no":        p.SendPartsSourcingQuoteWithdrawnShopClosed.GetRequestNo(),
+			"shop_display_name": p.SendPartsSourcingQuoteWithdrawnShopClosed.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsSourcingQuoteWithdrawnByShop:
 		return map[string]string{
-			"request_no": p.SendPartsSourcingQuoteWithdrawnByShop.GetRequestNo(),
+			"request_no":        p.SendPartsSourcingQuoteWithdrawnByShop.GetRequestNo(),
+			"shop_display_name": p.SendPartsSourcingQuoteWithdrawnByShop.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsCatalogueMachineryAdded:
 		return map[string]string{
@@ -802,11 +843,13 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsReviewInvite:
 		return map[string]string{
-			"order_no": p.SendPartsReviewInvite.GetOrderNo(),
+			"order_no":          p.SendPartsReviewInvite.GetOrderNo(),
+			"shop_display_name": p.SendPartsReviewInvite.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsReviewReminder:
 		return map[string]string{
-			"order_no": p.SendPartsReviewReminder.GetOrderNo(),
+			"order_no":          p.SendPartsReviewReminder.GetOrderNo(),
+			"shop_display_name": p.SendPartsReviewReminder.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsReviewReceived:
 		return map[string]string{
@@ -814,10 +857,55 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsReviewHiddenByComplaint:
 		return map[string]string{
-			"reason": p.SendPartsReviewHiddenByComplaint.GetReason(),
+			"reason":            p.SendPartsReviewHiddenByComplaint.GetReason(),
+			"shop_display_name": p.SendPartsReviewHiddenByComplaint.GetShopDisplayName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsReviewComplaintResolved:
 		outcome := p.SendPartsReviewComplaintResolved.GetOutcome()
+
+		return map[string]string{
+			"outcome_hidden":       flagWhen(outcome, complaintOutcomeHidden),
+			"outcome_no_violation": flagWhen(outcome, complaintOutcomeNoViolation),
+		}, nil
+	// ─── Отзывы: модерация (review-service) — 166–171 ───
+	//
+	// The rent, delivery and repair twins of parts' 120 and 131, one pair per
+	// vertical and the same two shapes: a hidden notice carries the moderator's
+	// `reason` verbatim (required — a hide is refused without one), and a
+	// resolved notice turns В-66's `outcome` into the PAIRED flags flagWhen
+	// derives for 131, so an absent or unknown ruling lights neither clause.
+	//
+	// `review_id` is on every one of them and read by none: it rides the deep link
+	// to «Мой рейтинг», and no template reads an id. No payload carries a name:
+	// the six messages declare none.
+	case *notificationv1.NotificationEnvelope_SendOrderReviewHidden:
+		return map[string]string{
+			"reason": p.SendOrderReviewHidden.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendOrderReviewComplaintResolved:
+		outcome := p.SendOrderReviewComplaintResolved.GetOutcome()
+
+		return map[string]string{
+			"outcome_hidden":       flagWhen(outcome, complaintOutcomeHidden),
+			"outcome_no_violation": flagWhen(outcome, complaintOutcomeNoViolation),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryReviewHidden:
+		return map[string]string{
+			"reason": p.SendDeliveryReviewHidden.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryReviewComplaintResolved:
+		outcome := p.SendDeliveryReviewComplaintResolved.GetOutcome()
+
+		return map[string]string{
+			"outcome_hidden":       flagWhen(outcome, complaintOutcomeHidden),
+			"outcome_no_violation": flagWhen(outcome, complaintOutcomeNoViolation),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairReviewHidden:
+		return map[string]string{
+			"reason": p.SendRepairReviewHidden.GetReason(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendRepairReviewComplaintResolved:
+		outcome := p.SendRepairReviewComplaintResolved.GetOutcome()
 
 		return map[string]string{
 			"outcome_hidden":       flagWhen(outcome, complaintOutcomeHidden),
@@ -1151,6 +1239,21 @@ func causesOrEmpty(causes []string) string {
 // to do, which is why it is a named constant and not an inline string.
 const causePriceStale = "PRICE_STALE"
 
+// causeShopPaused and causeShopVerificationRevoked are two more arms of the same
+// enum, under the same MIRROR OBLIGATION as causePriceStale: they are
+// `parts.storefront.v1.UnavailableCause`'s arm names minus the prefix, which is
+// how sale-service's LiftDirectiveCauseMapper spells `remaining_causes` for 79
+// and 125 since the tracker wave's fix of 15.10.2026 — before it, the PHP
+// builder wrote the lower-case ShopDarkeningCause values (`paused`,
+// `price_stale`, …), which match none of these constants. They feed 79's two
+// exclusive tails (causeOnly). A different spelling on either side does not
+// fail anything — the flag simply never lights, and the seller gets the generic
+// pointer instead of the instruction the rule owes him.
+const (
+	causeShopPaused              = "SHOP_PAUSED"
+	causeShopVerificationRevoked = "SHOP_VERIFICATION_REVOKED"
+)
+
 // causePresent reports whether `want` is among the remaining causes, in the
 // ""/"1" shape the OPTIONAL param tier requires — empty is the only value that
 // switches an {{if}} guard off, exactly as countOrEmpty explains for counts.
@@ -1178,6 +1281,35 @@ func causePresent(causes []string, want string) string {
 	}
 
 	return ""
+}
+
+// causeOnly reports whether `want` is the ONLY remaining cause — the distinct set
+// of `causes` is exactly {want} — in the same ""/"1" shape causePresent uses.
+//
+// EXCLUSIVITY, NOT MEMBERSHIP, and the difference from causePresent is the rule's
+// own. 79's resume tail («…Предложения вернутся, когда вы возобновите продажи»)
+// and legal-entity tail («…после разблокировки юрлица») are promises that ONE
+// action brings the offers back; with a second cause still holding the shop dark
+// the promise is false, so the seller gets the generic pointer to PRT-10's
+// «Почему магазин не виден покупателям» instead (vault «Уведомления запчастей»
+// :132). Price age is the opposite case and keeps causePresent: its upload tail
+// is an instruction that stays true whatever else remains, and it wins
+// precedence in the template.
+//
+// A repeated cause counts once, an empty list lights nothing, and an unknown
+// cause beside `want` lights nothing either — a cause this build cannot name is
+// still a cause the promise would ignore.
+func causeOnly(causes []string, want string) string {
+	if len(causes) == 0 {
+		return ""
+	}
+	for _, cause := range causes {
+		if cause != want {
+			return ""
+		}
+	}
+
+	return "1"
 }
 
 // flagWhen renders the ""/"1" flag an OPTIONAL param must carry for an {{if}}
@@ -1218,7 +1350,11 @@ const (
 	// SendPartsOrderConfirmedPartially `partial_kind` (Р56·В-56).
 	partialPositionsRemoved = "POSITIONS_REMOVED"
 	partialQuantityReduced  = "QUANTITY_REDUCED"
-	// SendPartsReviewComplaintResolved `outcome` (Р56·В-66).
+	// The complaint `outcome` (Р56·В-66) on all four resolved notices:
+	// SendPartsReviewComplaintResolved (131) and review-service's rent, delivery
+	// and repair twins, SendOrderReviewComplaintResolved (167),
+	// SendDeliveryReviewComplaintResolved (169) and
+	// SendRepairReviewComplaintResolved (171). One vocabulary, one producer.
 	complaintOutcomeHidden      = "HIDDEN"
 	complaintOutcomeNoViolation = "NO_VIOLATION"
 )
