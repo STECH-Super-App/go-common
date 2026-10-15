@@ -150,9 +150,11 @@ func validateParams(env *notificationv1.NotificationEnvelope) error {
 
 // repairTypePrefix is the enum-name prefix every «Ремонт спецтехники» directive
 // shares. The family is recognised by NAME rather than by a hand-written list of
-// the 31 values because the list is the thing that would be forgotten: a
-// thirty-second repair type minted in proto-contracts must be guarded the day it
-// exists, not the day somebody remembers this file.
+// its values because the list is the thing that would be forgotten: a new
+// repair type minted in proto-contracts must be guarded the day it exists, not
+// the day somebody remembers this file. That is what happened when the family
+// grew from 31 to 33 — review-service's two person-addressed moderation notices
+// (170, 171) were held to [IN_APP, PUSH] with no change here.
 const repairTypePrefix = "NOTIFICATION_TYPE_REPAIR_"
 
 // isRepairType reports whether t belongs to the repair family. The lookup is on

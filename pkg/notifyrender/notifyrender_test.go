@@ -1522,8 +1522,14 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	//     the builder sends "" rather than echoing the артикул;
 	//   • price / price_from — a позиция with no ladder rung has no price;
 	//   • remaining_causes — Р56·В-54's conditional lift text, where EMPTY is the
-	//     good case («предложения вернулись в каталог»);
-	//   • new_address_count — Р31's SECOND EDITION of «Прайс обработан».
+	//     good case («предложения вернулись в каталог»); on 79 (SHOP_SANCTION_
+	//     LIFTED) also the two exclusive tail flags remaining_only_paused and
+	//     remaining_only_verification_revoked derived from it (owner ruling of
+	//     07.09.2026, «Уведомления запчастей» :132);
+	//   • new_address_count — Р31's SECOND EDITION of «Прайс обработан»;
+	//   • shop_display_name — on 69, 79, 121 and 130, the four of the twenty
+	//     shop-subject texts that already carried an optional tier (the other
+	//     sixteen are the third parts block below).
 	for _, nt := range []notificationv1.NotificationType{
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_HIDDEN_BY_ADMIN,
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_SANCTION_LIFTED,
@@ -1570,6 +1576,25 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED,
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_COMPLAINT_RESOLVED,
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER,
+	} {
+		declared[nt] = true
+	}
+	// parts, the shop's name — sixteen more, whose ONLY optional param is
+	// shop_display_name: the shop's display name, empty when the directory could
+	// not answer (owner ruling of 07.09.2026). 172 is among them because its one
+	// field is the name. The exact twenty-type set is pinned further down.
+	for _, nt := range shopNamedOnlyTypes {
+		declared[nt] = true
+	}
+	// review moderation — the rent, delivery and repair twins of parts' 131
+	// (167, 169, 171): outcome_hidden / outcome_no_violation, the PAIRED flags
+	// flagWhen derives from В-66's outcome, optional for the same reason 131's
+	// are. The three hidden notices (166, 168, 170) declare no optional tier —
+	// their reason is required.
+	for _, nt := range []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_COMPLAINT_RESOLVED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_COMPLAINT_RESOLVED,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_COMPLAINT_RESOLVED,
 	} {
 		declared[nt] = true
 	}
@@ -1662,6 +1687,26 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	}
 	if len(optionalParams) != len(declared) {
 		t.Errorf("optionalParams has %d entries, want %d", len(optionalParams), len(declared))
+	}
+
+	// shop_display_name is declared on EXACTLY the twenty shop-subject texts and
+	// on no other type of any family — the ruling names the shop where it is the
+	// subject, and a twenty-first declaration would be a text that silently
+	// starts naming one.
+	named := map[notificationv1.NotificationType]bool{}
+	for _, nt := range shopSubjectPartsTypes() {
+		named[nt] = true
+	}
+	if len(named) != 20 {
+		t.Errorf("shopSubjectPartsTypes lists %d distinct types, want 20", len(named))
+	}
+	for typ := range typeKey {
+		if got := contains(OptionalParams(typ), shopDisplayNameParam); got != named[typ] {
+			t.Errorf("%v: declares shop_display_name = %v, want %v", typ, got, named[typ])
+		}
+		if contains(RequiredParams(typ), shopDisplayNameParam) {
+			t.Errorf("%v: shop_display_name is REQUIRED — a tenant-service outage would then roll back the producer's write", typ)
+		}
 	}
 
 	// request_no must appear only where its type DECLARES it. Until D-16a that
@@ -2045,12 +2090,11 @@ func TestExtractAndRender_PartsPriceListProcessed(t *testing.T) {
 			env := &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendPartsPriceListProcessed{
 					SendPartsPriceListProcessed: &notificationv1.SendPartsPriceListProcessed{
-						// NO ShopName. The field is `reserved` on all 53 SendParts*
-						// messages (OWNER-ANSWERS-2026-08-31 B-5); the generated
-						// struct at the pinned gen-go-lib still HAS it, which is
-						// exactly why a test must refuse to set it — a green test
-						// that populates a removed field is how the removal gets
-						// quietly undone at the next regeneration.
+						// NO ShopDisplayName: this test pins the NAMELESS
+						// edition (a failed directory lookup, or a producer
+						// older than the field); the named one is
+						// TestShopSubjectPartsTextsNameTheShop's. `shop_name`
+						// itself stays reserved (OWNER-ANSWERS-2026-08-31 B-5).
 						PublishedCount:  120,
 						MatchingCount:   7,
 						ErrorCount:      0,
@@ -2098,7 +2142,7 @@ func TestExtractAndRender_PartsPriceListFileFailed(t *testing.T) {
 	env := &notificationv1.NotificationEnvelope{
 		Payload: &notificationv1.NotificationEnvelope_SendPartsPriceListFileFailed{
 			SendPartsPriceListFileFailed: &notificationv1.SendPartsPriceListFileFailed{
-				// NO ShopName — see the sibling test above.
+				// NO ShopDisplayName — see the sibling test above.
 				FileName: "price-08-2026.xlsx",
 			},
 		},
@@ -2107,8 +2151,10 @@ func TestExtractAndRender_PartsPriceListFileFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtractParams: %v", err)
 	}
-	if len(params) != 1 || params["file_name"] == "" {
-		t.Fatalf("params = %v, want exactly file_name", params)
+	// file_name plus the shop's display name, which the arm surfaces
+	// unconditionally and which is "" here — the nameless edition.
+	if len(params) != 2 || params["file_name"] == "" || params[shopDisplayNameParam] != "" {
+		t.Fatalf("params = %v, want exactly file_name and an empty shop_display_name", params)
 	}
 	// This is one of exactly two parts types that also go by EMAIL, and the email
 	// body IS this rendered body — internal/i18n is not on that path.
@@ -2140,10 +2186,10 @@ func TestExtractAndRender_PartsPriceListFileFailed(t *testing.T) {
 //     the string "0", Go's template truth test runs on the STRING, and «and 0
 //     sourcing requests» would ride along on every handover;
 //   - the wire's `tenant_name` and `from_user_name` never reach a param. They
-//     exist on the message and the producer leaves them empty (C31 bars a tenant
-//     name from any directive and order-service holds no display names), so the
-//     copy says «your team» — the deliberate, reversible divergence from Р47's
-//     «команды [название]».
+//     exist on the message and the producer leaves them empty (C31 bars a TEAM
+//     name from any directive, and the only display name order-service resolves
+//     is a shop's, never a team's), so the copy says «your team» — the
+//     deliberate, reversible divergence from Р47's «команды [название]».
 func TestExtractAndRender_PartsOrderContactHandover(t *testing.T) {
 	r := testRendererFull(t)
 	const nt = notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CONTACT_HANDOVER

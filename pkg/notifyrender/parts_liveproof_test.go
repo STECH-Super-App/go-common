@@ -19,12 +19,17 @@ type partsLiveCase struct {
 // partsLiveEnvelopes mirrors, field for field, the directives
 // sale-service's PartsNotificationDirectiveBuilder actually writes into
 // parts_storefront.outbox_messages. The first ten are the ones with a PHP
-// producer today; the last two are the price-file importer's pair, which has no
-// producer yet.
+// producer today; the next two are the price-file importer's pair, which had no
+// producer when they landed; the last is Р44's return-terms clearing (172),
+// whose producer — sale-service's return-terms moderation — waits for the
+// gen-php-lib bump that carries the type.
 //
 // Values are taken from a real notification.events.dlq.inbox dump on the local
 // compose stack (2026-08-31), not invented — that is what makes this a
-// reproduction rather than a mock.
+// reproduction rather than a mock. They stay NAMELESS on purpose: that dump
+// predates `shop_display_name`, and an empty name is still what a failed
+// directory lookup sends. 172 has no dump to copy and carries the name its
+// producer will send.
 func partsLiveEnvelopes() []partsLiveCase {
 	cases := partsLiveCases()
 	// The metadata type is stamped here rather than repeated in every literal:
@@ -107,6 +112,11 @@ func partsLiveCases() []partsLiveCase {
 				SendPartsPriceListFileFailed: &notificationv1.SendPartsPriceListFileFailed{
 					FileName: "price-08-2026.xlsx",
 				}}}},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_RETURN_TERMS_CLEARED, "SHOP_RETURN_TERMS_CLEARED", &notificationv1.NotificationEnvelope{
+			Payload: &notificationv1.NotificationEnvelope_SendPartsShopReturnTermsCleared{
+				SendPartsShopReturnTermsCleared: &notificationv1.SendPartsShopReturnTermsCleared{
+					ShopDisplayName: "ООО «Ромашка-Запчасть»",
+				}}}},
 	}
 }
 
@@ -154,8 +164,9 @@ func TestPartsDirectivesRenderRatherThanDeadLetter(t *testing.T) {
 //
 // The list is the ten build* methods on
 // sale-service/app/Modules/PartsStorefront/Infrastructure/Outbox/PartsNotificationDirectiveBuilder.php
-// plus the importer pair. It is hand-maintained on purpose: go-common cannot see
-// sale-service, so the only honest alternative to a list is no check at all.
+// plus the importer pair and 172. It is hand-maintained on purpose: go-common
+// cannot see sale-service, so the only honest alternative to a list is no check
+// at all.
 func TestPartsProducedTypesAreAllInTheCatalog(t *testing.T) {
 	for _, tc := range partsLiveEnvelopes() {
 		if _, ok := typeKey[tc.nt]; !ok {
@@ -210,7 +221,8 @@ func TestPartsUnmatchedPositionRendersWithoutADanglingName(t *testing.T) {
 }
 
 // TestPartsShopLiftTextsCarryTheB53Instruction pins Р56·В-53's SECOND EDITION on
-// both shop-level lift texts, and the case that makes it worth a test.
+// both shop-level lift texts, the two exclusive tails 79 gained on 07.09.2026,
+// and the cases that make them worth a test.
 //
 // THE RULE. When a sanction is lifted — or a company's verification restored —
 // but the shop's price list is ALREADY older than fourteen days, the storefront
@@ -226,78 +238,123 @@ func TestPartsUnmatchedPositionRendersWithoutADanglingName(t *testing.T) {
 // function set and the renderer registers none. `remaining_price_stale` is
 // derived from the same field in ExtractParams, so nothing on the wire changed.
 //
-// ⚠ THE THIRD SUBTEST IS THE WHOLE POINT. The obvious cheaper fix,
-// `{{if eq .remaining_causes "PRICE_STALE"}}`, passes the first two cases and
-// FAILS this one: with two causes the joined string is «SHOP_PAUSED, PRICE_STALE»,
-// whole-string equality misses, and the seller silently loses the instruction —
-// in exactly the multi-cause case the rule exists for. Membership, not
-// exclusivity, is the reading.
+// ⚠ «PRICE AGE AMONG OTHERS» IS THE WHOLE POINT of the upload tail. The obvious
+// cheaper fix, `{{if eq .remaining_causes "PRICE_STALE"}}`, passes the
+// single-cause case and FAILS that one: with two causes the joined string is
+// «SHOP_PAUSED, PRICE_STALE», whole-string equality misses, and the seller
+// silently loses the instruction — in exactly the multi-cause case the rule
+// exists for. Membership, not exclusivity, is the reading for price age.
+//
+// 79's TWO NEW TAILS ARE THE OPPOSITE READING (vault «Уведомления запчастей»
+// :132, owner ruling of 07.09.2026): «…когда вы возобновите продажи» and
+// «…после разблокировки юрлица» each promise that ONE action brings the offers
+// back, so they light only when that cause is the ONLY one left. A pause plus a
+// legal-entity block gets the generic pointer, and price age still wins over
+// both. 125 gains neither tail — a lone pause after a restored verification is
+// still the generic pointer there.
+//
+// Every render lands on exactly one edition.
 func TestPartsShopLiftTextsCarryTheB53Instruction(t *testing.T) {
 	r := testRendererFull(t)
 
-	types := map[string]notificationv1.NotificationType{
-		"SHOP_SANCTION_LIFTED":       notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED,
-		"SHOP_VERIFICATION_RESTORED": notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED,
+	const (
+		sanctionLifted       = notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED
+		verificationRestored = notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFICATION_RESTORED
+	)
+
+	// The distinctive phrase of each edition, as the en baseline renders it.
+	editions := map[string]string{
+		"upload":    "upload a fresh price list",
+		"resume":    "once you resume sales",
+		"unblocked": "once your organisation is unblocked",
+		"generic":   "another reason",
+		"back":      "back in the catalogue",
 	}
 
 	cases := []struct {
-		name        string
-		causes      []string
-		wantUpload  bool
-		wantGeneric bool
-		wantBack    bool
+		name   string
+		causes []string
+		// want is the one edition each type must render.
+		want map[notificationv1.NotificationType]string
 	}{
 		{
-			name:     "nothing left — the storefront really is back",
-			causes:   nil,
-			wantBack: true,
+			name:   "nothing left — the storefront really is back",
+			causes: nil,
+			want:   map[notificationv1.NotificationType]string{sanctionLifted: "back", verificationRestored: "back"},
 		},
 		{
-			name:        "another cause, not price age — the generic pointer",
-			causes:      []string{"SHOP_PAUSED"},
-			wantGeneric: true,
+			name:   "the owner's own pause alone — 79's resume tail, 125's generic pointer",
+			causes: []string{causeShopPaused},
+			want:   map[notificationv1.NotificationType]string{sanctionLifted: "resume", verificationRestored: "generic"},
 		},
 		{
-			name:       "price age alone — В-53's instruction",
-			causes:     []string{"PRICE_STALE"},
-			wantUpload: true,
+			// A repeated cause is still ONE cause: the distinct set decides.
+			name:   "the same pause twice — still the resume tail",
+			causes: []string{causeShopPaused, causeShopPaused},
+			want:   map[notificationv1.NotificationType]string{sanctionLifted: "resume", verificationRestored: "generic"},
 		},
 		{
-			name:       "price age AMONG others — still the instruction",
-			causes:     []string{"SHOP_PAUSED", "PRICE_STALE"},
-			wantUpload: true,
+			name:   "the legal entity's block alone — 79's unblocked tail, 125's generic pointer",
+			causes: []string{causeShopVerificationRevoked},
+			want:   map[notificationv1.NotificationType]string{sanctionLifted: "unblocked", verificationRestored: "generic"},
+		},
+		{
+			name:   "pause AND block — no single action brings the offers back, so the generic pointer",
+			causes: []string{causeShopPaused, causeShopVerificationRevoked},
+			want:   map[notificationv1.NotificationType]string{sanctionLifted: "generic", verificationRestored: "generic"},
+		},
+		{
+			// An arm this build cannot name is still a cause the resume promise
+			// would ignore.
+			name:   "pause beside an unknown cause — the generic pointer",
+			causes: []string{causeShopPaused, "SHOP_SOMETHING_NEW"},
+			want:   map[notificationv1.NotificationType]string{sanctionLifted: "generic", verificationRestored: "generic"},
+		},
+		{
+			name:   "the administrator's own hide left — the generic pointer",
+			causes: []string{"SHOP_ADMIN_HIDDEN"},
+			want:   map[notificationv1.NotificationType]string{sanctionLifted: "generic", verificationRestored: "generic"},
+		},
+		{
+			name:   "price age alone — В-53's instruction",
+			causes: []string{causePriceStale},
+			want:   map[notificationv1.NotificationType]string{sanctionLifted: "upload", verificationRestored: "upload"},
+		},
+		{
+			name:   "price age AMONG others — still the instruction",
+			causes: []string{causeShopPaused, causePriceStale},
+			want:   map[notificationv1.NotificationType]string{sanctionLifted: "upload", verificationRestored: "upload"},
 		},
 	}
 
-	for label, nt := range types {
+	for _, nt := range []notificationv1.NotificationType{sanctionLifted, verificationRestored} {
 		for _, tc := range cases {
-			t.Run(label+"/"+tc.name, func(t *testing.T) {
+			t.Run(typeKey[nt]+"/"+tc.name, func(t *testing.T) {
 				env := envelopeWithCauses(nt, tc.causes)
 
 				params, err := ExtractParams(env)
 				if err != nil {
 					t.Fatalf("ExtractParams: %v", err)
 				}
+				// 125's param set is unchanged; 79's carries the two tail flags.
+				assertParamSetMatchesCatalog(t, nt, params)
 
 				_, body, err := r.Render(nt, params, "en")
 				if err != nil {
 					t.Fatalf("Render: %v", err)
 				}
 
-				gotUpload := strings.Contains(body, "upload a fresh price list")
-				gotGeneric := strings.Contains(body, "another reason")
-				gotBack := strings.Contains(body, "back in the catalogue")
-
-				if gotUpload != tc.wantUpload || gotGeneric != tc.wantGeneric || gotBack != tc.wantBack {
-					t.Errorf("branch mismatch for causes %v\n  got  upload=%v generic=%v back=%v\n  want upload=%v generic=%v back=%v\n  body = %q",
-						tc.causes, gotUpload, gotGeneric, gotBack,
-						tc.wantUpload, tc.wantGeneric, tc.wantBack, body)
+				var got []string
+				for edition, phrase := range editions {
+					if strings.Contains(body, phrase) {
+						got = append(got, edition)
+					}
 				}
-
-				// Exactly one branch, always — the three are mutually exclusive by
-				// construction and a template edit must not make them overlap.
-				if n := boolCount(gotUpload, gotGeneric, gotBack); n != 1 {
-					t.Errorf("expected exactly one branch, got %d: %q", n, body)
+				// Exactly one edition, always — the five are mutually exclusive
+				// by construction and a template edit must not make them overlap.
+				if len(got) != 1 || got[0] != tc.want[nt] {
+					t.Errorf("causes %v rendered editions %v, want exactly [%s]\n  body = %q",
+						tc.causes, got, tc.want[nt], body)
 				}
 			})
 		}
@@ -320,22 +377,12 @@ func envelopeWithCauses(nt notificationv1.NotificationType, causes []string) *no
 	return env
 }
 
-func boolCount(bs ...bool) int {
-	n := 0
-	for _, b := range bs {
-		if b {
-			n++
-		}
-	}
-	return n
-}
-
 // ───────────────────────── D-16a — the other forty-nine ─────────────────────────
 //
 // The fixtures above are a REPRODUCTION of directives that exist on the wire
-// today, so they stop at the twelve types a producer can emit. The tests below
-// cover the set instead of the traffic: after D-16a and the two entries added on
-// 07.09.2026, ALL SIXTY-THREE declared parts types render.
+// today, so they stop at the types a producer can emit. The tests below cover
+// the set instead of the traffic: after D-16a and the two entries added on
+// 07.09.2026, ALL SIXTY-THREE declared parts types render — sixty-four since 172.
 
 // partsUnmappedByDesign are the parts types allowed to have no catalog entry.
 // IT IS EMPTY, and that is the point of the 07.09.2026 pass: the last two —
@@ -398,8 +445,11 @@ func TestPartsCatalogCoversEveryDeclaredType(t *testing.T) {
 
 	// 64 → 63 on 14.09.2026: value 112 (the «заявка продлена» directive) was retired
 	// with its feature (В-64, В-94) and its number reserved. This pin moved with it.
-	if declared != 63 {
-		t.Errorf("proto declares %d NOTIFICATION_TYPE_PARTS_* values, expected 63 — a type was added or removed, and this test is the place that has to notice", declared)
+	// 63 → 64 with proto push 1 (tracker wave, 10.2026): value 172,
+	// PARTS_SHOP_RETURN_TERMS_CLEARED — Р44's moderator clearing of a shop's
+	// additional return terms, the owner's late arm of 08.09.2026.
+	if declared != 64 {
+		t.Errorf("proto declares %d NOTIFICATION_TYPE_PARTS_* values, expected 64 — a type was added or removed, and this test is the place that has to notice", declared)
 	}
 	if len(partsUnmappedByDesign) != 0 {
 		t.Errorf("partsUnmappedByDesign has %d entries, want 0 — every declared parts type has had a catalog entry since 07.09.2026, and a new exemption is a type that will dead-letter on first delivery", len(partsUnmappedByDesign))
@@ -661,57 +711,244 @@ func complaintEnv(m *notificationv1.SendPartsReviewComplaintResolved) *notificat
 	}
 }
 
-// TestNoPartsTemplateReadsAShopName is B-5's structural lock.
+// shopDisplayNameParam is the one param the owner ruling of 07.09.2026 added to
+// the parts family, spelled once for every test that asks about it.
+const shopDisplayNameParam = "shop_display_name"
+
+// shopNamedOnlyTypes are the sixteen shop-subject texts whose ONLY optional param
+// is the shop's display name — the twenty minus 69, 79, 121 and 130, which
+// already carried an optional tier and had the name appended to it.
+var shopNamedOnlyTypes = []notificationv1.NotificationType{
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED,               // 70
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_MATCHED,                    // 71
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_PUBLISHED_RETRO,            // 72
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_REJECTED,                   // 73
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_STALE_WARNING,             // 74
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFERS_HIDDEN_PRICE_LIST_STALE,       // 75
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_HIDDEN_BY_ADMIN,                 // 78
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFIED_BADGE_REVOKED,          // 80
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_RECEIVED,              // 104
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_INVITE,                        // 117
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_REMINDER,                      // 118
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_HIDDEN_BY_COMPLAINT,           // 120
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_UNAVAILABLE_ORDER_NOTICE,        // 126
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_SHOP_CLOSED, // 127
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_BY_SHOP,     // 128
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_RETURN_TERMS_CLEARED,            // 172
+}
+
+// shopSubjectPartsTypes is the whole twenty: the texts the owner ruling of
+// 07.09.2026 («Уведомления запчастей» :75) names the shop on, because the shop
+// is their subject.
+func shopSubjectPartsTypes() []notificationv1.NotificationType {
+	return append([]notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED,   // 69
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED,   // 79
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_FAVORITE_PRICE_DROPPED, // 121
+		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_BACK_IN_STOCK,    // 130
+	}, shopNamedOnlyTypes...)
+}
+
+// payloadFieldFor is the envelope oneof arm that carries type nt, found by the
+// fleet's naming rule — `send_` plus the type's name without its
+// NOTIFICATION_TYPE_ prefix, lower-cased (notification-service's
+// TestExpectedPayloadOneof_ConventionCensus holds every arm to it). Nil when no
+// arm has that name.
+func payloadFieldFor(nt notificationv1.NotificationType) protoreflect.FieldDescriptor {
+	name := "send_" + strings.ToLower(strings.TrimPrefix(nt.String(), "NOTIFICATION_TYPE_"))
+	return (&notificationv1.NotificationEnvelope{}).ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name(name))
+}
+
+// TestShopSubjectPartsTextsNameTheShop is the owner ruling of 07.09.2026 as a
+// structural lock, and the successor of B-5's TestNoPartsTemplateReadsAShopName.
 //
-// ⚠ ITS SECOND HALF CHANGED SHAPE ON 07.09.2026, and the reason is the fix
-// landing rather than the check weakening. It used to build SendParts* payloads
-// with a `ShopName` sentinel and assert no param carried it, which was possible
-// only because the pinned gen-go-lib (v0.0.0-20260821100229) PREDATED the
-// 31.08.2026 removal. This module now pins a gen-go-lib generated after it:
-// `shop_name` is `reserved` on all 53 messages that carried it, there is no Go
-// field left to set, and the old literals no longer compile.
+// B-5 reserved `shop_name` on every SendParts* message and the old test proved no
+// template could read one. The ruling did not undo that: it brought the name
+// back as a NEW field, `shop_display_name`, on the twenty texts whose subject is
+// the shop — so the lock now has four halves instead of two:
 //
-// So the question moves up one level — to the DESCRIPTORS, which have no
-// compile-time escape hatch and which keep answering after every regeneration.
-// The check still has two halves because the mistake still has two shapes: a
-// template that declares the param, and a payload that offers a field for one to
-// be read from.
-func TestNoPartsTemplateReadsAShopName(t *testing.T) {
+//   - the declaration: exactly the twenty parts types declare shop_display_name,
+//     in the OPTIONAL tier, and no other parts type declares it or any param
+//     spelled like `shop_name`;
+//   - the wire: each of the twenty payloads has a string field shop_display_name,
+//     and none of the sixty-four SendParts* payloads has a field named shop_name
+//     — walked over the envelope's oneof, so a payload added later is checked
+//     the moment it is generated;
+//   - the extract: a payload carrying a name surfaces it under that param;
+//   - the text: the English baseline prints it.
+func TestShopSubjectPartsTextsNameTheShop(t *testing.T) {
+	r := testRendererFull(t)
+	const name = "Ромашка-Запчасть"
+
+	subject := map[notificationv1.NotificationType]bool{}
+	for _, nt := range shopSubjectPartsTypes() {
+		subject[nt] = true
+	}
+	if len(subject) != 20 {
+		t.Fatalf("shopSubjectPartsTypes lists %d distinct types, want the ruling's 20", len(subject))
+	}
+
+	// The declaration.
 	for nt, key := range typeKey {
 		if !strings.HasPrefix(key, "parts_") {
 			continue
 		}
+		if got := contains(OptionalParams(nt), shopDisplayNameParam); got != subject[nt] {
+			t.Errorf("%s declares optional shop_display_name = %v, want %v", key, got, subject[nt])
+		}
 		for _, p := range allowedParams(nt) {
 			if strings.Contains(p, "shop_name") {
-				t.Errorf("%s declares param %q — B-5 removed shop_name from all 53 SendParts* messages", key, p)
+				t.Errorf("%s declares param %q — B-5 reserved shop_name, and the ruling of 07.09.2026 brought the name back as shop_display_name only", key, p)
 			}
 		}
 	}
 
-	// Second half: no SendParts* payload DECLARES a shop name any more, so no arm
-	// can read one even by habit. Walking the envelope's oneof rather than a list
-	// means a message added later is checked the moment it is generated.
-	oneof := (&notificationv1.NotificationEnvelope{}).ProtoReflect().Descriptor().Fields()
+	// The wire: no payload offers shop_name, whatever the type.
+	fields := (&notificationv1.NotificationEnvelope{}).ProtoReflect().Descriptor().Fields()
 	walked := 0
-	for i := 0; i < oneof.Len(); i++ {
-		fd := oneof.Get(i)
-		if fd.Kind() != protoreflect.MessageKind {
-			continue
-		}
-		payload := fd.Message()
-		if !strings.HasPrefix(string(payload.Name()), "SendParts") {
+	for i := 0; i < fields.Len(); i++ {
+		fd := fields.Get(i)
+		if fd.Kind() != protoreflect.MessageKind || !strings.HasPrefix(string(fd.Message().Name()), "SendParts") {
 			continue
 		}
 		walked++
-		for j := 0; j < payload.Fields().Len(); j++ {
-			if name := string(payload.Fields().Get(j).Name()); strings.Contains(name, "shop_name") {
-				t.Errorf("%s declares field %q — B-5 removed shop_name from all 53 SendParts* messages", payload.Name(), name)
-			}
+		if fd.Message().Fields().ByName("shop_name") != nil {
+			t.Errorf("%s declares field shop_name — B-5 reserved it on every SendParts* message", fd.Message().Name())
 		}
 	}
 	// 64 → 63 on 14.09.2026: envelope slot 131 (send_parts_sourcing_request_extended) was
-	// retired with В-94 and reserved. Same count as the declared-types pin above, on purpose.
-	if walked != 63 {
-		t.Errorf("walked %d SendParts* payloads, want 63 — the oneof changed shape and this check may be looking at nothing", walked)
+	// retired with В-94 and reserved. 63 → 64 with proto push 1: slot 192,
+	// send_parts_shop_return_terms_cleared (172, Р44). Same count as the
+	// declared-types pin, on purpose.
+	if walked != 64 {
+		t.Errorf("walked %d SendParts* payloads, want 64 — the oneof changed shape and this check may be looking at nothing", walked)
+	}
+
+	// The wire, the extract and the text, per type.
+	for _, nt := range shopSubjectPartsTypes() {
+		key := typeKey[nt]
+		t.Run(key, func(t *testing.T) {
+			fd := payloadFieldFor(nt)
+			if fd == nil {
+				t.Fatalf("%s has no envelope arm named by the send_<type> rule", nt)
+			}
+			field := fd.Message().Fields().ByName(protoreflect.Name(shopDisplayNameParam))
+			if field == nil || field.Kind() != protoreflect.StringKind || field.IsList() {
+				t.Fatalf("%s carries no singular string field shop_display_name", fd.Message().Name())
+			}
+
+			env := &notificationv1.NotificationEnvelope{Metadata: &notificationv1.EnvelopeMetadata{Type: nt}}
+			payload := env.ProtoReflect().Mutable(fd).Message()
+			payload.Set(field, protoreflect.ValueOfString(name))
+
+			params, err := ExtractParams(env)
+			if err != nil {
+				t.Fatalf("ExtractParams: %v", err)
+			}
+			if params[shopDisplayNameParam] != name {
+				t.Fatalf("shop_display_name = %q, want %q — the arm does not read the field", params[shopDisplayNameParam], name)
+			}
+			_, body, err := r.Render(nt, params, "en")
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			if !strings.Contains(body, "'"+name+"'") {
+				t.Errorf("the en body does not name the shop: %q", body)
+			}
+		})
+	}
+}
+
+// todaysWording is every shop-subject text as it rendered BEFORE the ruling of
+// 07.09.2026 reached the baseline, with each REQUIRED param at
+// validParamsFor's value and every optional one absent — which is exactly what
+// a directive whose producer could not resolve the name puts on the wire.
+// Captured from the baseline at go-common 7710a15. 172 is not here: it had no
+// text before.
+var todaysWording = map[notificationv1.NotificationType]struct{ title, body string }{
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_FAVORITE_PRICE_DROPPED: {"Price dropped",
+		"An item in your favourites is cheaper: test_old_price → test_new_price ₽."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFERS_HIDDEN_PRICE_LIST_STALE: {"Offers hidden — the price list is out of date",
+		"Your offers are hidden: the price list has not been updated for test_days_since_upload days. Upload a price list and they come back automatically."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFER_BACK_IN_STOCK: {"Available again",
+		"An item in your favourites is on sale again."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_MATCHED: {"Positions matched",
+		"test_published_count more positions from your price list are published."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_PUBLISHED_RETRO: {"Positions published",
+		"test_published_count more positions from your price list are published — an administrator matched them to catalogue cards."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_REJECTED: {"Positions rejected",
+		"test_rejected_count positions from your price list were rejected during matching. The reasons are in the import report."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED: {"Price list not processed",
+		"We could not process 'test_file_name'. Open the import report to see why, fix the file and upload it again."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED: {"Price list processed",
+		"Your price list is processed: test_published_count published, test_matching_count awaiting matching, test_error_count with errors."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_STALE_WARNING: {"The price list is out of date",
+		"Your price list has not been updated for test_days_since_upload days. Tomorrow your offers leave the catalogue — upload a fresh price list."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_HIDDEN_BY_COMPLAINT: {"Review hidden",
+		"Your review of the shop was hidden by a moderator. Reason: test_reason."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_INVITE: {"Leave a review",
+		"How was the shop? Leave a review for order #test_order_no."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_REVIEW_REMINDER: {"Review reminder",
+		"2 days left to rate the shop for order #test_order_no."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_HIDDEN_BY_ADMIN: {"Shop hidden by an administrator",
+		"Your shop was hidden by an administrator: your offers are not visible to buyers, and no new orders or sourcing requests reach you. Active orders are fulfilled under the usual rules. Reason: test_reason. Please write to support."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_SANCTION_LIFTED: {"Sanction lifted",
+		"Your shop is available to buyers again. Your offers are back in the catalogue."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_UNAVAILABLE_ORDER_NOTICE: {"The shop is temporarily unavailable",
+		"The shop is temporarily unavailable on the platform. Order #test_order_no still stands; you can cancel it any time before it is handed to a carrier."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_VERIFIED_BADGE_REVOKED: {"The «VERIFIED» badge was removed",
+		"The «VERIFIED» badge was removed from your shop. Questions go to support."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_RECEIVED: {"New quote on your request",
+		"A new quote on request #test_request_no: test_position_count parts for test_total ₽."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_BY_SHOP: {"The shop withdrew its quote",
+		"The shop withdrew its quote on request #test_request_no."},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SOURCING_QUOTE_WITHDRAWN_SHOP_CLOSED: {"The quote was withdrawn",
+		"The shop closed — its quote on request #test_request_no was withdrawn."},
+}
+
+// TestShopNamedTextsKeepTodaysWordingWithoutAName pins the ruling's fallback: a
+// directive whose producer could not resolve the shop's name — a tenant-service
+// outage, an unknown tenant, a producer older than the field — renders the text
+// that shipped before the name existed, byte for byte. The name is a decoration
+// on a sentence that must already be whole without it.
+//
+// ONE DELIBERATE EXCEPTION. 72 (PARTS_POSITIONS_PUBLISHED_RETRO) drops «— an
+// administrator matched them to catalogue cards» and becomes 71's sentence, as
+// «Уведомления запчастей» :138 writes it; its golden is pinned to that new text
+// instead. 79's new tails need causes to light and are
+// TestPartsShopLiftTextsCarryTheB53Instruction's; with none, 79 is unchanged.
+func TestShopNamedTextsKeepTodaysWordingWithoutAName(t *testing.T) {
+	r := newTestRenderer(t, map[string]string{}) // BaselineEN only, no overlay
+
+	const retro = notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_PUBLISHED_RETRO
+	want := map[notificationv1.NotificationType]struct{ title, body string }{}
+	for nt, w := range todaysWording {
+		want[nt] = w
+	}
+	want[retro] = struct{ title, body string }{"Positions published",
+		"test_published_count more positions from your price list are published."}
+
+	covered := 0
+	for _, nt := range shopSubjectPartsTypes() {
+		w, ok := want[nt]
+		if !ok {
+			continue // 172 — no text before the ruling.
+		}
+		covered++
+		t.Run(typeKey[nt], func(t *testing.T) {
+			title, body, err := r.Render(nt, validParamsFor(nt), "en")
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			if title != w.title {
+				t.Errorf("title = %q, want today's %q", title, w.title)
+			}
+			if body != w.body {
+				t.Errorf("body without a name drifted from today's wording\n  got  %q\n  want %q", body, w.body)
+			}
+		})
+	}
+	if covered != 19 {
+		t.Errorf("pinned %d of the 19 shop-subject texts that existed before the ruling", covered)
 	}
 }

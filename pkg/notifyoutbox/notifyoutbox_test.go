@@ -505,10 +505,12 @@ func TestValidateRepairChannels_RejectsIllegalSets(t *testing.T) {
 }
 
 // TestValidateRepairChannels_CoversEveryDeclaredRepairType: the guard is keyed
-// on the enum NAME, so it has to hold for all 31 values and for the thirty-second
+// on the enum NAME, so it has to hold for all 33 values and for the thirty-fourth
 // the day proto-contracts mints it — not for the one specimen above. The count
 // is asserted here as well, mirroring notifyrender's census: a family that grows
-// without this file noticing is exactly the failure NOTIF-09 describes.
+// without this file noticing is exactly the failure NOTIF-09 describes. It grew
+// from 31 to 33 with review-service's two moderation notices (170, 171), and the
+// prefix guarded them the day they were minted — which is the point.
 func TestValidateRepairChannels_CoversEveryDeclaredRepairType(t *testing.T) {
 	declared := 0
 	for value, name := range notificationv1.NotificationType_name {
@@ -529,8 +531,76 @@ func TestValidateRepairChannels_CoversEveryDeclaredRepairType(t *testing.T) {
 		}
 		assertReason(t, validateRepairChannels(m), ReasonRepairChannels)
 	}
-	if declared != 31 {
-		t.Errorf("proto declares %d NOTIFICATION_TYPE_REPAIR_* values, expected 31 (master §3.3, values 134–164)", declared)
+	if declared != 33 {
+		t.Errorf("proto declares %d NOTIFICATION_TYPE_REPAIR_* values, expected 33 (master §3.3's 134–164 plus review moderation's 170–171)", declared)
+	}
+}
+
+// repairModerationEnvelope returns one of review-service's two repair moderation
+// notices — the hide (170, to the review's author) or the complaint ruling (171,
+// to the filer) — as it is published: person-addressed per rule N of 08.10.2026;
+// repair deal notices not migrated yet, so for now these are the only
+// person-addressed REPAIR_* directives. It carries the legal channel pair, a
+// MY_RATING deep link and the payload's one meaningful field.
+func repairModerationEnvelope(t *testing.T, nt notificationv1.NotificationType) *notificationv1.NotificationEnvelope {
+	t.Helper()
+	e := validEnvelope(t)
+	e.Metadata.Type = nt
+	e.Metadata.Channels = []notificationv1.Channel{
+		notificationv1.Channel_CHANNEL_IN_APP,
+		notificationv1.Channel_CHANNEL_PUSH,
+	}
+	e.Metadata.DeepLink = &notificationv1.DeepLinkTarget{
+		Screen: notificationv1.DeepLinkScreen_DEEP_LINK_SCREEN_MY_RATING,
+		Params: map[string]string{"tenant_id": testTenantID, "service": "REPAIR", "review_id": "R1"},
+	}
+	switch nt {
+	case notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_HIDDEN:
+		e.Payload = &notificationv1.NotificationEnvelope_SendRepairReviewHidden{
+			SendRepairReviewHidden: &notificationv1.SendRepairReviewHidden{ReviewId: "R1", Reason: "Оскорбления в тексте отзыва"},
+		}
+	default:
+		e.Payload = &notificationv1.NotificationEnvelope_SendRepairReviewComplaintResolved{
+			SendRepairReviewComplaintResolved: &notificationv1.SendRepairReviewComplaintResolved{ReviewId: "R1", Outcome: "HIDDEN"},
+		}
+	}
+	return e
+}
+
+// TestPublishDirective_RepairModerationIsPersonAddressedOnThePair pins the two
+// review-moderation repair types (170, 171) through the whole door: they are
+// addressed to a PERSON rather than a tenant — person-addressed per rule N of
+// 08.10.2026; repair deal notices not migrated yet — and the REPAIR_ name guard
+// still holds them to exactly [IN_APP, PUSH]. The pair publishes; IN_APP alone
+// is refused before the outbox write.
+func TestPublishDirective_RepairModerationIsPersonAddressedOnThePair(t *testing.T) {
+	for _, nt := range []notificationv1.NotificationType{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_HIDDEN,
+		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_COMPLAINT_RESOLVED,
+	} {
+		t.Run(nt.String(), func(t *testing.T) {
+			ok := repairModerationEnvelope(t, nt)
+			if ok.GetMetadata().GetRecipientUserId() == "" || ok.GetMetadata().GetRecipientTenantId() != "" {
+				t.Fatalf("fixture must be person-addressed, got user=%q tenant=%q",
+					ok.GetMetadata().GetRecipientUserId(), ok.GetMetadata().GetRecipientTenantId())
+			}
+			store := outbox.NewTestStore()
+			pub := outbox.NewPublisher(store, "default-topic")
+			if err := PublishDirective(context.Background(), pub, nil, ok); err != nil {
+				t.Fatalf("person-addressed [IN_APP, PUSH]: expected nil, got %v", err)
+			}
+			if got := len(store.Messages); got != 1 {
+				t.Fatalf("expected 1 outbox row, got %d", got)
+			}
+
+			inAppOnly := repairModerationEnvelope(t, nt)
+			inAppOnly.Metadata.Channels = []notificationv1.Channel{notificationv1.Channel_CHANNEL_IN_APP}
+			refused := outbox.NewTestStore()
+			assertReason(t, PublishDirective(context.Background(), outbox.NewPublisher(refused, "default-topic"), nil, inAppOnly), ReasonRepairChannels)
+			if got := len(refused.Messages); got != 0 {
+				t.Errorf("expected no outbox write for [IN_APP] alone, got %d", got)
+			}
+		})
 	}
 }
 
