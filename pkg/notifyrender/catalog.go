@@ -348,10 +348,14 @@ var typeKey = map[notificationv1.NotificationType]string{
 	// review's author, the resolved notice to the person who filed the complaint.
 	// ORDER_ is rent, by the family convention 165 already follows.
 	//
-	// 170/171 are person-addressed per rule N of 08.10.2026; repair deal notices
-	// not migrated yet — so for now they are the only person-addressed REPAIR_*
-	// types. They still take exactly [IN_APP, PUSH], because notifyoutbox's
-	// REPAIR_ name guard applies to them like to every other repair type.
+	// For 170/171 that person-addressing is an exception to repair's D28 team
+	// addressing, which still governs repair's non-deal notices: rule N of
+	// 08.10.2026 covers deal notices only (plus, since 09.10.2026, repair's
+	// open-posting notices), and a review-moderation notice is neither. Rule N
+	// is not built for repair yet, so for now 170/171 are the only
+	// person-addressed REPAIR_* types. They still take exactly [IN_APP, PUSH],
+	// because notifyoutbox's REPAIR_ name guard applies to them like to every
+	// other repair type.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_HIDDEN:                "order_review_hidden",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORDER_REVIEW_COMPLAINT_RESOLVED:    "order_review_complaint_resolved",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_HIDDEN:             "delivery_review_hidden",
