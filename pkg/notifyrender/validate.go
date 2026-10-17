@@ -84,7 +84,7 @@ func consistencyCheck(sections map[string]section, byName map[string]notificatio
 // ValidateBundle asserts the source-locale bundle (en.json in fsys) is
 // consistent with the compiled catalog contract:
 //   - every section name maps to a known NotificationType (reverse typeKey),
-//   - every {{.placeholder}} used is declared in requiredParams for that type,
+//   - every {{.placeholder}} used is declared for that type (required OR optional),
 //   - every requiredParam appears in at least one placeholder.
 //
 // A partial bundle (only a subset of catalog types) is accepted; the function

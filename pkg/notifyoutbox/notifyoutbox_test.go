@@ -538,10 +538,12 @@ func TestValidateRepairChannels_CoversEveryDeclaredRepairType(t *testing.T) {
 
 // repairModerationEnvelope returns one of review-service's two repair moderation
 // notices — the hide (170, to the review's author) or the complaint ruling (171,
-// to the filer) — as it is published: person-addressed per rule N of 08.10.2026;
-// repair deal notices not migrated yet, so for now these are the only
-// person-addressed REPAIR_* directives. It carries the legal channel pair, a
-// MY_RATING deep link and the payload's one meaningful field.
+// to the filer) — as it is published: person-addressed, an exception to repair's
+// D28 team addressing, which still governs repair's non-deal notices. Rule N of
+// 08.10.2026 covers deal notices only (plus, since 09.10.2026, repair's
+// open-posting notices) and is not built for repair yet, so for now these are
+// the only person-addressed REPAIR_* directives. It carries the legal channel
+// pair, a MY_RATING deep link and the payload's one meaningful field.
 func repairModerationEnvelope(t *testing.T, nt notificationv1.NotificationType) *notificationv1.NotificationEnvelope {
 	t.Helper()
 	e := validEnvelope(t)
@@ -569,10 +571,12 @@ func repairModerationEnvelope(t *testing.T, nt notificationv1.NotificationType) 
 
 // TestPublishDirective_RepairModerationIsPersonAddressedOnThePair pins the two
 // review-moderation repair types (170, 171) through the whole door: they are
-// addressed to a PERSON rather than a tenant — person-addressed per rule N of
-// 08.10.2026; repair deal notices not migrated yet — and the REPAIR_ name guard
-// still holds them to exactly [IN_APP, PUSH]. The pair publishes; IN_APP alone
-// is refused before the outbox write.
+// addressed to a PERSON rather than a tenant — an exception to repair's D28 team
+// addressing, which still governs repair's non-deal notices (rule N of
+// 08.10.2026 covers deal notices only, plus repair's open-posting notices since
+// 09.10.2026) — and the REPAIR_ name guard still holds them to exactly
+// [IN_APP, PUSH]. The pair publishes; IN_APP alone is refused before the outbox
+// write.
 func TestPublishDirective_RepairModerationIsPersonAddressedOnThePair(t *testing.T) {
 	for _, nt := range []notificationv1.NotificationType{
 		notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_HIDDEN,

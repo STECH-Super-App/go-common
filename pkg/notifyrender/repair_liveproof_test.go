@@ -91,9 +91,12 @@ var repairBankTypes = []notificationv1.NotificationType{
 // repairModerationTypes is the third repair family and the only one neither
 // order-service nor sale-service produces: review-service's two moderation
 // notices (enum values 170–171), the repair twins of parts' 120 and 131. They go
-// to a PERSON — the review's author, the complaint's filer: person-addressed per
-// rule N of 08.10.2026; repair deal notices not migrated yet, so for now they are
-// the only REPAIR_* types that are. They still take exactly [IN_APP, PUSH].
+// to a PERSON — the review's author, the complaint's filer: an exception to
+// repair's D28 team addressing, which still governs repair's non-deal notices.
+// Rule N of 08.10.2026 covers deal notices only (plus, since 09.10.2026,
+// repair's open-posting notices) and is not built for repair yet, so for now
+// these two are the only REPAIR_* types that are person-addressed. They still
+// take exactly [IN_APP, PUSH].
 //
 // 171 has no required param — its one field, `outcome`, is read as two optional
 // flags — so it could not sit in repairDealTypes, whose completeness test demands
