@@ -56,7 +56,6 @@ const idSuffix = "_id"
 //     own SMS/email path, not by a template;
 //   - read by nothing: on the wire, empty by contract or simply never phrased.
 var notTemplated = map[string]string{
-	"SendDeliveryRequestCancelled.cancel_reason":            "optional, late-cancellation only, and not templated — the text names cancelled_by and request_no",
 	"SendInviteSms.phone":                                   "the SMS recipient address; notification-service's SMS path reads it, the template does not",
 	"SendMemberRoleChanged.new_role":                        "a routing discriminator — the producer picks the TYPE from it (member_role_changed_manager vs _operator); the text names only the tenant",
 	"SendPartsFavoritePriceDropped.currency":                "no parts arm reads currency (DECISIONS §30.2); the «₽» in the baseline is a rendering, not data",
