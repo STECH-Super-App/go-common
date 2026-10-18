@@ -1128,12 +1128,15 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 		{
 			name: "request_rejected",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_REJECTED,
+			// The carrier's Д-18 reject code reaches the text as its clause, never
+			// as the raw token (TESTIROVANIE-254).
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestRejected{
-					SendDeliveryRequestRejected: &notificationv1.SendDeliveryRequestRejected{},
+					SendDeliveryRequestRejected: &notificationv1.SendDeliveryRequestRejected{RejectReason: "NO_FREE_MACHINE"},
 				},
 			},
-			want: map[string]string{},
+			want:   map[string]string{"reject_reason": "NO_FREE_MACHINE"},
+			wantIn: []string{"The carrier declined your request. Reason: no equipment is free on this date."},
 		},
 		{
 			name: "counter_offer_sent",
@@ -1178,17 +1181,18 @@ func TestExtractAndRender_DeliveryLifecycle(t *testing.T) {
 		{
 			name: "request_cancelled",
 			nt:   notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED,
-			// CancelReason is set to prove it does NOT leak into params (it is
-			// neither templated nor declared); RequestNo does reach the text.
+			// The cancelling side's Д-18 code is templated since TESTIROVANIE-254
+			// (owner decision of 16.10.2026): it reaches the text as its «Reason:»
+			// clause, beside the side noun and the number.
 			env: &notificationv1.NotificationEnvelope{
 				Payload: &notificationv1.NotificationEnvelope_SendDeliveryRequestCancelled{
 					SendDeliveryRequestCancelled: &notificationv1.SendDeliveryRequestCancelled{
-						CancelledBy: "customer", CancelReason: "changed plans", RequestNo: "R-002",
+						CancelledBy: "customer", CancelReason: "CHANGED_PLANS", RequestNo: "R-002",
 					},
 				},
 			},
-			want:   map[string]string{"cancelled_by": "customer", "request_no": "R-002"},
-			wantIn: []string{"The customer cancelled request #R-002."},
+			want:   map[string]string{"cancelled_by": "customer", "cancel_reason": "CHANGED_PLANS", "request_no": "R-002"},
+			wantIn: []string{"The customer cancelled request #R-002. Reason: plans changed."},
 		},
 		{
 			name: "loading_today",
@@ -1645,7 +1649,7 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	} {
 		declared[nt] = true
 	}
-	// ремонт, bank side (master §3.3 rows 23–30) — FIVE of the eight
+	// ремонт, bank side (master §3.3 rows 23–30) — SIX of the eight
 	// posting/response types carry an optional tier, and each is named here for
 	// the same reason the blocks above are:
 	//   • distance_km on MATCHING_POSTING — the «~N km» decoration on Р26's
@@ -1659,7 +1663,33 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	//     envelope, carries none, so the suffix is guarded and collapses on "".
 	//     The three responder-addressed rows and MATCHING_POSTING deliberately
 	//     declare no posting_no — §5 R7 keeps a seller's texts unnumbered.
+	//   • reason on POSTING_CANCELLED — the customer's cancel reason, a LABEL
+	//     snapshot printed as-is (TESTIROVANIE-254, owner decision of
+	//     16.10.2026: every cancel notice names its reason). Optional because
+	//     an event produced before the field existed carries none, and the
+	//     sale-service producer did not fill it when the field was minted; a
+	//     required reason would roll the customer's cancel back.
 	declared[notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING] = true
+	declared[notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED] = true
+	if got, want := OptionalParams(notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED),
+		[]string{"reason"}; !slices.Equal(got, want) {
+		t.Errorf("REPAIR_POSTING_CANCELLED optional params = %v, want %v", got, want)
+	}
+	// delivery — the carrier's reject names its Д-18 reject code
+	// (TESTIROVANIE-254). reject_reason is a discriminator read only inside
+	// {{if eq …}}, so OPTIONAL is the only tier it can hold, and "" on an older
+	// event renders today's sentence. DELIVERY_REQUEST_CANCELLED's cancel_reason
+	// rides on the deliveryRequestNoCases entry above; both sets are pinned here
+	// so a third delivery selector cannot join silently.
+	declared[notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_REJECTED] = true
+	for nt, want := range map[notificationv1.NotificationType][]string{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_REJECTED:  {"reject_reason"},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED: {"cancelled_by", "cancel_reason", "request_no"},
+	} {
+		if got := OptionalParams(nt); !slices.Equal(got, want) {
+			t.Errorf("%v optional params = %v, want %v", nt, got, want)
+		}
+	}
 	// rent — ORDER_CANCELLED's cancelled_by («by the renter» / «by the owner»,
 	// issue #35), decline_reason (the counter-offer decline's clause, issue #62)
 	// and cancel_reason (the human cancel's closed-list clause, #58). All three

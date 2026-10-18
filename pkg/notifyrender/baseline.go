@@ -33,7 +33,7 @@ var BaselineEN = map[string]string{
 	"delivery_receipt_reminder.title":                    "Confirm receipt",
 	"delivery_request_accepted.body":                     "The carrier accepted your request. Final price: {{.final_price}} {{.currency}}.",
 	"delivery_request_accepted.title":                    "Request accepted",
-	"delivery_request_cancelled.body":                    "{{if eq .cancelled_by \"customer\"}}The customer cancelled {{if .request_no}}request #{{.request_no}}{{else}}the request{{end}}.{{else if eq .cancelled_by \"carrier\"}}The carrier cancelled {{if .request_no}}request #{{.request_no}}{{else}}the request{{end}}.{{else}}{{if .request_no}}Request #{{.request_no}}{{else}}The request{{end}} was cancelled.{{end}}",
+	"delivery_request_cancelled.body":                    "{{if eq .cancelled_by \"customer\"}}The customer cancelled {{if .request_no}}request #{{.request_no}}{{else}}the request{{end}}.{{else if eq .cancelled_by \"carrier\"}}The carrier cancelled {{if .request_no}}request #{{.request_no}}{{else}}the request{{end}}.{{else}}{{if .request_no}}Request #{{.request_no}}{{else}}The request{{end}} was cancelled.{{end}}{{if eq .cancel_reason \"CHANGED_PLANS\"}} Reason: plans changed.{{else if eq .cancel_reason \"FOUND_ANOTHER_CARRIER\"}} Reason: another carrier was found.{{else if eq .cancel_reason \"WRONG_DETAILS\"}} Reason: the request details were wrong.{{else if eq .cancel_reason \"MACHINE_UNAVAILABLE\"}} Reason: the equipment became unavailable.{{else if eq .cancel_reason \"MACHINE_FAULTY\"}} Reason: the equipment is faulty.{{else if eq .cancel_reason \"CUSTOMER_UNREACHABLE\"}} Reason: the customer cannot be reached.{{else if eq .cancel_reason \"DELIVERY_PROBLEM\"}} Reason: a problem with the delivery.{{else if eq .cancel_reason \"OTHER\"}} Reason: another reason — see the request card.{{end}}",
 	"delivery_request_cancelled.title":                   "Request cancelled",
 	"delivery_request_completed.body":                    "The request is complete — receipt confirmed.",
 	"delivery_request_completed.title":                   "Request completed",
@@ -41,7 +41,7 @@ var BaselineEN = map[string]string{
 	"delivery_request_created.title":                     "New delivery request",
 	"delivery_request_expired.body":                      "{{if .request_no}}Request #{{.request_no}}{{else}}The request{{end}} expired — the loading date has passed. You can repeat the request.",
 	"delivery_request_expired.title":                     "Request expired",
-	"delivery_request_rejected.body":                     "The carrier declined your request.",
+	"delivery_request_rejected.body":                     "The carrier declined your request.{{if eq .reject_reason \"NOT_ON_ROUTE\"}} Reason: not on the carrier's route.{{else if eq .reject_reason \"MACHINE_NOT_SUITABLE\"}} Reason: the equipment is not suitable.{{else if eq .reject_reason \"NO_FREE_MACHINE\"}} Reason: no equipment is free on this date.{{else if eq .reject_reason \"OTHER\"}} Reason: another reason — see the request card.{{end}}",
 	"delivery_request_rejected.title":                    "Request declined",
 	"delivery_review_invite.body":                        "Rate the carrier{{if .request_no}} for request #{{.request_no}}{{end}} — you have 14 days.",
 	"delivery_review_invite.title":                       "Rate the carrier",
@@ -396,8 +396,12 @@ var BaselineEN = map[string]string{
 	// OPEN posting whose ACTIVE response the sweep withdrew.
 	"repair_posting_expired_responder.title": "Request expired",
 	"repair_posting_expired_responder.body":  "The {{.machinery}} request expired — your response is no longer active.",
-	"repair_posting_cancelled.title":         "The customer cancelled the request",
-	"repair_posting_cancelled.body":          "Your response to the {{.machinery}} request is closed as well. Other open requests are waiting in the request bank.",
+	// The customer's reason leads the body, right under the title that says who
+	// cancelled, so «Reason:» can only be read as the cancel's. It is a label
+	// snapshot printed as-is and OPTIONAL (TESTIROVANIE-254): without one the
+	// body is the text that shipped before the field existed, byte for byte.
+	"repair_posting_cancelled.title": "The customer cancelled the request",
+	"repair_posting_cancelled.body":  "{{if .reason}}Reason: {{.reason}}. {{end}}Your response to the {{.machinery}} request is closed as well. Other open requests are waiting in the request bank.",
 	// ── Отзывы: модерация (review-service), 166–171 ──
 	//
 	// The rent, delivery and repair twins of parts' 120 and 131, composed from the

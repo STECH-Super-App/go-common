@@ -1016,17 +1016,37 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	// above (issue #24). Its sentence is governed WHOLE by the token, so — like
 	// repair_request_cancelled — it carries a neutral default arm that names no
 	// side; two explicit arms alone would render an empty body for an unknown
-	// value. cancel_reason is declared on the wire but no producer fills it (the
-	// late-cancel push rider is not built; the code and comment live on the
-	// request card), so it is neither templated nor declared here, mirroring
-	// admin_transfer_rejected's reason.
+	// value.
+	//
+	// The two human delivery endings name their reason (owner decision of
+	// 16.10.2026, TESTIROVANIE-254 — it superseded the 05.10.2026 decision that
+	// the push carries none). Both reasons are Д-18 CODES, discriminators read
+	// only inside {{if eq …}} and never printed, so OPTIONAL is the only tier
+	// they can hold — and it is also the right one: an event produced before
+	// order-service populated them carries "", lights no arm, and renders the
+	// sentence that shipped before. Explicit arms only, no {{else}}: the reason
+	// APPENDS a clause, so an unknown code simply drops it.
+	//
+	//   - reject_reason on DELIVERY_REQUEST_REJECTED, the carrier's reject list:
+	//     NOT_ON_ROUTE | MACHINE_NOT_SUITABLE | NO_FREE_MACHINE | OTHER.
+	//   - cancel_reason on DELIVERY_REQUEST_CANCELLED, the cancelling side's
+	//     list — customer: CHANGED_PLANS | FOUND_ANOTHER_CARRIER | WRONG_DETAILS
+	//     | OTHER; carrier: MACHINE_UNAVAILABLE | MACHINE_FAULTY |
+	//     CUSTOMER_UNREACHABLE | OTHER; a late cancel by either side:
+	//     DELIVERY_PROBLEM (order-service internal/domain/delivery/cancel.go).
+	//     The two side lists share only OTHER, which means the same sentence in
+	//     both, so the clause needs no cancelled_by coupling.
+	//
+	// The comment the cancelling side typed is not carried — it is on the
+	// request card, which is what the OTHER arm points the reader at.
 	//
 	// DELIVERY_AUTO_CONFIRMED reaches BOTH sides, so its text carries no review
 	// call to action — the carrier cannot review the customer. The customer's
 	// invitation is DELIVERY_REVIEW_INVITE, emitted beside it on the 48 h
 	// auto-confirm exactly as on the human confirm (З-08, 06.10.2026).
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CREATED:      {"request_no"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED:    {"cancelled_by", "request_no"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_REJECTED:     {"reject_reason"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_CANCELLED:    {"cancelled_by", "cancel_reason", "request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LOADING_TODAY:        {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_EXPIRED:      {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_RECEIPT_REMINDER:     {"request_no"},
@@ -1220,12 +1240,22 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	// NOTIF-04).
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REVIEW_WINDOW_ENDING: {"deal_completed", "request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_PAIR_FORMED:          {"request_no"},
-	// `distance_km` is the only optional param on the bank side, and it goes
+	// `distance_km` is the bank side's only NUMERIC optional param, and it goes
 	// through countOrEmpty: a zero renders "" and collapses the clause, because
 	// "0" is a non-empty STRING and would light its own guard («~0 km»). The
 	// sentence without it — machinery plus work types — is already the whole
 	// offer, so the tilde-distance is decoration and may vanish.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_MATCHING_POSTING: {"distance_km"},
+	// `reason` on POSTING_CANCELLED is the LABEL snapshot of the customer's
+	// cancel reason, printed as-is like REPAIR_REQUEST_CANCELLED's (owner
+	// decision of 16.10.2026, TESTIROVANIE-254: every cancel notice names its
+	// reason). Unlike that one it is OPTIONAL, and must stay so until every
+	// producer fills it: sale-service's Repair module did not when the field was
+	// minted, an event produced before it carries none, and a REQUIRED reason
+	// would make notifyoutbox roll back the customer's own cancel. The baseline
+	// prepends «Reason: …» behind {{if .reason}}, so an empty value renders the
+	// sentence that shipped before.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED: {"reason"},
 	// `posting_no` — «Заявка #N», the customer's own posting number, on the four
 	// board directives addressed TO the customer (repair critique NOTIF-06). It
 	// is optional for delivery's Д-13 reason exactly: sale-service stamps the

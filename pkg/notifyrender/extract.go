@@ -356,8 +356,9 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	// for a directive emitted before numbering shipped, and the baseline renders
 	// it behind an {{if}} guard, so an empty value degrades to the plain sentence
 	// instead of a dangling "#". Surface it unconditionally — Render decides
-	// whether it reaches the text. The remaining payloads carry no fields at all
-	// and map to an empty map.
+	// whether it reaches the text. The two human endings also carry their Д-18
+	// reason code (reject_reason, cancel_reason). The remaining payloads carry
+	// no fields at all and map to an empty map.
 	case *notificationv1.NotificationEnvelope_SendDeliveryRequestCreated:
 		return map[string]string{
 			"request_no": p.SendDeliveryRequestCreated.GetRequestNo(),
@@ -369,8 +370,16 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"final_price": p.SendDeliveryRequestAccepted.GetFinalPrice(),
 			"currency":    p.SendDeliveryRequestAccepted.GetCurrency(),
 		}, nil
+	// reject_reason is the carrier's Д-18 reject CODE (NOT_ON_ROUTE |
+	// MACHINE_NOT_SUITABLE | NO_FREE_MACHINE | OTHER), a closed token the
+	// template branches on and never prints (catalog optional tier). Every
+	// cancel or reject notice names its reason (owner decision of 16.10.2026,
+	// TESTIROVANIE-254). It is "" on every event produced before the field
+	// existed, and then no arm lights and the sentence is today's.
 	case *notificationv1.NotificationEnvelope_SendDeliveryRequestRejected:
-		return map[string]string{}, nil
+		return map[string]string{
+			"reject_reason": p.SendDeliveryRequestRejected.GetRejectReason(),
+		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryCounterOfferSent:
 		return map[string]string{}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryCounterOfferAccepted:
@@ -380,14 +389,18 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	case *notificationv1.NotificationEnvelope_SendDeliveryCounterOfferWithdrawn:
 		return map[string]string{}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryRequestCancelled:
-		// cancel_reason is optional (late-cancellation only) and not templated,
-		// mirroring admin_transfer_rejected's optional reason — surface only
-		// cancelled_by and request_no, the two declared (optional) params.
-		// cancelled_by is a closed token ("customer" | "carrier") that picks the
-		// subject noun; the template never prints it.
+		// cancelled_by ("customer" | "carrier") picks the subject noun and
+		// cancel_reason — the cancelling side's Д-18 CODE — picks the «Reason:»
+		// clause. Both are closed tokens the template branches on and never
+		// prints (catalog optional tier). cancel_reason used to stay off this map
+		// because no producer filled it; the owner decision of 16.10.2026
+		// (TESTIROVANIE-254) makes every cancel notice name its reason, so it is
+		// surfaced unconditionally — "" from a producer that predates the
+		// decision lights no arm.
 		return map[string]string{
-			"cancelled_by": p.SendDeliveryRequestCancelled.GetCancelledBy(),
-			"request_no":   p.SendDeliveryRequestCancelled.GetRequestNo(),
+			"cancelled_by":  p.SendDeliveryRequestCancelled.GetCancelledBy(),
+			"cancel_reason": p.SendDeliveryRequestCancelled.GetCancelReason(),
+			"request_no":    p.SendDeliveryRequestCancelled.GetRequestNo(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendDeliveryLoadingToday:
 		return map[string]string{
@@ -1178,9 +1191,14 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"machinery": p.SendRepairPostingExpiredResponder.GetMachinery(),
 		}, nil
+	// `reason` is the LABEL snapshot of the customer's cancel reason, printed
+	// as-is — the same shape as SendRepairRequestCancelled.reason. It is
+	// OPTIONAL: an event produced before the field existed carries none, and the
+	// template then renders the sentence that shipped before it.
 	case *notificationv1.NotificationEnvelope_SendRepairPostingCancelled:
 		return map[string]string{
 			"machinery": p.SendRepairPostingCancelled.GetMachinery(),
+			"reason":    p.SendRepairPostingCancelled.GetReason(),
 		}, nil
 	default:
 		// A payload IS set (the nil case is caught by the guard at the top) but no
