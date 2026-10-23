@@ -170,7 +170,8 @@ func TestExtractParamsCompletenessCensus(t *testing.T) {
 	//      send_delivery_ and send_repair_review_hidden / _complaint_resolved.
 	// 182: send_parts_shop_return_terms_cleared, 192 (Р44, owner decision of
 	//      08.09.2026).
-	const want = 182
+	// 184: send_delivery_listing_blocked / _restored, 193–194 (В-41(в), OTDELRAZRABOTKI-731).
+	const want = 184
 	if got := oneof.Fields().Len(); got != want {
 		names := make([]string, 0, oneof.Fields().Len())
 		for i := 0; i < oneof.Fields().Len(); i++ {

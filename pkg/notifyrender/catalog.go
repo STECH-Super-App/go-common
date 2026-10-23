@@ -81,6 +81,16 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE:           "delivery_review_invite",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING:    "delivery_review_window_ending",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED:       "delivery_cascade_cancelled",
+	// ── the carrier LISTING's В-41(в) pair (173, 174) ── NOT order-service's: 47–64
+	// above are the delivery REQUEST family; these two are sale-service's Delivery
+	// module, written from its organisation.events fold in the transaction that
+	// moves the carrier's one listing (Д-01) into or out of «Заблокировано» (Д-09,
+	// В-39/В-41). Tenant-addressed to the carrier's team with role filter
+	// [ADMIN, MANAGER] — owner decision of 23.10.2026, parity with parts' Р51 pair
+	// 124/125 — on [IN_APP, PUSH], deep-linked to DEL-12 (DEEP_LINK_SCREEN_MY_LISTINGS,
+	// {listing_id}). notification-service reserves both («не отключается»).
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LISTING_BLOCKED:  "delivery_listing_blocked",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LISTING_RESTORED: "delivery_listing_restored",
 	// organisation change-request moderation (NotificationType 65-68): the three
 	// submitter-facing outcomes plus the admin-facing contacts-changed notice.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_APPROVED:            "organisation_change_approved",
@@ -525,7 +535,8 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	// The
 	// human-facing request number rides on 9 of the 18 delivery payloads and is
 	// declared in optionalParams instead — see the note there for why it must not
-	// be a required param.
+	// be a required param. The carrier listing's pair (173, 174) needs none
+	// either: its one param is a discriminator — see optionalParams.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REQUEST_ACCEPTED: {
 		// final_price holds a DISPLAY-formatted money string, exactly as
 		// amount / old_price do today: notifyrender interpolates strings only.
@@ -1054,6 +1065,22 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_INVITE:        {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_REVIEW_WINDOW_ENDING: {"request_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_CASCADE_CANCELLED:    {"request_no"},
+	// The carrier listing's В-41(в) pair (173, 174). Each carries the listing status
+	// its block interrupted — the restore returns the listing to exactly that status
+	// (В-41(а)) — in delivery's own lower-case vocabulary: moderation | active |
+	// rejected | paused. It is a DISCRIMINATOR, read only inside
+	// {{if eq … "active"}} and never printed, so OPTIONAL is the only tier it can
+	// hold (a required param must appear as a literal placeholder).
+	//
+	// ONE explicit arm plus {{else}}, on purpose — the REVIEW_WINDOW_ENDING
+	// exception below, not the paired-flag rule. The token governs the WHOLE
+	// sentence, so arms alone would render an empty body for an absent value; and
+	// the {{else}} is the NEUTRAL edition («…returns to its previous status»), which
+	// is true under every value the wire can carry, "active" included. Only the
+	// "active" arm asserts a catalogue change, and only the wire's own "active"
+	// lights it.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LISTING_BLOCKED:  {"interrupted_status"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LISTING_RESTORED: {"restored_status"},
 
 	// ─── parts ───
 	//

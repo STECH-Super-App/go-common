@@ -1690,6 +1690,22 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 			t.Errorf("%v optional params = %v, want %v", nt, got, want)
 		}
 	}
+	// delivery — the carrier LISTING's В-41(в) pair (173, 174, OTDELRAZRABOTKI-731),
+	// sale-service's Delivery module and not the request family above. Each
+	// carries the listing status its block interrupted (moderation | active |
+	// rejected | paused), a discriminator read only inside
+	// {{if eq … "active"}} and never printed, so OPTIONAL is the only tier it can
+	// hold; "" or any status other than "active" renders the neutral edition.
+	// Both sets are pinned so a second param cannot join either type silently.
+	for nt, want := range map[notificationv1.NotificationType][]string{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LISTING_BLOCKED:  {"interrupted_status"},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_DELIVERY_LISTING_RESTORED: {"restored_status"},
+	} {
+		declared[nt] = true
+		if got := OptionalParams(nt); !slices.Equal(got, want) {
+			t.Errorf("%v optional params = %v, want %v", nt, got, want)
+		}
+	}
 	// rent — ORDER_CANCELLED's cancelled_by («by the renter» / «by the owner»,
 	// issue #35), decline_reason (the counter-offer decline's clause, issue #62)
 	// and cancel_reason (the human cancel's closed-list clause, #58). All three
