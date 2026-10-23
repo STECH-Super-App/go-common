@@ -437,6 +437,18 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{
 			"request_no": p.SendDeliveryCascadeCancelled.GetRequestNo(),
 		}, nil
+	// The carrier listing's В-41(в) pair (173, 174), sale-service's Delivery module.
+	// Each carries the listing status its block interrupted, a lower-case token the
+	// template compares against "active" and never prints (catalog optional tier).
+	// Surfaced unconditionally: "" lights no arm and renders the neutral edition.
+	case *notificationv1.NotificationEnvelope_SendDeliveryListingBlocked:
+		return map[string]string{
+			"interrupted_status": p.SendDeliveryListingBlocked.GetInterruptedStatus(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendDeliveryListingRestored:
+		return map[string]string{
+			"restored_status": p.SendDeliveryListingRestored.GetRestoredStatus(),
+		}, nil
 
 	// ─── Маркетплейс запчастей (parts) ───
 	//
