@@ -32,7 +32,7 @@ func ParseInt32(raw string, lo, hi int32) (int32, *Failure)              // deci
 func ParseInt64(raw string, lo, hi int64) (int64, *Failure)
 func ParsePage(rawNumber, rawSize string, defaultSize, maxSize int32) (Page, *Failure)
 func MaxItems(n, maxItems int) *Failure
-func Phone(raw string) (string, *Failure)                                 // '+' required, libphonenumber IsValidNumber, E.164 out
+func Phone(raw string) (string, *Failure)                                 // '+' required, no letters, libphonenumber IsValidNumber, E.164 out
 func Email(raw string, maxRunes int) (string, *Failure)                   // domain lower-cased, no DNS/IDN
 func Collect(fields ...*errors.FieldError) []errors.FieldError            // drops nils; nil when nothing failed
 func GRPC(fields ...errors.FieldError) error                              // InvalidArgument + errdetails.BadRequest; nil for no fields
@@ -258,16 +258,39 @@ Common HTTP middleware.
 
 Observability trio — wire in this order (`Tracing` → `RequestLogger` → `Metrics`), so the logger sees the span and the histogram measures the handler:
 - `Tracing()`: server span per request, named `METHOD route-template` (`unmatched` when the router matched nothing), extracts the inbound W3C `traceparent`, records `http.status_code`. Costs nothing when `tracing.Init` found no endpoint.
-- `RequestLogger(base, opts...)`: builds the request-scoped child logger (`request_id` from `X-Request-ID`, plus `trace_id`/`span_id` when a span is active), stores it on `c.Request().Context()`, and emits **exactly one** INFO access line per request (`route`, `method`, `status`, `duration_ms`). `WithUpstream(fn)` adds the gateway-only `upstream` field. It **replaces** `Logger` at call sites — running both doubles log volume.
+- `RequestLogger(base, opts...)`: builds the request-scoped child logger (`request_id`, plus `trace_id`/`span_id` when a span is active), stores it on `c.Request().Context()`, and emits **exactly one** INFO access line per request (`route`, `method`, `status`, `duration_ms`). `WithUpstream(fn)` adds the gateway-only `upstream` field. It **replaces** `Logger` at call sites — running both doubles log volume.
+  - `request_id` comes from the request **context** first (`requestid.FromContext`, where `requestid.Middleware` parks a value it validated or minted, and where `requestid.UnaryServerInterceptor` parks one that arrived over gRPC) and from the `X-Request-ID` header otherwise. It **never mints one itself** — the id it logs has to be the id the caller can see, and only `requestid.Middleware` puts a minted value on the response and on outbound calls. A service that wires `RequestLogger` alone behaves exactly as it always has: the raw header, logged as it arrived, and no field at all when the header is absent.
 - `Metrics()`: observes `http_request_duration_seconds{method, route, status_class}`. Native Echo shape, never `WrapMiddleware`: `c.Path()` exists only on the Echo context, and wrapping `http.ResponseWriter` would drop `http.Flusher` and break the SSE endpoints.
 - `MetricsUnaryServerInterceptor()`: observes `grpc_server_handling_seconds{grpc_service, grpc_method, grpc_code}`. Attach with `grpc.ChainUnaryInterceptor`, never `grpc.UnaryInterceptor` (grpc-go allows the latter only once per server).
 
 All three skip the operational routes `/metrics`, `/health`, `/livez`, `/readyz`, and clamp an unmatched route to `unmatched` — otherwise probe traffic and vulnerability scanners mint series and log lines forever.
 
 - `Logger`: **deprecated** — logs HTTP requests with no `request_id`, so its lines cannot be correlated across the gateway hop. Use `RequestLogger`.
+- `HeaderRequestID`: the correlation header, `X-Request-ID`. An **alias for `requestid.Header`**, which is the single definition — the spelling cannot drift between the middleware that reads it and the package that stamps it. Both names stay exported; this one has importers across the fleet (api-gateway binds its stamping header to it at compile time).
 - `CORS`: Handles Cross-Origin Resource Sharing.
 - `AuthMiddleware`, `OptionalAuthMiddleware`, `RegistrationAuthMiddleware`, `AdminMiddleware`, `ClientMiddleware`: emit `COMMON_*` reasons via `pkg/errors` + `pkg/response` on rejection.
 - `ParseUUIDParam(c, paramName, reason)`: validates an Echo path parameter with `input.UUID` — only the 36-character hyphenated form (any case) is accepted; braces, `urn:uuid:` and bare 32-hex are refused — and returns it **lower-cased**. On failure returns a 400 `*AppError` with the supplied reason, a message derived from `paramName`, and the `*input.Failure` as its cause. Stops malformed UUIDs at the handler boundary so they never reach the repository layer (where Postgres would reject them with SQLSTATE 22P02 and leak as a 500).
+
+### `pkg/requestid`
+The fleet's request-id standard: one header spelling, one validation rule, one context key, one place that mints an id, and the helpers that carry it onward. It sits beside `pkg/middleware` rather than inside it so `pkg/middleware` can import it (`RequestLogger` reads the context value) without a cycle.
+
+A request id is a **diagnostic, not a credential**. Nothing here can fail a request: an absent, over-long or malformed inbound value is **replaced, never refused**, so the package returns no error anywhere and declares no `pkg/errors` Reason.
+
+- `Header` = `X-Request-ID`, `MetadataKey` = `x-request-id` (the gRPC wire form, same relation `LocaleMetadataKey` has to `LocaleHeader`), `MaxLength` = 128.
+- `Valid(id)`: 1–128 characters of `[A-Za-z0-9-]` — byte for byte api-gateway's long-standing `^[a-zA-Z0-9\-]{1,128}$`, so adopting this package changes no id the fleet already accepts (a test cross-checks the two). The character set is narrow because the value is written into log lines, echoed into a response header and forwarded onward: a newline or NUL in it is noise in three places and at worst a forged log line, and an unbounded length is a log-volume hazard.
+- `New()`: a fresh UUIDv4, what the gateway has always stamped.
+- `IntoContext(ctx, id)` / `FromContext(ctx) string`: the carrier. Every **ingress** validates (`Middleware`, `FromGRPCContext`) because that is where bytes this process did not write arrive; `IntoContext` does not, being the low-level primitive where a silent drop would hide a caller's mistake. **Egress forwards whatever is parked** — the receiving service validates on arrival, which is the only place with standing to.
+- `Middleware(opts...)`: takes a `Valid` inbound id, else mints one and **re-stamps it onto the request header**, echoes it on the response, and parks it on `c.Request().Context()`. `WithoutGeneration()` keeps api-gateway as the single stamping point (nothing parked, nothing echoed, for an absent **or** malformed value); `WithoutResponseEcho()` keeps it off the response.
+- `Inject(ctx, http.Header)`: forwards the parked id on an outbound REST call — what keeps one request a single correlated trail across a hop to another stack (sale-service's `EnsureRequestId` reads it on arrival).
+- `FromGRPCContext(ctx)` / `ClientInterceptor()` / `UnaryServerInterceptor()`: the same value over gRPC metadata. Attach the client one with `grpc.WithChainUnaryInterceptor` beside `middleware.LocaleClientInterceptor`, the server one with `grpc.ChainUnaryInterceptor` beside `middleware.MetricsUnaryServerInterceptor`. The server interceptor parks the id for readers and forwards; it does not touch logging, since this library has no gRPC equivalent of `RequestLogger`.
+
+Wire order: `Tracing()` → `requestid.Middleware()` → `RequestLogger` → `Metrics()`. The logger reads the context the moment it runs, so an id parked after it never reaches the access line.
+
+⚠ **This is not `echomiddleware.RequestID`, and must not be replaced by it.** That one writes only the response header and never touches `req.Header`, so a value it mints appears in no log line, no span and no downstream service: someone who copies it out of a response and greps Loki finds nothing and concludes the log pipeline is broken. The re-stamp is the whole difference, and it is what makes minting here safe rather than a decoy — generation only ever fires where no id arrived (a dev tool, a probe, a backend caller that forgot to forward), and there it replaces today's outcome, which is no `request_id` anywhere.
+
+`request_id` is a log **field**, never a Loki label — Loki carries `service` and `level` only, and an id promoted to a label would mint one stream per request.
+
+⚠ **sale-service's PHP twin is slightly wider.** `app/Http/Middleware/EnsureRequestId.php` has had the same shape all along — same 128 cap, validate-or-mint-UUIDv4, re-stamp the request header, echo on the response, `request_id` into the log context — but its rule is `^[A-Za-z0-9._\-]+$`, so it also accepts `.` and `_`. The divergence predates this package (it is api-gateway vs sale-service, not Go vs Go) and is inert in practice: the gateway is the stamping point and mints UUIDs, so no id carrying a dot ever reaches either stack. `Valid` keeps the narrower Go rule rather than widening it, because widening would start preserving ids the gateway has always replaced. Which rule wins fleet-wide is an owner decision, not a silent one.
 
 ### `pkg/metrics`
 Prometheus instruments and exposition. `Registry` is the **only** registry anything serves — never `promauto` or the prometheus default registerer, which nothing scrapes.

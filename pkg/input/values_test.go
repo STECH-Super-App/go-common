@@ -183,6 +183,53 @@ func TestPhone(t *testing.T) {
 	}
 }
 
+// TestPhoneLetters pins the refusal of every letter, whatever its position.
+// libphonenumber's normalize mutates letters instead of rejecting them: three
+// or more are mapped onto their keypad digits (ABC -> 222), fewer are stripped
+// outright, so without this guard Phone stored a number nobody typed —
+// "+7916ABC4567" came back as "+79162224567" and "+79161234567A" as
+// "+79161234567" (TESTIROVANIE-233 / go-common#126). The last four rows are
+// the regression anchors: a valid number must still pass unchanged, and an
+// extension must still be refused by its own check — including the letter-free
+// spellings ("#5", ",5", ";5"), which never reach the letter guard.
+func TestPhoneLetters(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string // "" means refused with ReasonPhoneInvalid
+	}{
+		{"letters only", "+ABCDEFGHIJ", ""},
+		{"vanity number, every digit mapped", "+1800FLOWERS", ""},
+		{"exactly three letters, the mapping threshold", "+7916ABC4567", ""},
+		{"two letters, stripped not mapped", "+79161234567AB", ""},
+		{"one letter appended", "+79161234567A", ""},
+		{"one letter embedded", "+7916123456A7", ""},
+		{"one letter in an otherwise formatted number", "+7 (916) 123-45-67 A", ""},
+		{"non-ASCII letter", "+79161234567я", ""},
+		{"valid number unchanged", "+79991234567", "+79991234567"},
+		{"valid formatted number unchanged", "  +7 (999) 123-45-67 ", "+79991234567"},
+		{"extension spelled with letters", "+79991234567 ext. 5", ""},
+		{"extension spelled without letters", "+79991234567#5", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, f := input.Phone(tc.raw)
+			if tc.want == "" {
+				if f == nil || f.Reason != input.ReasonPhoneInvalid {
+					t.Fatalf("Phone(%q) = (%q, %v), want refusal %s", tc.raw, got, f, input.ReasonPhoneInvalid)
+				}
+				if got != "" {
+					t.Fatalf("Phone(%q) returned %q beside the refusal, want empty", tc.raw, got)
+				}
+				return
+			}
+			if f != nil || got != tc.want {
+				t.Fatalf("Phone(%q) = (%q, %v), want %q", tc.raw, got, f, tc.want)
+			}
+		})
+	}
+}
+
 func TestEmail(t *testing.T) {
 	ok := map[string]string{
 		"user@example.com":            "user@example.com",
