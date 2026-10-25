@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -9,13 +10,18 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/STECH-Super-App/go-common/pkg/logger"
+	"github.com/STECH-Super-App/go-common/pkg/requestid"
 )
 
 // HeaderRequestID is the correlation header the API gateway stamps on every
 // inbound request (keeping a syntactically valid inbound value, generating a
 // UUID otherwise) and re-stamps onto the proxied request so it survives the
 // hop. It is the spine every service's log lines hang off.
-const HeaderRequestID = "X-Request-ID"
+//
+// It is an alias for requestid.Header, which is now the single definition — the
+// spelling cannot drift between the middleware that reads it and the package
+// that stamps it. Both names stay; this one has importers across the fleet.
+const HeaderRequestID = requestid.Header
 
 // accessLogMessage is the msg field of the one access line per request. Kept
 // stable because operators grep for it.
@@ -56,9 +62,19 @@ func WithUpstream(fn func(c echo.Context) string) RequestLoggerOption {
 //
 // Wire it AFTER Tracing() in the chain, so the span it reads already exists.
 //
-// request_id is attached only when the header is present. The gateway is the
-// single stamping point by design — minting a second id per service would
-// produce a correlation spine that silently disagrees with itself.
+// request_id is read from the request context first (where
+// requestid.Middleware parks it, having validated or minted it) and from the
+// header otherwise, and is attached only when one of the two yields a value.
+// This middleware never mints one itself: the id it logs has to be the id the
+// caller can see, and only requestid.Middleware puts a minted value on the
+// response and on outbound calls. A service that wants an id on its direct-call
+// lines wires that middleware ahead of this one.
+//
+// The header value is logged as it arrived, unvalidated — zap's JSON encoder
+// escapes it, so an odd value is noise in one field and nothing more, and six
+// services have logged it this way since the middleware shipped. Validation is
+// requestid.Middleware's job, where it also governs what gets echoed and
+// forwarded.
 func RequestLogger(base *zap.Logger, opts ...RequestLoggerOption) echo.MiddlewareFunc {
 	cfg := &requestLoggerConfig{}
 	for _, opt := range opts {
@@ -72,7 +88,7 @@ func RequestLogger(base *zap.Logger, opts ...RequestLoggerOption) echo.Middlewar
 			}
 
 			req := c.Request()
-			reqLogger := childLogger(req.Context(), base, req.Header.Get(HeaderRequestID))
+			reqLogger := childLogger(req.Context(), base, resolveRequestID(req))
 
 			c.SetRequest(req.WithContext(logger.IntoContext(req.Context(), reqLogger)))
 
@@ -95,6 +111,22 @@ func RequestLogger(base *zap.Logger, opts ...RequestLoggerOption) echo.Middlewar
 			return err
 		}
 	}
+}
+
+// resolveRequestID returns the id to log for this request: the one parked on
+// the context, else the raw inbound header.
+//
+// The context wins because requestid.Middleware may have minted or rejected a
+// value, and that decision is the one the caller, the response and every
+// outbound call share. The header fallback is what keeps every service that
+// wires RequestLogger alone behaving exactly as it did before this package
+// existed. A gRPC-side id (requestid.UnaryServerInterceptor) reaches this path
+// the same way, which no header read could.
+func resolveRequestID(req *http.Request) string {
+	if id := requestid.FromContext(req.Context()); id != "" {
+		return id
+	}
+	return req.Header.Get(requestid.Header)
 }
 
 // childLogger derives the request-scoped logger. A nil base falls back to the

@@ -15,7 +15,9 @@ import (
 //
 // Also refused, because E.164 cannot carry them and the stored value would
 // silently differ from what was typed: invalid UTF-8, any control or format
-// character inside the number, and an extension ("+7 999 123 45 67 ext. 5").
+// character inside the number, any letter (libphonenumber does not reject
+// letters — it maps three or more onto their keypad digits and strips fewer),
+// and an extension ("+7 999 123 45 67 ext. 5").
 // Failure → COMMON_PHONE_INVALID. Stricter country rules (e.g. organisation's
 // +7-only) stay in the calling domain, on top of the returned value.
 func Phone(raw string) (string, *Failure) {
@@ -23,7 +25,7 @@ func Phone(raw string) (string, *Failure) {
 		return "", fail(ReasonPhoneInvalid, nil)
 	}
 	v := trimEdges(raw)
-	if !strings.HasPrefix(v, "+") || strings.ContainsFunc(v, isControlOrFormat) {
+	if !strings.HasPrefix(v, "+") || strings.ContainsFunc(v, isRejectedPhoneRune) {
 		return "", fail(ReasonPhoneInvalid, nil)
 	}
 	num, err := phonenumbers.Parse(v, "")
@@ -85,6 +87,16 @@ func validEmailDomain(domain string) bool {
 
 func isControlOrFormat(r rune) bool {
 	return unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r)
+}
+
+// isRejectedPhoneRune reports the runes Phone refuses before handing the value
+// to libphonenumber. Letters are among them because libphonenumber's normalize
+// mutates them instead of rejecting them: three or more letters are mapped onto
+// their keypad digits ("+7916ABC4567" -> "+79162224567") and fewer are stripped
+// ("+79161234567A" -> "+79161234567"), either way storing a number other than
+// the one typed.
+func isRejectedPhoneRune(r rune) bool {
+	return isControlOrFormat(r) || unicode.IsLetter(r)
 }
 
 func isDomainByte(c byte) bool {
