@@ -87,7 +87,7 @@ func validateMessengerPush(m *notificationv1.EnvelopeMetadata, p *notificationv1
 		if strings.TrimSpace(p.GetPreview()) == "" {
 			return errMessengerDirective()
 		}
-	case "PHOTO", "DOCUMENT", "LOCATION", "ATTACHMENTS":
+	case "PHOTO", "VIDEO", "DOCUMENT", "LOCATION", "ATTACHMENTS":
 		if strings.TrimSpace(p.GetPreview()) != "" {
 			return errMessengerDirective()
 		}

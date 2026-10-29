@@ -9,7 +9,7 @@ package notifyrender
 // "<section>.title"/"<section>.body" keys for all catalog sections. It is the
 // source of truth the overlay engine layers per-locale translations over.
 var BaselineEN = map[string]string{
-	"chat_message.body":                                  "{{if .object_title}}{{.object_title}}{{if .object_number}} #{{.object_number}}{{end}}: {{end}}{{if eq .preview_kind \"PHOTO\"}}Photo{{else if eq .preview_kind \"DOCUMENT\"}}Document{{else if eq .preview_kind \"LOCATION\"}}Location{{else if eq .preview_kind \"ATTACHMENTS\"}}Attachments{{else}}{{.preview}}{{end}}",
+	"chat_message.body":                                  "{{if .object_title}}{{.object_title}}{{if .object_number}} #{{.object_number}}{{end}}: {{end}}{{if eq .preview_kind \"PHOTO\"}}Photo{{else if eq .preview_kind \"VIDEO\"}}Video{{else if eq .preview_kind \"DOCUMENT\"}}Document{{else if eq .preview_kind \"LOCATION\"}}Location{{else if eq .preview_kind \"ATTACHMENTS\"}}Attachments{{else}}{{.preview}}{{end}}",
 	"chat_message.title":                                 "New message from {{.sender_name}}",
 	"chat_section_closed.title":                          "Conversation closed",
 	"chat_section_closed.body":                           "Conversation about {{.object_title}}{{if .object_number}} #{{.object_number}}{{end}} is closed.",
