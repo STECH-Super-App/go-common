@@ -177,9 +177,25 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 	// ─── NEW payloads ───
 	case *notificationv1.NotificationEnvelope_SendChatMessage:
 		return map[string]string{
-			"sender_name": p.SendChatMessage.GetSenderName(),
-			"preview":     p.SendChatMessage.GetPreview(),
+			"sender_name":   p.SendChatMessage.GetSenderName(),
+			"preview":       p.SendChatMessage.GetPreview(),
+			"object_title":  p.SendChatMessage.GetObjectTitle(),
+			"object_number": p.SendChatMessage.GetObjectNumber(),
 		}, nil
+	case *notificationv1.NotificationEnvelope_SendChatMessageReceived:
+		return map[string]string{
+			"sender_name":   p.SendChatMessageReceived.GetSenderDisplayName(),
+			"preview":       p.SendChatMessageReceived.GetPreview(),
+			"preview_kind":  p.SendChatMessageReceived.GetPreviewKind(),
+			"object_title":  p.SendChatMessageReceived.GetObjectTitle(),
+			"object_number": p.SendChatMessageReceived.GetObjectNumber(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendChatSectionClosed:
+		return map[string]string{"object_title": p.SendChatSectionClosed.GetObjectTitle(), "object_number": p.SendChatSectionClosed.GetObjectNumber()}, nil
+	case *notificationv1.NotificationEnvelope_SendChatAppealOpened:
+		return map[string]string{"object_title": p.SendChatAppealOpened.GetObjectTitle(), "object_number": p.SendChatAppealOpened.GetObjectNumber()}, nil
+	case *notificationv1.NotificationEnvelope_SendChatAppealClosed:
+		return map[string]string{"object_title": p.SendChatAppealClosed.GetObjectTitle(), "object_number": p.SendChatAppealClosed.GetObjectNumber()}, nil
 	case *notificationv1.NotificationEnvelope_SendListingApproved:
 		return map[string]string{
 			"listing_title": p.SendListingApproved.GetListingTitle(),
@@ -564,6 +580,12 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"error_count":       strconv.Itoa(int(p.SendPartsPriceListProcessed.GetErrorCount())),
 			"new_address_count": countOrEmpty(p.SendPartsPriceListProcessed.GetNewAddressCount()),
 			"shop_display_name": p.SendPartsPriceListProcessed.GetShopDisplayName(),
+		}, nil
+	case *notificationv1.NotificationEnvelope_SendPartsPriceListRefused:
+		return map[string]string{
+			"file_name":         p.SendPartsPriceListRefused.GetFileName(),
+			"shop_display_name": p.SendPartsPriceListRefused.GetShopDisplayName(),
+			"reason":            p.SendPartsPriceListRefused.GetReason(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendPartsPriceListFileFailed:
 		return map[string]string{

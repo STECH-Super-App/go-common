@@ -37,7 +37,9 @@ const (
 	// deviation was reviewed and taken deliberately (repair critique
 	// 2026-09-23, libs #6) — consistency inside the package wins. New reasons
 	// here keep the package prefix; do not "fix" the family.
-	ReasonRepairChannels = "NOTIFYOUTBOX_REPAIR_CHANNEL_SET"
+	ReasonRepairChannels                = "NOTIFYOUTBOX_REPAIR_CHANNEL_SET"
+	ReasonMessengerDirective            = "NOTIFYOUTBOX_MESSENGER_DIRECTIVE_INVALID"
+	ReasonPartsPriceListRefusedChannels = "NOTIFYOUTBOX_PARTS_PRICE_LIST_REFUSED_CHANNEL_SET"
 )
 
 func errEmptyEventID() *commonerr.AppError {

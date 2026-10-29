@@ -9,8 +9,14 @@ package notifyrender
 // "<section>.title"/"<section>.body" keys for all catalog sections. It is the
 // source of truth the overlay engine layers per-locale translations over.
 var BaselineEN = map[string]string{
-	"chat_message.body":                                  "{{.preview}}",
+	"chat_message.body":                                  "{{if .object_title}}{{.object_title}}{{if .object_number}} #{{.object_number}}{{end}}: {{end}}{{if eq .preview_kind \"PHOTO\"}}Photo{{else if eq .preview_kind \"DOCUMENT\"}}Document{{else if eq .preview_kind \"LOCATION\"}}Location{{else if eq .preview_kind \"ATTACHMENTS\"}}Attachments{{else}}{{.preview}}{{end}}",
 	"chat_message.title":                                 "New message from {{.sender_name}}",
+	"chat_section_closed.title":                          "Conversation closed",
+	"chat_section_closed.body":                           "Conversation about {{.object_title}}{{if .object_number}} #{{.object_number}}{{end}} is closed.",
+	"chat_appeal_opened.title":                           "Appeal opened",
+	"chat_appeal_opened.body":                            "An appeal was opened for {{.object_title}}{{if .object_number}} #{{.object_number}}{{end}}.",
+	"chat_appeal_closed.title":                           "Appeal closed",
+	"chat_appeal_closed.body":                            "An appeal was closed for {{.object_title}}{{if .object_number}} #{{.object_number}}{{end}}.",
 	"delivery_auto_confirmed.body":                       "{{if .request_no}}Request #{{.request_no}}{{else}}The request{{end}} was auto-confirmed.",
 	"delivery_auto_confirmed.title":                      "Delivery auto-confirmed",
 	"delivery_awaiting_receipt.body":                     "The carrier confirmed delivery. Please confirm receipt of the equipment.",
@@ -203,6 +209,8 @@ var BaselineEN = map[string]string{
 	"parts_positions_rejected.title":                     "Positions rejected",
 	"parts_price_list_file_failed.body":                  "{{if .shop_display_name}}Shop '{{.shop_display_name}}': we could not{{else}}We could not{{end}} process '{{.file_name}}'. Open the import report to see why, fix the file and upload it again.",
 	"parts_price_list_file_failed.title":                 "Price list not processed",
+	"parts_price_list_refused.title":                     "Price list refused",
+	"parts_price_list_refused.body":                      "{{if .shop_display_name}}Shop '{{.shop_display_name}}': your{{else}}Your{{end}} price list '{{.file_name}}' was refused by an administrator. Reason: {{.reason}}.",
 	"parts_price_list_processed.body":                    "{{if .shop_display_name}}Shop '{{.shop_display_name}}' — the price list is processed{{else}}Your price list is processed{{end}}: {{.published_count}} published, {{.matching_count}} awaiting matching, {{.error_count}} with errors.{{if .new_address_count}} New warehouse addresses: {{.new_address_count}} — check your pickup settings.{{end}}",
 	"parts_price_list_processed.title":                   "Price list processed",
 	"parts_price_list_stale_warning.body":                "{{if .shop_display_name}}The price list of shop '{{.shop_display_name}}'{{else}}Your price list{{end}} has not been updated for {{.days_since_upload}} days. Tomorrow your offers leave the catalogue — upload a fresh price list.",
