@@ -1726,6 +1726,17 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	} {
 		declared[nt] = true
 	}
+	for typ, want := range map[notificationv1.NotificationType][]string{
+		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:        {"object_title", "object_number", "preview_kind"},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED: {"object_number"},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED:  {"object_number"},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:  {"object_number"},
+	} {
+		declared[typ] = true
+		if got := OptionalParams(typ); !slices.Equal(got, want) {
+			t.Errorf("%v optional params = %v, want %v", typ, got, want)
+		}
+	}
 	for typ, params := range optionalParams {
 		if !declared[typ] {
 			t.Errorf("unexpected optional params %v on type %v", params, typ)
@@ -1735,16 +1746,13 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 		t.Errorf("optionalParams has %d entries, want %d", len(optionalParams), len(declared))
 	}
 
-	// shop_display_name is declared on EXACTLY the twenty shop-subject texts and
-	// on no other type of any family — the ruling names the shop where it is the
-	// subject, and a twenty-first declaration would be a text that silently
-	// starts naming one.
+	// The original twenty shop-subject types plus price-list refusal (175).
 	named := map[notificationv1.NotificationType]bool{}
 	for _, nt := range shopSubjectPartsTypes() {
 		named[nt] = true
 	}
-	if len(named) != 20 {
-		t.Errorf("shopSubjectPartsTypes lists %d distinct types, want 20", len(named))
+	if len(named) != 21 {
+		t.Errorf("shopSubjectPartsTypes lists %d distinct types, want 21", len(named))
 	}
 	for typ := range typeKey {
 		if got := contains(OptionalParams(typ), shopDisplayNameParam); got != named[typ] {

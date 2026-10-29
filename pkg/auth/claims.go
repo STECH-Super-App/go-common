@@ -20,14 +20,15 @@ type TenantClaim struct {
 
 // Claims represents the custom claims in a JWT token.
 type Claims struct {
-	UserID        string        `json:"sub"`
-	Roles         []string      `json:"roles"`
-	Name          string        `json:"name"`
-	Type          string        `json:"type"`
-	Tenants       []TenantClaim `json:"tns,omitempty"`
-	Avatar        string        `json:"avatar,omitempty"`
-	Email         string        `json:"email,omitempty"`
-	EmailVerified bool          `json:"email_verified,omitempty"`
+	UserID        string           `json:"sub"`
+	Roles         []string         `json:"roles"`
+	Name          string           `json:"name"`
+	Type          string           `json:"type"`
+	Tenants       []TenantClaim    `json:"tns,omitempty"`
+	ChatRead      *ChatReadContext `json:"chat_read,omitempty"`
+	Avatar        string           `json:"avatar,omitempty"`
+	Email         string           `json:"email,omitempty"`
+	EmailVerified bool             `json:"email_verified,omitempty"`
 
 	Scope string `json:"scope,omitempty"` // "registration" for restricted tokens, empty for full tokens
 	Phone string `json:"phone,omitempty"` // only set in registration-scope tokens

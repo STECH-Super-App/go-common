@@ -56,6 +56,20 @@ const idSuffix = "_id"
 //     own SMS/email path, not by a template;
 //   - read by nothing: on the wire, empty by contract or simply never phrased.
 var notTemplated = map[string]string{
+	"SendChatMessage.object_type":                           "routing discriminator, not display text",
+	"SendChatMessageReceived.object_type":                   "routing discriminator, not display text",
+	"SendChatMessageReceived.sender_display_name":           "rendered as sender_name for the existing chat template",
+	"SendChatSectionClosed.object_type":                     "routing discriminator, not display text",
+	"SendChatAppealOpened.object_type":                      "routing discriminator, not display text",
+	"SendChatAppealClosed.object_type":                      "routing discriminator, not display text",
+	"SendChatSectionClosed.object_service":                  "feed ObjectRef data for inbox-service, not display text",
+	"SendChatSectionClosed.object_status":                   "feed ObjectRef data for inbox-service, not display text",
+	"SendChatAppealOpened.object_service":                   "feed ObjectRef data for inbox-service, not display text",
+	"SendChatAppealOpened.object_status":                    "feed ObjectRef data for inbox-service, not display text",
+	"SendChatAppealClosed.object_service":                   "feed ObjectRef data for inbox-service, not display text",
+	"SendChatAppealClosed.object_status":                    "feed ObjectRef data for inbox-service, not display text",
+	"SendChatAppealOpened.appeal_kind":                      "not used by the generic appeal text",
+	"SendChatAppealClosed.appeal_kind":                      "not used by the generic appeal text",
 	"SendInviteSms.phone":                                   "the SMS recipient address; notification-service's SMS path reads it, the template does not",
 	"SendMemberRoleChanged.new_role":                        "a routing discriminator — the producer picks the TYPE from it (member_role_changed_manager vs _operator); the text names only the tenant",
 	"SendPartsFavoritePriceDropped.currency":                "no parts arm reads currency (DECISIONS §30.2); the «₽» in the baseline is a rendering, not data",
@@ -86,7 +100,6 @@ var unmappedByDesign = map[string]string{
 	"SendAccountDeletionOtpSms":  "SMS-only; notification-service's legacy template path renders it",
 	"SendContactPhoneOtpSms":     "SMS-only; sale-service's contact-phone OTP, rendered by notification-service",
 	"SendOrgAdminTransferOtpSms": "SMS-only; the admin-transfer confirmation code",
-	"SendChatMessageReceived":    "chat's own push payload; it carries no catalog type",
 }
 
 func TestExtractParamsReadsEveryDeclaredStringField(t *testing.T) {
@@ -171,7 +184,8 @@ func TestExtractParamsCompletenessCensus(t *testing.T) {
 	// 182: send_parts_shop_return_terms_cleared, 192 (Р44, owner decision of
 	//      08.09.2026).
 	// 184: send_delivery_listing_blocked / _restored, 193–194 (В-41(в), OTDELRAZRABOTKI-731).
-	const want = 184
+	// 188: parts price-list refusal (195) and the three Messenger notices (196–198).
+	const want = 188
 	if got := oneof.Fields().Len(); got != want {
 		names := make([]string, 0, oneof.Fields().Len())
 		for i := 0; i < oneof.Fields().Len(); i++ {

@@ -10,6 +10,9 @@ import (
 // translation files (lowercased without the NOTIFICATION_TYPE_ prefix).
 var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:                        "chat_message",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED:                 "chat_section_closed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED:                  "chat_appeal_opened",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:                  "chat_appeal_closed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED:                    "listing_approved",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED:                    "listing_rejected",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED:                 "listing_unpublished",
@@ -155,6 +158,7 @@ var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_OFFERS_HIDDEN_PRICE_LIST_STALE: "parts_offers_hidden_price_list_stale",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED:           "parts_price_list_processed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED:         "parts_price_list_file_failed",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_REFUSED:             "parts_price_list_refused",
 
 	// The FORTY-NINE below are D-16a: every remaining parts type whose Russian
 	// the vault already carries, transcribed from «Уведомления запчастей.md» and
@@ -386,6 +390,9 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE: {
 		"sender_name", "preview",
 	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED: {"object_title"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED:  {"object_title"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:  {"object_title"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED: {
 		"listing_title",
 	},
@@ -624,6 +631,7 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	},
 	// No counters: the whole file was rejected and nothing was published, so the
 	// cause lives in the PRT-12 import report rather than in row counts.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_REFUSED: {"file_name", "reason"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED: {
 		"file_name",
 	},
@@ -993,6 +1001,10 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 // a delivery request may be notified about before a number is assigned. Those
 // must still render, minus the number.
 var optionalParams = map[notificationv1.NotificationType][]string{
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:        {"object_title", "object_number", "preview_kind"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED: {"object_number"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED:  {"object_number"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:  {"object_number"},
 	// ─── rent order lifecycle ───
 	//
 	// ORDER_CANCELLED's three params are DISCRIMINATORS, optional by mechanism
@@ -1176,6 +1188,7 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	// gives: a tenant-service outage must degrade to today's nameless wording,
 	// not roll back an order transition or dead-letter a sale notice. 172 is
 	// among the sixteen because its one field is the name.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_REFUSED:                   {"shop_display_name"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED:               {"shop_display_name"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_MATCHED:                    {"shop_display_name"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_PUBLISHED_RETRO:            {"shop_display_name"},

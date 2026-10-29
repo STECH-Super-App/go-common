@@ -1,5 +1,5 @@
-github.com/STECH-Super-App/gen-go-lib v0.0.0-20261023202929-4b336e08808c h1:ICBHMhINrhPV4UfLVJ/Ive0iLA/rK11h7uo7JQHYauk=
-github.com/STECH-Super-App/gen-go-lib v0.0.0-20261023202929-4b336e08808c/go.mod h1:vB70yPRKzJrwNtOW+/DVmJoDImtqhdgb7uSSvAPYd3Y=
+github.com/STECH-Super-App/gen-go-lib v0.0.0-20261029063005-51d20ee679bb h1:5s2LaxZAAlbKhnks/XVOxVRMm7aKgZcEGFktANOF8IQ=
+github.com/STECH-Super-App/gen-go-lib v0.0.0-20261029063005-51d20ee679bb/go.mod h1:vB70yPRKzJrwNtOW+/DVmJoDImtqhdgb7uSSvAPYd3Y=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=

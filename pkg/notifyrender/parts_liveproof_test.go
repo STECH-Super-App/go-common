@@ -448,8 +448,9 @@ func TestPartsCatalogCoversEveryDeclaredType(t *testing.T) {
 	// 63 → 64 with proto push 1 (tracker wave, 10.2026): value 172,
 	// PARTS_SHOP_RETURN_TERMS_CLEARED — Р44's moderator clearing of a shop's
 	// additional return terms, the owner's late arm of 08.09.2026.
-	if declared != 64 {
-		t.Errorf("proto declares %d NOTIFICATION_TYPE_PARTS_* values, expected 64 — a type was added or removed, and this test is the place that has to notice", declared)
+	// Type 175 adds the price-list refusal after the earlier 64-type census.
+	if declared != 65 {
+		t.Errorf("proto declares %d NOTIFICATION_TYPE_PARTS_* values, expected 65 — a type was added or removed, and this test is the place that has to notice", declared)
 	}
 	if len(partsUnmappedByDesign) != 0 {
 		t.Errorf("partsUnmappedByDesign has %d entries, want 0 — every declared parts type has had a catalog entry since 07.09.2026, and a new exemption is a type that will dead-letter on first delivery", len(partsUnmappedByDesign))
@@ -715,10 +716,10 @@ func complaintEnv(m *notificationv1.SendPartsReviewComplaintResolved) *notificat
 // the parts family, spelled once for every test that asks about it.
 const shopDisplayNameParam = "shop_display_name"
 
-// shopNamedOnlyTypes are the sixteen shop-subject texts whose ONLY optional param
-// is the shop's display name — the twenty minus 69, 79, 121 and 130, which
-// already carried an optional tier and had the name appended to it.
+// shopNamedOnlyTypes are the seventeen shop-subject texts whose ONLY optional param
+// is the shop's display name — the original sixteen plus price-list refusal (175).
 var shopNamedOnlyTypes = []notificationv1.NotificationType{
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_REFUSED,                   // 175: file refusal
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_FILE_FAILED,               // 70
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_MATCHED,                    // 71
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_PUBLISHED_RETRO,            // 72
@@ -737,9 +738,8 @@ var shopNamedOnlyTypes = []notificationv1.NotificationType{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_SHOP_RETURN_TERMS_CLEARED,            // 172
 }
 
-// shopSubjectPartsTypes is the whole twenty: the texts the owner ruling of
-// 07.09.2026 («Уведомления запчастей» :75) names the shop on, because the shop
-// is their subject.
+// shopSubjectPartsTypes includes the original twenty named by the 07.09.2026
+// owner ruling plus price-list refusal (175), whose proto carries the same name.
 func shopSubjectPartsTypes() []notificationv1.NotificationType {
 	return append([]notificationv1.NotificationType{
 		notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_PROCESSED,   // 69
@@ -784,8 +784,8 @@ func TestShopSubjectPartsTextsNameTheShop(t *testing.T) {
 	for _, nt := range shopSubjectPartsTypes() {
 		subject[nt] = true
 	}
-	if len(subject) != 20 {
-		t.Fatalf("shopSubjectPartsTypes lists %d distinct types, want the ruling's 20", len(subject))
+	if len(subject) != 21 {
+		t.Fatalf("shopSubjectPartsTypes lists %d distinct types, want 21 including price-list refusal", len(subject))
 	}
 
 	// The declaration.
@@ -820,8 +820,9 @@ func TestShopSubjectPartsTextsNameTheShop(t *testing.T) {
 	// retired with В-94 and reserved. 63 → 64 with proto push 1: slot 192,
 	// send_parts_shop_return_terms_cleared (172, Р44). Same count as the
 	// declared-types pin, on purpose.
-	if walked != 64 {
-		t.Errorf("walked %d SendParts* payloads, want 64 — the oneof changed shape and this check may be looking at nothing", walked)
+	// Slot 195 adds SendPartsPriceListRefused.
+	if walked != 65 {
+		t.Errorf("walked %d SendParts* payloads, want 65 — the oneof changed shape and this check may be looking at nothing", walked)
 	}
 
 	// The wire, the extract and the text, per type.

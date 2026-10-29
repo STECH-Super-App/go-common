@@ -47,6 +47,12 @@ func PublishDirective(
 	if err := validate(env); err != nil {
 		return err
 	}
+	if err := validateMessengerDirective(env); err != nil {
+		return err
+	}
+	if err := validatePartsPriceListRefusedChannels(env.GetMetadata()); err != nil {
+		return err
+	}
 	if err := validateRepairChannels(env.GetMetadata()); err != nil {
 		return err
 	}

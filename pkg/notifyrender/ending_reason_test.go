@@ -102,7 +102,7 @@ var (
 )
 
 // personEndedTypes is every notification in which a PERSON ends a deal or a
-// request, with the reason it must name.
+// request, plus the price-list refusal whose proto also requires a reason.
 var personEndedTypes = map[notificationv1.NotificationType][]reasonParam{
 	// Rent: one type for every human cancel. decline_reason is the renter's
 	// counter-offer decline, cancel_reason any other human cancel; the producer
@@ -124,6 +124,7 @@ var personEndedTypes = map[notificationv1.NotificationType][]reasonParam{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_REQUEST_CANCELLED: {{name: "reason", shape: reasonLabel}},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_CANCELLED: {{name: "reason", shape: reasonLabel}},
 	// Parts: the actor's stated reason, every one of them a label.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_PRICE_LIST_REFUSED:         {{name: "reason", shape: reasonLabel}},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_REJECTED_BY_SELLER:   {{name: "reason", shape: reasonLabel}},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CANCELLED_BY_BUYER:   {{name: "reason", shape: reasonLabel}},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_ORDER_CANCELLED_BY_SELLER:  {{name: "reason", shape: reasonLabel}},
@@ -188,6 +189,8 @@ var endingTypesWithoutAReason = map[notificationv1.NotificationType]exclusion{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_DECLINED:        {dealContinues, "a mid-job price ended; the previous agreement stands"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_WITHDRAWN:       {dealContinues, "a mid-job price ended; the previous agreement stands"},
 	// ── not a deal or request ──
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED:                {notADeal, "chat section closure reflects the owner lifecycle; it is not a deal cancellation"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:                 {notADeal, "owner appeal closure is not itself a deal cancellation"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED:                   {notADeal, "listing moderation (it prints the moderator's reason anyway)"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_REJECTED:              {notADeal, "organisation verification (it prints the reason anyway)"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED:       {notADeal, "an organisation change request's moderation (it prints the reasons anyway)"},
