@@ -23,6 +23,7 @@ func TestMessengerRendering(t *testing.T) {
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED, map[string]string{"object_title": "Excavator", "object_number": "42", "appeal_kind": "problem"}, "Excavator"},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE, map[string]string{"sender_name": "Alice", "preview": "hello", "object_title": "Excavator"}, "Excavator"},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE, map[string]string{"sender_name": "Alice", "preview": "", "preview_kind": "PHOTO"}, "Photo"},
+		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE, map[string]string{"sender_name": "Alice", "preview": "", "preview_kind": "VIDEO"}, "Video"},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE, map[string]string{"sender_name": "Alice", "preview": "", "preview_kind": "DOCUMENT"}, "Document"},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE, map[string]string{"sender_name": "Alice", "preview": "", "preview_kind": "LOCATION"}, "Location"},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE, map[string]string{"sender_name": "Alice", "preview": "", "preview_kind": "ATTACHMENTS"}, "Attachments"},

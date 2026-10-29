@@ -107,6 +107,17 @@ func TestNewChatPushValidation(t *testing.T) {
 	if err := validateMessengerDirective(env); err != nil {
 		t.Fatal(err)
 	}
+	for _, kind := range []string{"VIDEO", "DOCUMENT", "LOCATION", "ATTACHMENTS"} {
+		p.PreviewKind = kind
+		if err := validateMessengerDirective(env); err != nil {
+			t.Fatalf("%s without text rejected: %v", kind, err)
+		}
+		p.Preview = "text"
+		if err := validateMessengerDirective(env); err == nil {
+			t.Fatalf("%s with text accepted", kind)
+		}
+		p.Preview = ""
+	}
 	p.CounterpartTenantId = env.Metadata.ActingTenantId
 	if err := validateMessengerDirective(env); err == nil {
 		t.Fatal("counterpart mismatch accepted")
