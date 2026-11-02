@@ -8,6 +8,23 @@ Shared library for STECH microservices.
 
 `Claims.ChatRead` (`chat_read`) is separate from legacy active/write `tns`. `ValidateChatReadContext` validates the whole snapshot before signing; `FormatChatReadContext` and `ParseChatReadContext` carry its unpadded base64url JSON in the gateway-set `X-Chat-Read-Context` header. The complete header line has a 64 KiB byte budget, including name and CRLF; a 1024-entry decoder guard is subordinate to that budget. Oversize and malformed contexts are rejected, never truncated; these are transport limits, not tenant quotas. After signing a token with this claim, auth must also call `ValidateChatAccessTokenSize` for the complete Authorization line. If optional chat enrichment cannot fit or validate, auth must omit or mark the chat context unavailable and preserve normal login; refresh must not burn credentials on validation failure. Gateway and ingress capacity must be verified and configured before activation; a local HTTP limit is not cloud proof. `READY` with an empty set is authoritative; `NOT_READY` and a missing claim grant nothing. Each entry carries tenant UUID, role, ACTIVE/SUSPENDED status, grant UUID, effective timestamp and ACTUAL/FEATURE_CUTOVER basis. The gateway must strip any incoming identity header and set this header only from validated verified claims. `ParseActingTenantID` validates `X-Acting-Tenant-Id` as a selector, not proof; `ChatReadContext.Membership` resolves the read membership. Object-contact authorization and the active `tns` write check remain consumers' responsibility. Revocation retains the existing asynchronous token blacklist semantics.
 
+### `pkg/authz` — tenant membership headers
+
+Three headers carry a caller's tenant seats; the gateway sets all of them from verified token claims (`auth.Claims`) and strips client copies. Never split the strings by hand.
+
+| Header | Format | Source claim | Readers |
+|---|---|---|---|
+| `X-Tenant-Memberships` | `<tenant>=ADMIN,…` | `tns` (active seats only) | every service — `ParseTenantMemberships` / `FormatTenantMemberships` |
+| `X-Tenant-Membership-Since` | `<tenant>=<unix>,…` | `tns[].at` | chat-service only — `FormatMembershipSince` / `ParseMembershipSince` |
+| `X-Tenant-Readonly-Memberships` | `<tenant>=<ROLE>=<unix>,…` | `tns_ro` (seats in SUSPENDED tenants) | chat-service only — `FormatReadonlyMemberships` / `ParseReadonlyMemberships` |
+
+`X-Tenant-Memberships` is never changed to carry a start time or a suspended seat: sale's PHP parser drops, and `ParseTenantMemberships` would read into the role, any entry with extra text, and every other service authorizes writes from it assuming each entry is active. That is why the extra data has its own headers. A golden-string test pins the header's bytes for claims that carry `at`.
+
+- **Strict parsing.** The two chat-only parsers reject the whole header with a typed 400 (`COMMON_TENANT_MEMBERSHIP_SINCE_INVALID`, `COMMON_TENANT_READONLY_MEMBERSHIPS_INVALID`) on: a tenant id that is not a UUID (`pkg/input`) or is the nil UUID, an unknown role (long form `ADMIN`/`MANAGER`/`OPERATOR` only), a negative, non-decimal or post-9999 Unix time, a repeated tenant, an empty entry, a wrong field count, or more than `MaxMembershipHeaderEntries` (64) entries. An empty header gives an empty result and no error. Tenant ids come back lower-case; times are UTC.
+- **Fail-closed formatting.** The formatters omit any claim the parser would refuse (bad id, unknown role, out-of-range time, repeated id — first wins) and any entry without a start time (`at == 0` is "no baseline", never a zero baseline), so `Parse(Format(x))` never errors and one bad seat costs only itself.
+- **One role expansion.** `ExpandTenantRole` turns the token's compact role (`A`/`M`/`O`) into the long form; unknown codes pass through verbatim. The gateway uses it for all three headers.
+- **The bound.** `tns` plus `tns_ro` together hold at most 16 entries (tenant-service's membership cap, enforced where tokens are minted); the 64-entry parser limit is only a transport sanity bound.
+
 ### `pkg/config`
 Helper functions for loading configuration from environment variables.
 - `GetEnv(key, default)`

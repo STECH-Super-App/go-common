@@ -1,11 +1,14 @@
 // Package authz provides authorization helpers shared across services. It is
 // distinct from pkg/auth (authentication primitives — claims, headers, context
-// keys). Its two concerns are: the X-Tenant-Memberships header codec
+// keys). Its concerns are: the X-Tenant-Memberships header codec
 // (ParseTenantMemberships / FormatTenantMemberships) — the fleet-wide single
-// parser/formatter of a caller's tenant roles — and the global-role predicate
-// (HasMinGlobalRole, see globalrole.go). Per-tenant access decisions are made by
-// each service against the parsed memberships (or via tenant-service), not by a
-// shared helper here.
+// parser/formatter of a caller's tenant roles — the two chat-only companion
+// headers (X-Tenant-Membership-Since, membership_since.go; and
+// X-Tenant-Readonly-Memberships, readonly_memberships.go) with the one
+// compact-to-long role expansion they share with the gateway (tenant_roles.go),
+// and the global-role predicate (HasMinGlobalRole, see globalrole.go).
+// Per-tenant access decisions are made by each service against the parsed
+// memberships (or via tenant-service), not by a shared helper here.
 package authz
 
 import (
