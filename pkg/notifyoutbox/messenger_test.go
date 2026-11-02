@@ -7,7 +7,7 @@ import (
 )
 
 func TestMessengerNoticeChannelAndActor(t *testing.T) {
-	types := []notificationv1.NotificationType{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED, notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED, notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED}
+	types := []notificationv1.NotificationType{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED}
 	for _, typ := range types {
 		t.Run(typ.String(), func(t *testing.T) {
 			m := &notificationv1.EnvelopeMetadata{Type: typ, RecipientUserId: "12345678-1234-1234-1234-123456789abc", ActingTenantId: "23456789-1234-1234-1234-123456789abc", Channels: []notificationv1.Channel{notificationv1.Channel_CHANNEL_IN_APP}}
@@ -38,8 +38,6 @@ func TestMessengerNoticePayloadValidation(t *testing.T) {
 		payload any
 	}{
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED, &notificationv1.SendChatSectionClosed{SectionId: id, CounterpartTenantId: "34567890-1234-1234-1234-123456789abc", ObjectType: "RENT", ObjectId: id, ObjectTitle: "Excavator", ObjectService: "rent"}},
-		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED, &notificationv1.SendChatAppealOpened{SectionId: id, ObjectType: "RENT", ObjectId: id, ObjectTitle: "Excavator", ObjectService: "rent", AppealKind: "PROBLEM"}},
-		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED, &notificationv1.SendChatAppealClosed{SectionId: id, ObjectType: "RENT", ObjectId: id, ObjectTitle: "Excavator", ObjectService: "rent", AppealKind: "PROBLEM"}},
 	}
 	for _, tt := range cases {
 		t.Run(tt.typ.String(), func(t *testing.T) {
@@ -47,10 +45,6 @@ func TestMessengerNoticePayloadValidation(t *testing.T) {
 			switch p := tt.payload.(type) {
 			case *notificationv1.SendChatSectionClosed:
 				env.Payload = &notificationv1.NotificationEnvelope_SendChatSectionClosed{SendChatSectionClosed: p}
-			case *notificationv1.SendChatAppealOpened:
-				env.Payload = &notificationv1.NotificationEnvelope_SendChatAppealOpened{SendChatAppealOpened: p}
-			case *notificationv1.SendChatAppealClosed:
-				env.Payload = &notificationv1.NotificationEnvelope_SendChatAppealClosed{SendChatAppealClosed: p}
 			}
 			if err := validateMessengerDirective(env); err != nil {
 				t.Fatal(err)
@@ -66,10 +60,6 @@ func TestMessengerNoticePayloadValidation(t *testing.T) {
 			setRef := func(service, status, cover string) {
 				switch p := tt.payload.(type) {
 				case *notificationv1.SendChatSectionClosed:
-					p.ObjectService, p.ObjectStatus, p.ObjectCoverFileId = service, status, cover
-				case *notificationv1.SendChatAppealOpened:
-					p.ObjectService, p.ObjectStatus, p.ObjectCoverFileId = service, status, cover
-				case *notificationv1.SendChatAppealClosed:
 					p.ObjectService, p.ObjectStatus, p.ObjectCoverFileId = service, status, cover
 				}
 			}

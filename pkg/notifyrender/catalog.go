@@ -11,8 +11,6 @@ import (
 var typeKey = map[notificationv1.NotificationType]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:                        "chat_message",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED:                 "chat_section_closed",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED:                  "chat_appeal_opened",
-	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:                  "chat_appeal_closed",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED:                    "listing_approved",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED:                    "listing_rejected",
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED:                 "listing_unpublished",
@@ -391,8 +389,6 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 		"sender_name", "preview",
 	},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED: {"object_title"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED:  {"object_title"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:  {"object_title"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED: {
 		"listing_title",
 	},
@@ -1003,8 +999,6 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:        {"object_title", "object_number", "preview_kind"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED: {"object_number"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED:  {"object_number"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:  {"object_number"},
 	// ─── rent order lifecycle ───
 	//
 	// ORDER_CANCELLED's three params are DISCRIMINATORS, optional by mechanism

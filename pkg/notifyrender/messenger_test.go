@@ -19,8 +19,6 @@ func TestMessengerRendering(t *testing.T) {
 		want   string
 	}{
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED, map[string]string{"object_title": "Excavator", "object_number": "42"}, "Excavator"},
-		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED, map[string]string{"object_title": "Excavator", "object_number": "42", "appeal_kind": "problem"}, "Excavator"},
-		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED, map[string]string{"object_title": "Excavator", "object_number": "42", "appeal_kind": "problem"}, "Excavator"},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE, map[string]string{"sender_name": "Alice", "preview": "hello", "object_title": "Excavator"}, "Excavator"},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE, map[string]string{"sender_name": "Alice", "preview": "", "preview_kind": "PHOTO"}, "Photo"},
 		{notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE, map[string]string{"sender_name": "Alice", "preview": "", "preview_kind": "VIDEO"}, "Video"},
@@ -61,8 +59,6 @@ func TestMessengerPayloadExtraction(t *testing.T) {
 		want string
 	}{
 		{&notificationv1.NotificationEnvelope{Payload: &notificationv1.NotificationEnvelope_SendChatSectionClosed{SendChatSectionClosed: &notificationv1.SendChatSectionClosed{ObjectTitle: "closed"}}}, "closed"},
-		{&notificationv1.NotificationEnvelope{Payload: &notificationv1.NotificationEnvelope_SendChatAppealOpened{SendChatAppealOpened: &notificationv1.SendChatAppealOpened{ObjectTitle: "opened"}}}, "opened"},
-		{&notificationv1.NotificationEnvelope{Payload: &notificationv1.NotificationEnvelope_SendChatAppealClosed{SendChatAppealClosed: &notificationv1.SendChatAppealClosed{ObjectTitle: "closed appeal"}}}, "closed appeal"},
 		{&notificationv1.NotificationEnvelope{Payload: &notificationv1.NotificationEnvelope_SendChatMessageReceived{SendChatMessageReceived: &notificationv1.SendChatMessageReceived{ObjectTitle: "message", SenderDisplayName: "Alice"}}}, "message"},
 	}
 	for _, tt := range cases {

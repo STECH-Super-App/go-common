@@ -190,7 +190,6 @@ var endingTypesWithoutAReason = map[notificationv1.NotificationType]exclusion{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_NEW_PRICE_WITHDRAWN:       {dealContinues, "a mid-job price ended; the previous agreement stands"},
 	// ── not a deal or request ──
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED:                {notADeal, "chat section closure reflects the owner lifecycle; it is not a deal cancellation"},
-	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:                 {notADeal, "owner appeal closure is not itself a deal cancellation"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED:                   {notADeal, "listing moderation (it prints the moderator's reason anyway)"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_REJECTED:              {notADeal, "organisation verification (it prints the reason anyway)"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_CHANGE_REJECTED:       {notADeal, "an organisation change request's moderation (it prints the reasons anyway)"},
