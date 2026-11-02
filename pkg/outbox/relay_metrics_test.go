@@ -23,7 +23,7 @@ type fakeRelayStore struct {
 	fetchCalls int
 }
 
-func (s *fakeRelayStore) FetchPending(_ context.Context, _ int) ([]*Message, error) {
+func (s *fakeRelayStore) FetchPendingExcept(_ context.Context, _ int, _ []string) ([]*Message, error) {
 	s.fetchCalls++
 	if s.onFetch != nil {
 		s.onFetch(s.fetchCalls)
