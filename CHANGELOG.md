@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Removed
+- `pkg/notifyoutbox` + `pkg/notifyrender` — **retire chat appeal notices 177/178.** The `gen-go-lib` pin moves to `a0ada6865496` (proto-contracts `4db5cf0` removed `NotificationType` 177/178 and envelope arms 197/198, `SendChatAppealOpened`/`Closed`). `notifyoutbox` no longer treats them as messenger notices and drops the `appeal_kind` check; `notifyrender` drops the `chat_appeal_opened`/`chat_appeal_closed` names, params, English baselines and extract arms. 176 `CHAT_SECTION_CLOSED` is unchanged. ⚠ Breaking for consumers: they cannot compile against this release while still referencing the removed enum values or arms, so move together with the `gen-go-lib` bump; i18n-catalog may drop the `chat_appeal_*` overlay keys.
+
 ### Added
 - `pkg/auth` — **Messenger 1.1 chat read context** (spec dev-setup `docs/superpowers/specs/2026-10-27-messenger-1.1-design.md` §4). `Claims.ChatRead *ChatReadContext` is a new optional signed JWT claim, `chat_read`, carrying readiness (`READY` | `NOT_READY`) and the read-eligible tenant seats: tenant id, role, tenant status (`ACTIVE` | `SUSPENDED`), grant id, effective time and basis (`ACTUAL` | `FEATURE_CUTOVER`). **`tns` is unchanged**: suspended, read-only seats live only in `chat_read` and never widen the write-authorizing tenant list. Absent or `null` means no context and no grant, so legacy tokens decode exactly as before.
   - **Strict everywhere.** `ParseChatReadContext` (the gateway-forwarded `X-Chat-Read-Context` header, unpadded base64url) and `ChatReadContext.UnmarshalJSON` (the signed claim) share one decoder. It rejects unknown fields, duplicate and case-folded duplicate keys at every level, and trailing JSON, then validates the whole snapshot before assigning. A malformed signed context fails the claims decode; it can never normalize into a grant.

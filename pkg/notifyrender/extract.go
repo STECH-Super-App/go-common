@@ -192,10 +192,6 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendChatSectionClosed:
 		return map[string]string{"object_title": p.SendChatSectionClosed.GetObjectTitle(), "object_number": p.SendChatSectionClosed.GetObjectNumber()}, nil
-	case *notificationv1.NotificationEnvelope_SendChatAppealOpened:
-		return map[string]string{"object_title": p.SendChatAppealOpened.GetObjectTitle(), "object_number": p.SendChatAppealOpened.GetObjectNumber()}, nil
-	case *notificationv1.NotificationEnvelope_SendChatAppealClosed:
-		return map[string]string{"object_title": p.SendChatAppealClosed.GetObjectTitle(), "object_number": p.SendChatAppealClosed.GetObjectNumber()}, nil
 	case *notificationv1.NotificationEnvelope_SendListingApproved:
 		return map[string]string{
 			"listing_title": p.SendListingApproved.GetListingTitle(),

@@ -14,7 +14,7 @@ func errMessengerDirective() error {
 }
 
 func messengerNotice(t notificationv1.NotificationType) bool {
-	return t == notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED || t == notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED || t == notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED
+	return t == notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED
 }
 
 func validMessengerID(s string) bool {
@@ -37,7 +37,7 @@ func validateMessengerMetadata(m *notificationv1.EnvelopeMetadata) error {
 const maxMessengerObjectStatusRunes = 64
 
 // validateMessengerObjectRef checks the object reference fields shared by the
-// section/appeal notices: a required known service, an optional bounded one-line
+// section-closed notice: a required known service, an optional bounded one-line
 // status code and an optional cover file id. The cover is an id, never a URL.
 func validateMessengerObjectRef(service, status, cover string) error {
 	switch service {
@@ -116,15 +116,14 @@ func validateMessengerPushScope(m *notificationv1.EnvelopeMetadata, p *notificat
 	return nil
 }
 
-// messengerNoticeFields is the common shape of the three section/appeal notices.
+// messengerNoticeFields is the common shape of the section-closed notice.
 type messengerNoticeFields struct {
-	section, objectID, objectType, title, kind, counterpart string
-	service, status, cover                                  string
+	section, objectID, objectType, title, counterpart string
+	service, status, cover                            string
 }
 
 func validateMessengerNotice(env *notificationv1.NotificationEnvelope, m *notificationv1.EnvelopeMetadata) error {
 	var f messengerNoticeFields
-	closed := m.GetType() == notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED
 	switch m.GetType() {
 	case notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED:
 		p := env.GetSendChatSectionClosed()
@@ -135,20 +134,8 @@ func validateMessengerNotice(env *notificationv1.NotificationEnvelope, m *notifi
 		if !validMessengerID(f.counterpart) || strings.EqualFold(f.counterpart, m.GetActingTenantId()) {
 			return errMessengerDirective()
 		}
-	case notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED:
-		p := env.GetSendChatAppealOpened()
-		if p == nil {
-			return errMessengerDirective()
-		}
-		f = messengerNoticeFields{section: p.GetSectionId(), objectID: p.GetObjectId(), objectType: p.GetObjectType(), title: p.GetObjectTitle(), kind: p.GetAppealKind(), service: p.GetObjectService(), status: p.GetObjectStatus(), cover: p.GetObjectCoverFileId()}
-	case notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:
-		p := env.GetSendChatAppealClosed()
-		if p == nil {
-			return errMessengerDirective()
-		}
-		f = messengerNoticeFields{section: p.GetSectionId(), objectID: p.GetObjectId(), objectType: p.GetObjectType(), title: p.GetObjectTitle(), kind: p.GetAppealKind(), service: p.GetObjectService(), status: p.GetObjectStatus(), cover: p.GetObjectCoverFileId()}
 	}
-	if !validMessengerID(f.section) || !validMessengerID(f.objectID) || strings.TrimSpace(f.objectType) == "" || strings.TrimSpace(f.title) == "" || (!closed && strings.TrimSpace(f.kind) == "") {
+	if !validMessengerID(f.section) || !validMessengerID(f.objectID) || strings.TrimSpace(f.objectType) == "" || strings.TrimSpace(f.title) == "" {
 		return errMessengerDirective()
 	}
 	return validateMessengerObjectRef(f.service, f.status, f.cover)

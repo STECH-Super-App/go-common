@@ -1729,8 +1729,6 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	for typ, want := range map[notificationv1.NotificationType][]string{
 		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:        {"object_title", "object_number", "preview_kind"},
 		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED: {"object_number"},
-		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_OPENED:  {"object_number"},
-		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_APPEAL_CLOSED:  {"object_number"},
 	} {
 		declared[typ] = true
 		if got := OptionalParams(typ); !slices.Equal(got, want) {
