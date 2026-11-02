@@ -23,7 +23,7 @@ type ctxStore struct {
 	onFetch    func()
 }
 
-func (s *ctxStore) FetchPending(ctx context.Context, _ int) ([]*Message, error) {
+func (s *ctxStore) FetchPendingExcept(ctx context.Context, _ int, _ []string) ([]*Message, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
