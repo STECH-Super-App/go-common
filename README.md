@@ -37,6 +37,12 @@ Database connection factories.
 - **Postgres**: `NewPostgres` creates a `*pgxpool.Pool` (using `jackc/pgx/v5`).
 - **Redis**: `NewRedis` creates a `*redis.Client` (using `redis/go-redis/v9`).
 
+### `pkg/egress`
+The outbound HTTP client for every call to the public internet (spec dev-setup `docs/superpowers/specs/2026-11-04-egress-service-design.md` §4.4). Build it in `main` and pass it to each provider client; never use `http.DefaultClient` for an external host.
+- `HTTPClient(timeout)` / `Transport()` read `EGRESS_PROXY_URL` (the caller's own egress-proxy port, `http://host:port` only); `NewTransport(Config)` takes the values explicitly. The transport is a clone of `http.DefaultTransport` with `ForceAttemptHTTP2` and its `Proxy` fixed to that URL.
+- `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are never read: a process-wide proxy would route internal gRPC and tracing into egress.
+- An empty URL is a typed error `COMMON_EGRESS_NOT_CONFIGURED`, never a silent direct call. The one opt-out is `EGRESS_DIRECT=true` together with `APP_ENV=local` (a binary run on the host, outside compose). A malformed URL is `COMMON_EGRESS_PROXY_URL_INVALID`.
+
 ### `pkg/input`
 The fleet's one validation package for every value entering a service — REST body, path, query, gRPC field. Pure functions, no Echo/HTTP/logging, usable inside domain constructors. Spec: dev-setup `docs/superpowers/specs/2026-10-02-input-validation-standard-design.md` §4.
 
