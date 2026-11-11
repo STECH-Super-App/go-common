@@ -1,6 +1,7 @@
 package input_test
 
 import (
+	"math"
 	"regexp"
 	"strings"
 	"testing"
@@ -170,6 +171,41 @@ func FuzzPhone(f *testing.F) {
 		}
 		if again, f2 := input.Phone(out); f2 != nil || again != out {
 			t.Fatalf("Phone(%q): not idempotent %q -> (%q, %v)", raw, out, again, f2)
+		}
+	})
+}
+
+func FuzzCoordinates(f *testing.F) {
+	for _, s := range [][2]float64{
+		{0, 0}, {math.Copysign(0, -1), 0}, {55.7558, 37.6173}, {-90, 180}, {90, -180},
+		{0, 37.6}, {55.7, 0}, {90.0000001, 0}, {math.NaN(), 1}, {1, math.Inf(-1)},
+	} {
+		f.Add(s[0], s[1])
+	}
+	f.Fuzz(func(t *testing.T, lat, lon float64) {
+		outLat, outLon, fail := input.Coordinates(lat, lon)
+		// An independent statement of the three rules: the validator must
+		// accept exactly the pairs it describes.
+		valid := !math.IsNaN(lat) && !math.IsNaN(lon) &&
+			lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 &&
+			(lat != 0 || lon != 0)
+		if fail != nil {
+			if valid {
+				t.Fatalf("Coordinates(%v, %v) refused a valid pair: %s", lat, lon, fail.Reason)
+			}
+			if outLat != 0 || outLon != 0 {
+				t.Fatalf("Coordinates(%v, %v): failure %s with output (%v, %v)", lat, lon, fail.Reason, outLat, outLon)
+			}
+			return
+		}
+		if !valid {
+			t.Fatalf("Coordinates(%v, %v) accepted an invalid pair", lat, lon)
+		}
+		if outLat != lat || outLon != lon || math.Signbit(outLat) && outLat == 0 || math.Signbit(outLon) && outLon == 0 {
+			t.Fatalf("Coordinates(%v, %v) = (%v, %v): changed more than the sign of zero", lat, lon, outLat, outLon)
+		}
+		if againLat, againLon, f2 := input.Coordinates(outLat, outLon); f2 != nil || againLat != outLat || againLon != outLon {
+			t.Fatalf("Coordinates(%v, %v): not idempotent (%v, %v) -> (%v, %v, %v)", lat, lon, outLat, outLon, againLat, againLon, f2)
 		}
 	})
 }

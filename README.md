@@ -59,6 +59,7 @@ func ParseInt32(raw string, lo, hi int32) (int32, *Failure)              // deci
 func ParseInt64(raw string, lo, hi int64) (int64, *Failure)
 func ParsePage(rawNumber, rawSize string, defaultSize, maxSize int32) (Page, *Failure)
 func MaxItems(n, maxItems int) *Failure
+func Coordinates(lat, lon float64) (float64, float64, *Failure)           // finite, lat [-90,90], lon [-180,180], never (0,0); -0 out as 0
 func Phone(raw string) (string, *Failure)                                 // '+' required, no letters, libphonenumber IsValidNumber, E.164 out
 func Email(raw string, maxRunes int) (string, *Failure)                   // domain lower-cased, no DNS/IDN
 func Collect(fields ...*errors.FieldError) []errors.FieldError            // drops nils; nil when nothing failed
@@ -79,9 +80,9 @@ if details := input.Collect(nameF.At("name"), idF.At("id")); details != nil {
 }
 ```
 
-`At` is nil-safe (a nil `*Failure` yields nil), which is what makes the `Collect` idiom work. A `ParsePage` failure names the input that failed through `AtPage(numberField, sizeField)`. `Phone` additionally refuses an interior control/format character and an extension (E.164 cannot carry one). Stricter domain rules (organisation's +7, VIN grammar) stay in the service, applied to the cleaned value.
+`At` is nil-safe (a nil `*Failure` yields nil), which is what makes the `Collect` idiom work. A `ParsePage` failure names the input that failed through `AtPage(numberField, sizeField)`. `Phone` additionally refuses an interior control/format character and an extension (E.164 cannot carry one). `Coordinates` judges the pair, so the caller attaches the point's one field name (`.At("location")`); its bounds are the fixed WGS 84 range, not a per-call choice. Exactly (0, 0), either sign of zero, is `COMMON_COORDINATES_UNSET` rather than invalid: it is what a client sends when it has no point, and no address in this market lies at null island, so an app can ask for a point on the map. A single zero axis (the equator, the prime meridian) stays valid. Stricter domain rules (organisation's +7, VIN grammar) stay in the service, applied to the cleaned value.
 
-Reasons (exported as `Reason*` constants): `COMMON_TEXT_REQUIRED`, `COMMON_TEXT_TOO_LONG {max}`, `COMMON_TEXT_INVALID_CHARACTERS`, `COMMON_UUID_INVALID`, `COMMON_NUMBER_INVALID`, `COMMON_NUMBER_OUT_OF_RANGE {min,max}`, `COMMON_TOO_MANY_ITEMS {max}`, `COMMON_PHONE_INVALID`, `COMMON_EMAIL_INVALID`, `COMMON_INPUT_REJECTED_BY_STORAGE` (the `pgerr` backstop), `COMMON_REQUEST_ENCODING_INVALID` (api-gateway).
+Reasons (exported as `Reason*` constants): `COMMON_TEXT_REQUIRED`, `COMMON_TEXT_TOO_LONG {max}`, `COMMON_TEXT_INVALID_CHARACTERS`, `COMMON_UUID_INVALID`, `COMMON_NUMBER_INVALID`, `COMMON_NUMBER_OUT_OF_RANGE {min,max}`, `COMMON_TOO_MANY_ITEMS {max}`, `COMMON_PHONE_INVALID`, `COMMON_EMAIL_INVALID`, `COMMON_COORDINATES_INVALID` (NaN, ±Inf or out of range), `COMMON_COORDINATES_UNSET` (exactly (0, 0)), `COMMON_INPUT_REJECTED_BY_STORAGE` (the `pgerr` backstop), `COMMON_REQUEST_ENCODING_INVALID` (api-gateway).
 
 ### `pkg/db/pgerr`
 The repository-level backstop for input that reached Postgres without a validator. Call it as the **first line of every `mapPgError`**:
