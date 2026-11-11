@@ -64,6 +64,40 @@ func TestValidate_HappyPath(t *testing.T) {
 	}
 }
 
+// TestValidate_ListingNoticesTakeListingServiceOptionally pins
+// OTDELRAZRABOTKI-958 at the publish gate: the three listing-moderation
+// directives publish with the listing's vertical set AND without it, so a
+// producer on an older go-common (which never fills the field) is not rolled
+// back, and one on this release may fill it.
+func TestValidate_ListingNoticesTakeListingServiceOptionally(t *testing.T) {
+	for _, service := range []string{"", "sale", "rent", "delivery", "repair"} {
+		approved := validEnvelope(t)
+		approved.GetSendListingApproved().ListingService = service
+
+		rejected := validEnvelope(t)
+		rejected.Metadata.Type = notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED
+		rejected.Payload = &notificationv1.NotificationEnvelope_SendListingRejected{
+			SendListingRejected: &notificationv1.SendListingRejected{
+				ListingId: "L1", ListingTitle: "Test listing", Reason: "no photos", ListingService: service,
+			},
+		}
+
+		unpublished := validEnvelope(t)
+		unpublished.Metadata.Type = notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED
+		unpublished.Payload = &notificationv1.NotificationEnvelope_SendListingUnpublished{
+			SendListingUnpublished: &notificationv1.SendListingUnpublished{
+				ListingId: "L1", ListingTitle: "Test listing", Reason: "outdated", ListingService: service,
+			},
+		}
+
+		for _, e := range []*notificationv1.NotificationEnvelope{approved, rejected, unpublished} {
+			if err := validate(e); err != nil {
+				t.Errorf("%v with listing_service=%q: validate = %v, want nil", e.GetMetadata().GetType(), service, err)
+			}
+		}
+	}
+}
+
 func TestValidate_EmptyEventID(t *testing.T) {
 	e := validEnvelope(t)
 	e.Metadata.EventId = ""
