@@ -256,9 +256,10 @@ func TestExtractParams_SendListingUnpublished(t *testing.T) {
 	env := &notificationv1.NotificationEnvelope{
 		Payload: &notificationv1.NotificationEnvelope_SendListingUnpublished{
 			SendListingUnpublished: &notificationv1.SendListingUnpublished{
-				ListingId:    "listing-123",
-				ListingTitle: "Excavator",
-				Reason:       "missing docs",
+				ListingId:      "listing-123",
+				ListingTitle:   "Excavator",
+				Reason:         "missing docs",
+				ListingService: "rent",
 			},
 		},
 	}
@@ -269,8 +270,9 @@ func TestExtractParams_SendListingUnpublished(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"listing_title": "Excavator",
-		"reason":        "missing docs",
+		"listing_title":   "Excavator",
+		"reason":          "missing docs",
+		"listing_service": "rent",
 	}
 	if len(params) != len(want) {
 		t.Fatalf("params = %v, want %v", params, want)
@@ -1729,6 +1731,11 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 	for typ, want := range map[notificationv1.NotificationType][]string{
 		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:        {"object_title", "object_number", "preview_kind"},
 		notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED: {"object_number"},
+		// OTDELRAZRABOTKI-958: the listing's vertical, a discriminator — see
+		// listing_service_test.go.
+		notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED:    {"listing_service"},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED:    {"listing_service"},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED: {"listing_service"},
 	} {
 		declared[typ] = true
 		if got := OptionalParams(typ); !slices.Equal(got, want) {
