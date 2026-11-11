@@ -13,6 +13,11 @@ const (
 	ReasonTooManyItems          = "COMMON_TOO_MANY_ITEMS"
 	ReasonPhoneInvalid          = "COMMON_PHONE_INVALID"
 	ReasonEmailInvalid          = "COMMON_EMAIL_INVALID"
+	// ReasonCoordinatesInvalid: a coordinate is NaN, infinite or out of range.
+	ReasonCoordinatesInvalid = "COMMON_COORDINATES_INVALID"
+	// ReasonCoordinatesUnset: the pair is exactly (0, 0), the value a client
+	// sends when it has no point, so an app can ask for a point on the map.
+	ReasonCoordinatesUnset = "COMMON_COORDINATES_UNSET"
 	// ReasonInputRejectedByStorage is the pgerr backstop's Reason: a value
 	// reached Postgres without passing a validator and Postgres refused it.
 	ReasonInputRejectedByStorage = "COMMON_INPUT_REJECTED_BY_STORAGE"
@@ -33,6 +38,8 @@ var englishMessages = map[string]string{
 	ReasonTooManyItems:           "too many items",
 	ReasonPhoneInvalid:           "value is not a valid phone number",
 	ReasonEmailInvalid:           "value is not a valid email address",
+	ReasonCoordinatesInvalid:     "value is not a valid coordinate pair",
+	ReasonCoordinatesUnset:       "value is not set: (0, 0) is not a location",
 	ReasonInputRejectedByStorage: "value was rejected by storage",
 	ReasonRequestEncodingInvalid: "request path or query contains invalid encoding",
 }

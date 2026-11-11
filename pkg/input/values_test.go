@@ -325,6 +325,7 @@ func TestMessageForEveryReason(t *testing.T) {
 		input.ReasonTextRequired, input.ReasonTextTooLong, input.ReasonTextInvalidCharacters,
 		input.ReasonUUIDInvalid, input.ReasonNumberInvalid, input.ReasonNumberOutOfRange,
 		input.ReasonTooManyItems, input.ReasonPhoneInvalid, input.ReasonEmailInvalid,
+		input.ReasonCoordinatesInvalid, input.ReasonCoordinatesUnset,
 		input.ReasonInputRejectedByStorage, input.ReasonRequestEncodingInvalid,
 	} {
 		if m := input.MessageFor(r); m == "" || m == "invalid input" {

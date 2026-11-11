@@ -14,7 +14,9 @@
 // Caps are mandatory by signature: every text validator takes a max length in
 // runes, every number validator takes a min and a max. A non-positive text cap
 // or an inverted range is a programming error and panics at the call site, so
-// the first unit test that exercises the call catches it.
+// the first unit test that exercises the call catches it. Coordinates is the
+// one number validator without caller-chosen bounds: the latitude/longitude
+// range is fixed by the coordinate system, not a per-call choice.
 //
 // Spec: dev-setup docs/superpowers/specs/2026-10-02-input-validation-standard-design.md §4.
 package input
