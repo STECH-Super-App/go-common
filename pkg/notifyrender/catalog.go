@@ -999,6 +999,22 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_MESSAGE:        {"object_title", "object_number", "preview_kind"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_CHAT_SECTION_CLOSED: {"object_number"},
+	// ─── listing moderation ───
+	//
+	// `listing_service` names the vertical of the listing a moderation notice is
+	// about (OTDELRAZRABOTKI-958, owner's pick (b) of 10.11.2026: the text names
+	// the vertical, not only the deep link). The vocabulary is sale | rent |
+	// delivery | repair, lower-case — the same spelling as
+	// SendChatSectionClosed.object_service. It is a DISCRIMINATOR, read only
+	// inside {{if eq …}} and never printed, so OPTIONAL is the only tier it can
+	// hold; it is also the right one, because a producer still on an older
+	// go-common sends no such field, and a required param would make
+	// notifyoutbox roll back that producer's moderation write. Explicit arms
+	// only, never a bare {{else}}: an absent, empty or unknown value lights no
+	// arm and renders the text that shipped before the field, byte for byte.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED:    {"listing_service"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED:    {"listing_service"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED: {"listing_service"},
 	// ─── rent order lifecycle ───
 	//
 	// ORDER_CANCELLED's three params are DISCRIMINATORS, optional by mechanism

@@ -194,12 +194,14 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		return map[string]string{"object_title": p.SendChatSectionClosed.GetObjectTitle(), "object_number": p.SendChatSectionClosed.GetObjectNumber()}, nil
 	case *notificationv1.NotificationEnvelope_SendListingApproved:
 		return map[string]string{
-			"listing_title": p.SendListingApproved.GetListingTitle(),
+			"listing_title":   p.SendListingApproved.GetListingTitle(),
+			"listing_service": p.SendListingApproved.GetListingService(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendListingRejected:
 		return map[string]string{
-			"listing_title": p.SendListingRejected.GetListingTitle(),
-			"reason":        p.SendListingRejected.GetReason(),
+			"listing_title":   p.SendListingRejected.GetListingTitle(),
+			"reason":          p.SendListingRejected.GetReason(),
+			"listing_service": p.SendListingRejected.GetListingService(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendFavoritePriceChanged:
 		return map[string]string{
@@ -214,8 +216,9 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendListingUnpublished:
 		return map[string]string{
-			"listing_title": p.SendListingUnpublished.GetListingTitle(),
-			"reason":        p.SendListingUnpublished.GetReason(),
+			"listing_title":   p.SendListingUnpublished.GetListingTitle(),
+			"reason":          p.SendListingUnpublished.GetReason(),
+			"listing_service": p.SendListingUnpublished.GetListingService(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendOrganisationVerified:
 		return map[string]string{
