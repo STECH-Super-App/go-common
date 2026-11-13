@@ -64,8 +64,11 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 			"phone": p.SendInviteDeclined.GetPhone(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendInviteExpired:
+		// tenant_name was added to the payload (OTDELRAZRABOTKI-965): a person can
+		// administer up to 16 tenants, so the notice must say which invitation expired.
 		return map[string]string{
-			"phone": p.SendInviteExpired.GetPhone(),
+			"phone":       p.SendInviteExpired.GetPhone(),
+			"tenant_name": p.SendInviteExpired.GetTenantName(),
 		}, nil
 	case *notificationv1.NotificationEnvelope_SendInviteUserRegistered:
 		return map[string]string{
@@ -101,10 +104,13 @@ func ExtractParams(env *notificationv1.NotificationEnvelope) (map[string]string,
 		// organisation-service EMAIL/SYSTEM directive: the organisation owner is
 		// asked to resubmit verification documents. reasons is a repeated field;
 		// join it into a single value since the params map is map[string]string.
+		// organization_name was added to the payload (OTDELRAZRABOTKI-965) so the
+		// in-app notice can say which of the person's organisations is concerned.
 		return map[string]string{
-			"organisation_id": p.SendOrganisationDocumentsRequested.GetOrganisationId(),
-			"comment":         p.SendOrganisationDocumentsRequested.GetComment(),
-			"reasons":         strings.Join(p.SendOrganisationDocumentsRequested.GetReasons(), ", "),
+			"organisation_id":   p.SendOrganisationDocumentsRequested.GetOrganisationId(),
+			"organization_name": p.SendOrganisationDocumentsRequested.GetOrganizationName(),
+			"comment":           p.SendOrganisationDocumentsRequested.GetComment(),
+			"reasons":           strings.Join(p.SendOrganisationDocumentsRequested.GetReasons(), ", "),
 		}, nil
 
 	// ─── organisation change-request moderation (organisation-service) ───
