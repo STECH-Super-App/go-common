@@ -881,9 +881,10 @@ func TestExtractParams_SendOrganisationDocumentsRequested(t *testing.T) {
 	env := &notificationv1.NotificationEnvelope{
 		Payload: &notificationv1.NotificationEnvelope_SendOrganisationDocumentsRequested{
 			SendOrganisationDocumentsRequested: &notificationv1.SendOrganisationDocumentsRequested{
-				OrganisationId: "tenant-42",
-				Reasons:        []string{"blurry scan", "expired license"},
-				Comment:        "please resubmit clearer photos",
+				OrganisationId:   "tenant-42",
+				Reasons:          []string{"blurry scan", "expired license"},
+				Comment:          "please resubmit clearer photos",
+				OrganizationName: "Acme LLC",
 			},
 		},
 	}
@@ -894,9 +895,10 @@ func TestExtractParams_SendOrganisationDocumentsRequested(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"organisation_id": "tenant-42",
-		"comment":         "please resubmit clearer photos",
-		"reasons":         "blurry scan, expired license",
+		"organisation_id":   "tenant-42",
+		"organization_name": "Acme LLC",
+		"comment":           "please resubmit clearer photos",
+		"reasons":           "blurry scan, expired license",
 	}
 	if len(params) != len(want) {
 		t.Fatalf("params = %v, want %v", params, want)
@@ -1736,6 +1738,10 @@ func TestOptionalParamsScopedToDeclaredTypes(t *testing.T) {
 		notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_APPROVED:    {"listing_service"},
 		notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_REJECTED:    {"listing_service"},
 		notificationv1.NotificationType_NOTIFICATION_TYPE_LISTING_UNPUBLISHED: {"listing_service"},
+		// OTDELRAZRABOTKI-965: the two typed account notices whose sender may not
+		// know a field — see account_notices_test.go.
+		notificationv1.NotificationType_NOTIFICATION_TYPE_NEW_DEVICE_LOGIN:                 {"device_name", "ip"},
+		notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DOCUMENTS_REQUESTED: {"reasons", "comment"},
 	} {
 		declared[typ] = true
 		if got := OptionalParams(typ); !slices.Equal(got, want) {

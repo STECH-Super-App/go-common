@@ -101,6 +101,20 @@ var typeKey = map[notificationv1.NotificationType]string{
 	// organisation deactivated after its leading user deleted their account
 	// (П-14). Tenant-addressed fan-out to the org's ADMIN + MANAGER members.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DEACTIVATED: "organisation_deactivated",
+	// ── typed account notices (179–184, OTDELRAZRABOTKI-965) ── the six notices that
+	// used to be EMAIL-only directives. A person may now register without an
+	// e-mail, so each one reaches the person as an in-app feed row (two also as a
+	// push) instead of through a mailbox that may not exist. They reuse the
+	// existing SendWelcome / SendNewDeviceLogin / SendOrganisationCreated /
+	// SendOrganisationDocumentsRequested / SendInviteExpired /
+	// SendInviteUserRegistered payloads; only ExtractParams' two new fields
+	// (organization_name, tenant_name) are additive.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_WELCOME:                          "welcome",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_NEW_DEVICE_LOGIN:                 "new_device_login",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_SUBMITTED:           "organisation_submitted",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DOCUMENTS_REQUESTED: "organisation_documents_requested",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_EXPIRED:                   "invite_expired",
+	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_INVITEE_REGISTERED:        "invite_invitee_registered",
 
 	// ─── Маркетплейс запчастей (parts) ───
 	//
@@ -574,6 +588,25 @@ var requiredParams = map[notificationv1.NotificationType][]string{
 	// lookup to an organisation that is now INACTIVE.
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DEACTIVATED: {
 		"organization_name",
+	},
+	// ─── typed account notices (179–184, OTDELRAZRABOTKI-965) ───
+	// Every required param is something the sender always knows: the person's
+	// name, the organisation or tenant the notice is about, the invitee's phone.
+	// 180 NEW_DEVICE_LOGIN requires nothing — see optionalParams.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_WELCOME: {
+		"user_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_SUBMITTED: {
+		"organization_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DOCUMENTS_REQUESTED: {
+		"organization_name",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_EXPIRED: {
+		"tenant_name", "phone",
+	},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_INVITEE_REGISTERED: {
+		"tenant_name", "phone",
 	},
 
 	// ─── Маркетплейс запчастей (parts) ───
@@ -1323,6 +1356,20 @@ var optionalParams = map[notificationv1.NotificationType][]string{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_RESPONSE_WITHDRAWN:       {"posting_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRING:         {"posting_no"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_REPAIR_POSTING_EXPIRED_CUSTOMER: {"posting_no"},
+
+	// ─── typed account notices (179–184, OTDELRAZRABOTKI-965) ───
+	//
+	// 180 NEW_DEVICE_LOGIN: `device_name` and `ip` are both optional — the sender
+	// (auth-service) may not know either, and a sign-in notice must still be
+	// delivered. The baseline therefore has three editions (device known, only the
+	// IP known, neither), each behind an {{if}}.
+	//
+	// 182 ORGANISATION_DOCUMENTS_REQUESTED: `reasons` (the repeated payload field,
+	// joined with ", ") and `comment` are the moderator's free input and either may
+	// be left empty; the organisation name is the only thing the text cannot do
+	// without, and it is required.
+	notificationv1.NotificationType_NOTIFICATION_TYPE_NEW_DEVICE_LOGIN:                 {"device_name", "ip"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_ORGANISATION_DOCUMENTS_REQUESTED: {"reasons", "comment"},
 }
 
 // RequiredParams returns the param names required for type t — the contract

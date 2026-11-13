@@ -196,6 +196,7 @@ var endingTypesWithoutAReason = map[notificationv1.NotificationType]exclusion{
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_CATALOGUE_MACHINERY_REJECTED: {notADeal, "Р42 catalogue moderation (it prints the reason anyway)"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_PARTS_POSITIONS_REJECTED:           {notADeal, "Р40's matching queue counts rejected price-list rows"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_DECLINED:                    {notADeal, "a team invitation"},
+	notificationv1.NotificationType_NOTIFICATION_TYPE_INVITE_EXPIRED:                     {notADeal, "a team invitation, ended by its timer (OTDELRAZRABOTKI-965)"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_REJECTED:        {notADeal, "an organisation's admin-role handoff"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_CANCELLED:       {notADeal, "an organisation's admin-role handoff"},
 	notificationv1.NotificationType_NOTIFICATION_TYPE_ORG_ADMIN_TRANSFER_EXPIRED:         {notADeal, "an organisation's admin-role handoff, ended by its timer"},
