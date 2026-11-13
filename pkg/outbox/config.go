@@ -25,18 +25,22 @@ type Config struct {
 //	OUTBOX_SHUTDOWN_FLUSH_TIMEOUT - In-flight batch flush after cancel (default: "5s")
 //	OUTBOX_REAPER_INTERVAL - Cleanup schedule           (default: "5m")
 //	OUTBOX_RETENTION      - Sent message retention      (default: "72h")
+//	OUTBOX_PROCESSED_RETENTION - Deduplicator claim retention (default: "720h")
+//	OUTBOX_PROCESSED_BATCH_SIZE - Claims deleted per statement (default: 5000)
 //	OUTBOX_METRICS_INTERVAL - Backlog gauge sampling    (default: "15s")
 func DefaultConfig() *Config {
 	return &Config{
 		Relay: RelayConfig{
-			PollInterval: config.GetEnvDuration("OUTBOX_POLL_INTERVAL", 1*time.Second),
-			BatchSize:    config.GetEnvInt("OUTBOX_BATCH_SIZE", 100),
+			PollInterval: config.GetEnvDuration("OUTBOX_POLL_INTERVAL", DefaultPollInterval),
+			BatchSize:    config.GetEnvInt("OUTBOX_BATCH_SIZE", DefaultBatchSize),
 			ShutdownFlushTimeout: config.GetEnvDuration(
 				"OUTBOX_SHUTDOWN_FLUSH_TIMEOUT", DefaultShutdownFlushTimeout),
 		},
 		Reaper: ReaperConfig{
-			Interval:  config.GetEnvDuration("OUTBOX_REAPER_INTERVAL", 5*time.Minute),
-			Retention: config.GetEnvDuration("OUTBOX_RETENTION", 72*time.Hour),
+			Interval:           config.GetEnvDuration("OUTBOX_REAPER_INTERVAL", DefaultReaperInterval),
+			Retention:          config.GetEnvDuration("OUTBOX_RETENTION", DefaultRetention),
+			ProcessedRetention: config.GetEnvDuration("OUTBOX_PROCESSED_RETENTION", DefaultProcessedRetention),
+			ProcessedBatchSize: config.GetEnvInt("OUTBOX_PROCESSED_BATCH_SIZE", DefaultProcessedBatchSize),
 		},
 		MetricsInterval: config.GetEnvDuration("OUTBOX_METRICS_INTERVAL", DefaultMetricsInterval),
 	}

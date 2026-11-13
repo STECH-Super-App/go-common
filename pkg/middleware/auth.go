@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
@@ -65,8 +64,8 @@ func RegistrationAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		phone := c.Request().Header.Get(auth.HeaderPhone)
 		scope := c.Request().Header.Get(auth.HeaderScope)
 
-		log.Printf("RegistrationAuthMiddleware - Phone: %q, Scope: %q", phone, scope)
-
+		// No logging here: the phone number is PII and this line used to put it
+		// in every container log (SL-12).
 		if phone == "" || scope != "registration" {
 			return response.JSONError(c, commonErrors.New(http.StatusUnauthorized).
 				Reason("COMMON_REGISTRATION_TOKEN_REQUIRED").

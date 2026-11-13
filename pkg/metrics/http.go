@@ -53,3 +53,15 @@ func StatusClass(code int) string {
 	}
 	return strconv.Itoa(class) + "xx"
 }
+
+// MethodLabel clamps an HTTP request method to the nine standard verbs; any
+// other value is "OTHER". net/http accepts any token as a method, so the raw
+// method is client-chosen and, as a label, unbounded cardinality (SL-06).
+func MethodLabel(m string) string {
+	switch m {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE":
+		return m
+	default:
+		return "OTHER"
+	}
+}

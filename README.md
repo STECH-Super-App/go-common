@@ -2,6 +2,8 @@
 
 Shared library for STECH microservices.
 
+> **Release 1 of the audit-fix campaign (14.11.2026) has ONE intentionally breaking point.** `outbox.New`, `outbox.NewRelay` and `events.NewDispatcher` (its DLQ writer and its `WithRetry` writer) now **panic at construction** when handed a `*kafka.Writer` that is `Async` or has `RequiredAcks == RequireNone` — kafka-go's zero value. Such a writer reports success before any broker answered, so the relay marked rows `sent` and the dispatcher committed offsets behind writes that never happened (SL-01). A service that still builds its writers by hand will **fail at start-up after the bump**; build them with `kafkawriter.NewProducer` / `kafkawriter.NewTopicWriter` ([`pkg/kafkawriter`](#pkgkafkawriter)). Everything else in the release is additive. The fleet checklist is `CHANGELOG.md` → "UPGRADING — release 1".
+
 ## Packages
 
 ### `pkg/auth` — chat read claims
@@ -24,22 +26,22 @@ Three headers carry a caller's tenant seats; the gateway sets all of them from v
 - **Fail-closed formatting.** The formatters omit any claim the parser would refuse (bad id, unknown role, out-of-range time, repeated id — first wins) and any entry without a start time (`at == 0` is "no baseline", never a zero baseline), so `Parse(Format(x))` never errors and one bad seat costs only itself.
 - **One role expansion.** `ExpandTenantRole` turns the token's compact role (`A`/`M`/`O`) into the long form; unknown codes pass through verbatim. The gateway uses it for all three headers.
 - **The bound.** `tns` plus `tns_ro` together hold at most 16 entries (tenant-service's membership cap, enforced where tokens are minted); the 64-entry parser limit is only a transport sanity bound.
+- **`ParseTenantMembershipsStrict(header) ([]TenantMembership, error)`** is the same strictness for `X-Tenant-Memberships` itself (SL-29): every entry `<uuid>=<role>`, tenant id lower-cased, nil UUID / repeated tenant / empty entry / more than 64 entries / a role with a separator, whitespace or control character → typed 400 `COMMON_TENANT_MEMBERSHIPS_INVALID`, whole header, no partial result. `ParseTenantMemberships` stays lenient for compatibility (it accepts non-UUID ids and reads past a malformed entry — the fleet's unit tests use such ids); new code should use the strict one. `FormatTenantMemberships` now also omits an entry whose id or role is empty or holds `,` or `=` (a role `ADMIN,<id>=ADMIN` would have forged a second membership), and `FormatRolesCSV(roles)` does the same for `X-User-Roles`.
 
 ### `pkg/config`
 Helper functions for loading configuration from environment variables.
-- `GetEnv(key, default)`
-- `GetEnvInt(key, default)`
-- `GetEnvBool(key, default)`
-- `GetEnvDuration(key, default)`
+- `GetEnv(key, default)` — an **unset or empty** variable counts as absent: the default is returned. (It used to return `""` for a set-but-empty variable, so a ConfigMap key rendered empty replaced a default such as the broker list; use `os.LookupEnv` where an explicitly empty value must mean something.)
+- `GetEnvInt/Int8…Int64/Uint…Uint64/Float/Float32/Bool/Duration(key, default)` — absent or empty → default silently; **set but unparseable** (`SOME_TIMEOUT=30` without a unit, `X_ENABLED=yes`) → default, and the `InvalidHandler` is told the key and the wanted type (never the value: it may be a secret). The default handler writes one JSON warn line to stderr; configuration is read before the logger exists, which is why this is a hook. `SetInvalidHandler(h)` replaces it and returns the previous one.
 
 ### `pkg/db`
 Database connection factories.
-- **Postgres**: `NewPostgres` creates a `*pgxpool.Pool` (using `jackc/pgx/v5`).
-- **Redis**: `NewRedis` creates a `*redis.Client` (using `redis/go-redis/v9`).
+- **Postgres**: `NewPostgres` creates a `*pgxpool.Pool` (using `jackc/pgx/v5`) and pings it. A **zero `PostgresConfig` field means "not set"**: the value parsed from the URL (`pool_max_conns=…`) or pgx's own default stays, and only a non-zero field overrides it — an unset `MaxConns` used to fail pool creation and an unset `MaxConnLifetime` used to expire every connection on release. A pool that fails its ping is closed.
+- **Redis**: `NewRedis` creates a `*redis.Client` and pings it (closed on failure). `RedisConfig` also takes `TLS` (TLS 1.2+, system roots) and `DialTimeout` / `ReadTimeout` / `WriteTimeout` (zero keeps go-redis's defaults).
+- Failures are typed 500s (Critical Rule 7): `COMMON_DB_CONFIG_INVALID`, `COMMON_DB_UNAVAILABLE`, driver error as the cause.
 
 ### `pkg/egress`
 The outbound HTTP client for every call to the public internet (spec dev-setup `docs/superpowers/specs/2026-11-04-egress-service-design.md` §4.4). Build it in `main` and pass it to each provider client; never use `http.DefaultClient` for an external host.
-- `HTTPClient(timeout)` / `Transport()` read `EGRESS_PROXY_URL` (the caller's own egress-proxy port, `http://host:port` only); `NewTransport(Config)` takes the values explicitly. The transport is a clone of `http.DefaultTransport` with `ForceAttemptHTTP2` and its `Proxy` fixed to that URL.
+- `HTTPClient(timeout)` / `Transport()` read `EGRESS_PROXY_URL` (the caller's own egress-proxy port, `http://host:port` only); `NewTransport(Config)` takes the values explicitly. The transport is built from a literal carrying `http.DefaultTransport`'s settings (`ForceAttemptHTTP2`, dial/idle/TLS timeouts) with its `Proxy` fixed to that URL — it no longer clones `http.DefaultTransport` through a type assertion, which panicked at start-up as soon as any imported package wrapped the default transport (SL-32). `HTTPClient` refuses a non-positive timeout (`COMMON_EGRESS_TIMEOUT_INVALID`: a zero `http.Client.Timeout` waits for ever) and clients built from the same configuration **share one transport** and its connection pool; `NewTransport` / `Transport` still return a fresh transport each call.
 - `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are never read: a process-wide proxy would route internal gRPC and tracing into egress.
 - An empty URL is a typed error `COMMON_EGRESS_NOT_CONFIGURED`, never a silent direct call. The one opt-out is `EGRESS_DIRECT=true` together with `APP_ENV=local` (a binary run on the host, outside compose). A malformed URL is `COMMON_EGRESS_PROXY_URL_INVALID`.
 
@@ -57,17 +59,20 @@ func Int32(v int64, lo, hi int32) (int32, *Failure)
 func Int64(v int64, lo, hi int64) (int64, *Failure)
 func ParseInt32(raw string, lo, hi int32) (int32, *Failure)              // decimal only: optional '-', digits
 func ParseInt64(raw string, lo, hi int64) (int64, *Failure)
-func ParsePage(rawNumber, rawSize string, defaultSize, maxSize int32) (Page, *Failure)
+func ParsePage(rawNumber, rawSize string, defaultSize, maxSize int32) (Page, *Failure)  // page in [1, DefaultMaxPage = 10000]
+func ParsePageMax(rawNumber, rawSize string, defaultSize, maxSize, maxPage int32) (Page, *Failure) // the same with the deepest page stated by the caller
 func MaxItems(n, maxItems int) *Failure
 func Coordinates(lat, lon float64) (float64, float64, *Failure)           // finite, lat [-90,90], lon [-180,180], never (0,0); -0 out as 0
 func Phone(raw string) (string, *Failure)                                 // '+' required, no letters, libphonenumber IsValidNumber, E.164 out
-func Email(raw string, maxRunes int) (string, *Failure)                   // domain lower-cased, no DNS/IDN
+func Email(raw string, maxRunes int) (string, *Failure)                   // ASCII dot-atom local part ≤ 64, domain lower-cased ≤ 253, whole ≤ 254; no DNS/IDN
 func Collect(fields ...*errors.FieldError) []errors.FieldError            // drops nils; nil when nothing failed
 func GRPC(fields ...errors.FieldError) error                              // InvalidArgument + errdetails.BadRequest; nil for no fields
 func MessageFor(reason string) string                                     // English fallback for AppError.Message
 ```
 
 `Line`/`Body` processing order: (1) invalid UTF-8 → `COMMON_TEXT_INVALID_CHARACTERS`; (2) trim leading/trailing whitespace, `Cc` and `Cf`; (3) character rule — any `Cc` (Body exempts TAB/LF/CR), and in `Line` also U+200E/F, U+202A–E, U+2066–9, U+2028/9 → `COMMON_TEXT_INVALID_CHARACTERS`. The rule is a copy of sale-service `app/Support/Validation/ControlCharacters.php`, pinned by a port of its unit vectors and an exhaustive all-code-points test. Interior `Cf` (ZWJ, ZWSP, BOM) is allowed — emoji sequences need ZWJ; (4) blank (only whitespace / `Cf` / variation selectors / default-ignorables) → `COMMON_TEXT_REQUIRED` with `Required()`, else `""`; (5) rune count > max → `COMMON_TEXT_TOO_LONG {max}`. No Unicode normalisation.
+
+**Hardening of 14.11.2026 (SL-17…SL-20).** (1) Step 2 trims whitespace, `Cc` and a *named* list of invisible format runes (BOM, ZWSP/ZWNJ/ZWJ, direction marks, bidi controls, word joiner and invisible operators, soft hyphen, ALM) — not the whole `Cf` category, which holds the emoji tag characters that end a flag sequence (U+E0020–E007F) and the Arabic number signs that start a number (U+0600–0605, U+06DD): a text ending in the flag of Scotland is now stored as typed. (2) `Body` refuses **unbalanced** bidi embedding/override/isolate controls (LRE, RLE, LRO, RLO need a PDF; LRI, RLI, FSI a PDI): an unclosed RLO reverses everything after it, which let a description show a phone number or link backwards; balanced pairs and LRM/RLM stay allowed. This is the one place `Body` departs from sale-service `ControlCharacters::found`, which the PHP side must follow. (3) A required field of U+2800 (braille blank) is now blank, with the Hangul/Khmer fillers. (4) `Email`: the local part is an RFC 5322 dot-atom in ASCII (letters, digits, `!#$%&'*+-/=?^_`{|}~`, single dots between atoms) — a comma (a second SMTP recipient), angle brackets, quotes and every non-ASCII letter (a Cyrillic «а» posing as a Latin one) are refused; length limits 64 / 63 per label / 253 / 254; a numeric last label (`a@127.0.0.1`) is refused. **Case is kept**: `User@x.ru` and `user@x.ru` are two values; compare lower-cased where identity matters. (5) `ParsePage` refuses a page beyond `DefaultMaxPage` (10 000): a page is an offset Postgres walks, and `?page=2000000000` cost a full scan per request. A list that must go deeper calls `ParsePageMax` with its own bound.
 
 `*Failure` (`Reason`, `Params`) implements `error`, so a domain constructor can return it and a handler finds it with `errors.As`. The library is **status-free**: the service picks the HTTP status. Field names are attached by whoever knows them:
 
@@ -96,7 +101,7 @@ func mapPgError(err error) error {
 }
 ```
 
-`InvalidInput(err) (*input.Failure, bool)` recognises `*pgconn.PgError` SQLSTATE `22021`, `22P05`, `22001`, `22P02`, and pgx v5's client-side integer out-of-range encode error (no exported type; matched on its message, pinned by a test that produces the real error through `pgx.ExtendedQueryBuilder`). A hit returns a `COMMON_INPUT_REJECTED_BY_STORAGE` Failure whose cause carries the SQLSTATE and Postgres' table/column (logged, never sent to the client), and increments `stech_input_backstop_total{sqlstate}` (`22021|22P05|22001|22P02|encode`, all five pre-created at 0) on `metrics.Registry`. Any increase means a missing `pkg/input` call — the alert is `increase(stech_input_backstop_total[15m]) > 0`.
+`InvalidInput(err) (*input.Failure, bool)` recognises `*pgconn.PgError` SQLSTATE `22021`, `22P05`, `22001`, `22P02` and — since 14.11.2026 (SL-21) — `22003` (numeric overflow: 1e15 into `numeric(12,2)`), `22007`, `22008` (bad / out-of-range date) and `54000` (value too large for an index row), plus pgx v5's client-side integer out-of-range encode error (no exported type; matched on its message, pinned by a test that produces the real error through `pgx.ExtendedQueryBuilder`). `22003` can also come from server-side arithmetic on valid inputs; it is counted anyway, because a 4xx with an alert beats a Reason-less 500. A hit returns a `COMMON_INPUT_REJECTED_BY_STORAGE` `*input.Failure` and moves `stech_input_backstop_total{sqlstate}`; every series is pre-created at 0.
 
 ### `pkg/errors`
 Typed application-error envelope returned to HTTP clients.
@@ -143,7 +148,7 @@ Standard HTTP response envelope and helpers built on top of `pkg/errors`.
 
 - `response.Success(c, data)` — 200 with `{success: true, data}`.
 - `response.Created(c, data)` — 201 with `{success: true, data}`.
-- `response.JSONError(c, err)` — 4xx/5xx with `{success: false, error: {code, reason, message, params, details}}`. If `err` is an `*AppError`, all of `Reason`, `Params`, and `Details` are forwarded; otherwise the response is a generic 500 envelope.
+- `response.JSONError(c, err)` — 4xx/5xx with `{success: false, error: {code, reason, message, params, details}}`. It renders: an `*AppError` (all of `Reason`, `Params`, `Details` forwarded; a `Code` outside 100..599 — a zero value used to panic `WriteHeader` — is sent as 500); an `*input.Failure` (422 with its Reason and Params, or 400 for the storage backstop `COMMON_INPUT_REJECTED_BY_STORAGE`, whose cause never reaches the client); an `*http.MaxBytesError` (413 `COMMON_REQUEST_TOO_LARGE`, even when `c.Bind` wrapped it in a 400); an `*echo.HTTPError` — a failed `c.Bind`, the router's 404/405 — with its status, a `COMMON_*` Reason by status (`COMMON_BAD_REQUEST`, `COMMON_NOT_FOUND`, `COMMON_METHOD_NOT_ALLOWED`, `COMMON_REQUEST_TOO_LARGE`, `COMMON_UNSUPPORTED_MEDIA_TYPE`, `COMMON_TOO_MANY_REQUESTS`, `COMMON_INTERNAL` for 5xx) and the status text, never the bind error's parser internals; anything else is a 500 with Reason `COMMON_INTERNAL`, so even an unclassified fault has an i18n key (SL-14).
 
 The diagnostic log line is written through the **request-scoped logger** (`logger.FromContext(c.Request().Context())`, populated by `middleware.RequestLogger`), so it carries `service`, `request_id`, and `trace_id`/`span_id` — findable by request id and joinable to its trace. The level follows the HTTP **status class**: a 5xx logs at `Error`, a 4xx at `Warn` (seen but not paged, and kept off the `{level="error"}` error-rate panel), and a 2xx/3xx reached defensively is not logged here. The free-text error is preserved in the `error` field and the typed `Reason`, when present, in `reason`. With no request logger on the context, `FromContext` falls back to a logger still carrying the service identity (a no-op when logging was never configured), so the call is always safe.
 
@@ -202,7 +207,8 @@ str, err := snap.Resolve("ru", "tenant.transfer.expired_sms", map[string]any{
 - `(b *OverlayBundle) Load(ctx)` / `Reload(ctx)` — both do the same thing (`Reload` just re-reads `dirPath`); return a `*LoadSummary{Namespace, Source, Loaded, Rejected, Missing, Shadowed}` for logging/response, never an error.
 - `(b *OverlayBundle) Snapshot() *Snapshot` — the only way to resolve keys; `(s *Snapshot) Resolve(locale, key string, params map[string]any) (string, error)`.
 - Resolution order per key: matched-locale overlay -> en overlay -> compiled-in baseline -> `ErrKeyNotFound`. Locale matching is base-language equality (`ru-RU` -> `ru`); an unsupported locale (e.g. `kk` with no `kk.json` mounted) falls through to en, not to a fuzzy-nearest language.
-- **Fail-soft per-key validation, not fail-fast.** `WithAllowedParams(func(key string) ([]string, bool))` supplies a placeholder allow-list; a locale value whose `{{.placeholder}}`s aren't a subset of the allowed set is dropped (falls back to baseline) and listed in `LoadSummary.Rejected` as `"<tag>/<key>"`, with a structured warn — it does not fail the load. Without an allow-list, a key defers to its own baseline's placeholders. Malformed JSON or an unparseable locale filename is likewise a skip-with-warn on that one file, never a hard error.
+- **Fail-soft per-key validation, not fail-fast.** `WithAllowedParams(func(key string) ([]string, bool))` supplies a placeholder allow-list. Every overlay value is **parsed as the template it will be rendered as** at load: one that does not parse (`{{.name}`), or whose parse tree reads a name outside the allowed set, is dropped (falls back to baseline) and listed in `LoadSummary.Rejected` as `"<locale>/<key>"`. The names come from walking the parse tree (`i18n.Placeholders(s) ([]string, error)`), not a pattern, so `{{if .x}}`, `{{- .x -}}`, `{{ .x | printf "%s" }}`, `{{else if .x}}`, `{{.x.y}}` and `{{index . "x"}}` are all seen (SL-07). Parsed templates are cached in the `Snapshot`, so a render is an `Execute`, not a `Parse`.
+- **A render error falls through.** `Resolve` tries matched-locale overlay → en overlay → baseline and takes the first layer that **renders**; a value that parses but fails at run time (an incompatible comparison) is logged at Warn and skipped instead of failing every message of its type. Only when every layer fails does `Resolve` return the error (`ErrTranslationFailed`).
 - **En shadow warnings.** If the overlay ships an `en.json` that overrides a baseline key (translators editing the "source of truth" copy instead of just non-en locales), the overlay value wins at `Resolve()` time — the truth repo is authoritative over the compiled-in baseline, by design (spec F3). That key is still accepted-but-flagged: it's listed in `LoadSummary.Shadowed` with a structured warn, because a dev who later changes the Go baseline string won't see their change take effect until the truth repo (`i18n-catalog`) is updated to match — the shadow warning is what surfaces that silent drift.
 - `Missing` lists baseline keys absent from the overlay's `en` section — this is the "someone added a new type in Go but forgot the catalog entry" signal (see the new-key flow below).
 - `Snapshot`/`OverlayBundle` keep the same sentinel errors as before: `ErrKeyNotFound` (key absent everywhere), `ErrTranslationFailed` (template parse/exec failure, `text/template` with `missingkey=error` so a stray unrendered placeholder never leaks to a user).
@@ -294,15 +300,15 @@ Observability trio — wire in this order (`Tracing` → `RequestLogger` → `Me
 - `Tracing()`: server span per request, named `METHOD route-template` (`unmatched` when the router matched nothing), extracts the inbound W3C `traceparent`, records `http.status_code`. Costs nothing when `tracing.Init` found no endpoint.
 - `RequestLogger(base, opts...)`: builds the request-scoped child logger (`request_id`, plus `trace_id`/`span_id` when a span is active), stores it on `c.Request().Context()`, and emits **exactly one** INFO access line per request (`route`, `method`, `status`, `duration_ms`). `WithUpstream(fn)` adds the gateway-only `upstream` field. It **replaces** `Logger` at call sites — running both doubles log volume.
   - `request_id` comes from the request **context** first (`requestid.FromContext`, where `requestid.Middleware` parks a value it validated or minted, and where `requestid.UnaryServerInterceptor` parks one that arrived over gRPC) and from the `X-Request-ID` header otherwise. It **never mints one itself** — the id it logs has to be the id the caller can see, and only `requestid.Middleware` puts a minted value on the response and on outbound calls. A service that wires `RequestLogger` alone behaves exactly as it always has: the raw header, logged as it arrived, and no field at all when the header is absent.
-- `Metrics()`: observes `http_request_duration_seconds{method, route, status_class}`. Native Echo shape, never `WrapMiddleware`: `c.Path()` exists only on the Echo context, and wrapping `http.ResponseWriter` would drop `http.Flusher` and break the SSE endpoints.
+- `Metrics()`: observes `http_request_duration_seconds{method, route, status_class}`. The `method` label is clamped to the nine standard verbs (`metrics.MethodLabel`): any other request method is `OTHER`, so a client sending random method names cannot mint a histogram per name (SL-06). Native Echo shape, never `WrapMiddleware`: `c.Path()` exists only on the Echo context, and wrapping `http.ResponseWriter` would drop `http.Flusher` and break the SSE endpoints.
 - `MetricsUnaryServerInterceptor()`: observes `grpc_server_handling_seconds{grpc_service, grpc_method, grpc_code}`. Attach with `grpc.ChainUnaryInterceptor`, never `grpc.UnaryInterceptor` (grpc-go allows the latter only once per server).
 
 All three skip the operational routes `/metrics`, `/health`, `/livez`, `/readyz`, and clamp an unmatched route to `unmatched` — otherwise probe traffic and vulnerability scanners mint series and log lines forever.
 
-- `Logger`: **deprecated** — logs HTTP requests with no `request_id`, so its lines cannot be correlated across the gateway hop. Use `RequestLogger`.
+- `Logger` and `CORS` were **removed** (SL-27): nothing in the fleet called either; `CORS` sent `Access-Control-Allow-Origin: *` together with `Allow-Credentials: true`, and `Logger` logged raw paths and addresses with no `request_id`. Use `RequestLogger`; CORS is the gateway's job.
 - `HeaderRequestID`: the correlation header, `X-Request-ID`. An **alias for `requestid.Header`**, which is the single definition — the spelling cannot drift between the middleware that reads it and the package that stamps it. Both names stay exported; this one has importers across the fleet (api-gateway binds its stamping header to it at compile time).
 - `CORS`: Handles Cross-Origin Resource Sharing.
-- `AuthMiddleware`, `OptionalAuthMiddleware`, `RegistrationAuthMiddleware`, `AdminMiddleware`, `ClientMiddleware`: emit `COMMON_*` reasons via `pkg/errors` + `pkg/response` on rejection.
+- `AuthMiddleware`, `OptionalAuthMiddleware`, `RegistrationAuthMiddleware`, `AdminMiddleware`, `ClientMiddleware`: emit `COMMON_*` reasons via `pkg/errors` + `pkg/response` on rejection. `RegistrationAuthMiddleware` no longer logs anything — it used to write the caller's phone number to the standard logger on every request (SL-12).
 - `ParseUUIDParam(c, paramName, reason)`: validates an Echo path parameter with `input.UUID` — only the 36-character hyphenated form (any case) is accepted; braces, `urn:uuid:` and bare 32-hex are refused — and returns it **lower-cased**. On failure returns a 400 `*AppError` with the supplied reason, a message derived from `paramName`, and the `*input.Failure` as its cause. Stops malformed UUIDs at the handler boundary so they never reach the repository layer (where Postgres would reject them with SQLSTATE 22P02 and leak as a 500).
 
 ### `pkg/requestid`
@@ -356,7 +362,7 @@ Span names obey the same cardinality law as metric labels: route templates and t
 The fleet's process shutdown orchestrator: SIGTERM becomes an ordered, bounded drain instead of a runtime kill. It **accepts already-built components** — it builds nothing, reads no config and never calls `os.Exit`/`Fatal`; `main` keeps the wiring and the exit code. Design: dev-setup `docs/superpowers/specs/2026-10-03-go-graceful-shutdown-design.md`.
 
 - `SignalContext(parent) (ctx, cancel)`: cancelled on the first **SIGINT or SIGTERM** (Docker and the kubelet send SIGTERM — `os.Interrupt` alone is not enough). After the first signal the handler unregisters, so a second signal kills the process immediately.
-- `New(log, opts...)`, `WithShutdownBudget(d)` (default `DefaultShutdownBudget` = 25 s, one deadline for every phase, fits the k8s 30 s grace), `WithDrainDelay(d)` (default 0, counts against the budget).
+- `New(log, opts...)`, `WithShutdownBudget(d)` (default `DefaultShutdownBudget` = 25 s, one deadline for every phase, fits the k8s 30 s grace), `WithDrainDelay(d)` (default 0, counts against the budget), `WithWorkerReserve(d)` (default `DefaultWorkerReserve` = 10 s, never more than 40% of the budget): the part of the budget the server phase may **not** use. Phases 0 and 1 are hard-stopped at `budget − reserve`, so one handler or SSE stream that never returns can no longer hold the HTTP drain for the whole budget and leave the outbox relay's in-flight batch, the dispatcher's in-flight message, the Kafka readers and the tracer flush abandoned (SL-05).
 - Registration: `HTTP(name, *echo.Echo, addr)`, `GRPC(name, *grpc.Server, net.Listener)`, `Server(name, start, stop)` (escape hatch, no hard stop), `Worker(name, run func(ctx) error)`, `Closer(name, close func(ctx) error)`, `CloserGroup(name, members ...NamedCloser)` (`NamedCloser{Name, Close func(ctx) error}`). `Stopping() <-chan struct{}` closes when shutdown begins — SSE/WebSocket handlers select on it.
 - `Run(ctx) error`: starts everything, waits for the trigger — `ctx` done (a signal), **any** server start returning (`http.ErrServerClosed` included), or a worker returning a non-nil error (a worker returning `nil` early is only logged) — then, inside the budget:
   0. `Stopping()` closes, the drain delay elapses;
@@ -396,6 +402,38 @@ func main() {
 
 No `signal.Notify`, no shutdown-path `Fatal`, no defer-ordered teardown in a migrated `main`.
 
+### `pkg/kafkawriter`
+The one place a service gets a Kafka producer from (SL-01). kafka-go's zero value is `RequiredAcks: RequireNone`: `WriteMessages` returns nil before any broker answered, so a hand-built writer lost events with no error anywhere — seven services set `RequireAll` by hand and seven did not.
+- `NewProducer(brokers, opts...) *kafka.Writer` — the outbox relay's writer: no fixed topic (every row names its own), `RequireAll`, `&kafka.Hash{}` balancer (a domain event's key keeps its partition and its order; nil is round-robin and `LeastBytes` ignores the key), the Critical Rule 5 retry triple (`MaxAttempts` 5, `WriteBackoffMin` 100 ms, `WriteBackoffMax` 1 s), synchronous, **no topic auto-creation** (Rule 13), transport `kafkaauth.Transport()`.
+- `NewTopicWriter(brokers, topic, opts...)` — the same, fixed to one topic: the DLQ or retry tier of a consumer group (`events.DLQName` / `events.RetryName`).
+- Options: `WithCompression(c)`, `WithTransport(rt)`. The safety settings have no option on purpose.
+- `Check(w) error` — refuses a nil, `Async` or `RequireNone` writer with a typed 500 `COMMON_KAFKA_WRITER_UNSAFE` (`RequireOne` passes: weaker than `RequireAll`, but it waits for the leader). `MustCheck(who, w)` panics with that error; `outbox.New`, `outbox.NewRelay` and `events.NewDispatcher` call it.
+
+### `pkg/httpserver`
+`New(Config) *echo.Echo` — the fleet's Echo server, **available now, adoption in wave 2.** A bare `echo.New()` has no body limit, no `ReadHeaderTimeout`, answers router 404/405 as `{"message":…}` instead of the response envelope, and its default IP extractor believes a client-sent `X-Forwarded-For`.
+- Defaults (every zero `Config` field): `BodyLimit` 1 MiB (`413 COMMON_REQUEST_TOO_LARGE`, also for a chunked body), `ReadHeaderTimeout` 10 s (slowloris), `ReadTimeout` 60 s, `IdleTimeout` 120 s, `MaxHeaderBytes` 1 MiB. `WriteTimeout` has **no** default — a server-wide write deadline kills SSE and streaming responses; set it for a service without streams, or per request with `http.NewResponseController(w).SetWriteDeadline`.
+- Client address is the TCP peer (`echo.ExtractIPDirect`): a client-sent `X-Forwarded-For` / `X-Real-IP` is not believed (the trusted address is the gateway's job, spec §3.3).
+- `HTTPErrorHandler` renders every error through `response.JSONError`.
+- Middleware, outermost first: `Tracing`, `requestid.Middleware`, `RequestLogger(cfg.Logger)`, `Metrics`, `LocaleMiddleware`, body limit, panic recovery. Recovery sits **inside** the logger and the metrics so a panic is still one access line and one 5xx observation; the panic value and stack are logged and never reach the client (`COMMON_INTERNAL`).
+- Register it with `lifecycle.App.HTTP`; add `health.Register(e)`, `health.RegisterReadiness(e, app.Stopping())` and routes after.
+
+### `pkg/grpcopts`
+House gRPC client options. `ClientIdleTimeout(d)` / `ClientIdleTimeoutFromEnv()` (`GRPC_CLIENT_IDLE_TIMEOUT`, default 30 min) as before, plus (SL-30):
+- `UnaryTimeoutInterceptor(d)` / `DefaultCallTimeout(d)` — gives a unary call a deadline of `d` **only when its context has none**; a caller's own deadline, shorter or longer, is never touched. Streams are left alone. `DefaultCallTimeoutFromEnv()` reads `GRPC_CLIENT_CALL_TIMEOUT` (default `DefaultClientCallTimeout` = 10 s; `0s` turns it off; a typo falls back to the default).
+- `NewClient(target, opts...)` — `grpc.NewClient` with both defaults already applied, then the caller's options (which win where they overlap); adds no transport credentials. A failure is a typed 500 `COMMON_GRPC_DIAL_FAILED`. `.golangci.strict.yml` bans a bare `grpc.NewClient` / `grpc.Dial` outside this package.
+
+### `pkg/health`
+- `Register(e)` — `GET`/`HEAD /health`, constant 200: **liveness**. It must stay 200 while a pod drains, or the kubelet restarts a pod that is only finishing its work.
+- `RegisterReadiness(e, stopping <-chan struct{})` — `GET`/`HEAD /readyz`: 200 until `stopping` closes, then 503 `COMMON_SHUTTING_DOWN` (SL-30). Pass `lifecycle.App.Stopping()`, which closes when shutdown begins — before the drain delay — so the load balancer stops routing while the pod is still draining. A nil channel is always ready.
+
+### `pkg/lintguards` and `.golangci.strict.yml` — the mechanical guards
+A platform rule go-common implements must not live in prose alone (spec §3.4). Two halves:
+- **`.golangci.strict.yml`** — a superset of `.golangci.yml` (kept in step by `TestStrictConfigCoversTheBase`) that adds `forbidigo` / `depguard` bans of the home-made alternative: `kafka.NewWriter` (→ `kafkawriter`), a bare `echo.New()` (→ `httpserver.New`), `signal.Notify` / `NotifyContext` (→ `lifecycle`), `c.RealIP`, `echo.HeaderXForwardedFor` / `HeaderXRealIP` and the `echo.ExtractIPFrom…` helpers, `http.DefaultClient` / `http.Get` / `Post` / `Head` / `PostForm` (→ `egress`), `grpc.NewClient` / `Dial` / `DialContext` (→ `grpcopts.NewClient`), `c.JSON` (→ `response`), and the standard `log` package (→ `logger`). Test files are exempt; the helper packages themselves are excluded by path. **go-common lints itself with it.** `scripts/check-guards.sh` lints a deliberately bad sample (`pkg/lintguards/testdata/violations`) and fails when any rule stops firing — CI job "Guards fire". (The base file's `c.JSON` pattern `^c\.JSON$` never matched a call: with type analysis forbidigo reads a method as `echo.Context.JSON`; the strict file carries the working form.)
+- **`pkg/lintguards`** — the CI-test half, for what a linter cannot tell apart: a `kafka.Writer{…}` *literal* (banned) from a `*kafka.Writer` variable (fine), an `http.Client{…}` literal, and the string literals `"X-Forwarded-For"`, `"X-Real-IP"`, `"Forwarded"`, … . One test per service: `lintguards.Run(t, "../..", lintguards.DefaultRules(), exempt)`, where `exempt` maps a root-relative file (or `dir/`) to the **reason** it is exempt (an empty reason is an error). Test files, `testdata`, `vendor` and hidden directories are not scanned.
+
+**How a service switches the guards on:** change its Makefile's `LINTER_CONFIG_URL` from `…/.golangci.yml` to `…/.golangci.strict.yml` and add the one `lintguards` test. Until it does, nothing changes for it. It then fixes each hit or marks a justified `//nolint:forbidigo // <reason>`. golangci-lint has no warn-only mode (any finding fails the run), so "off" is the base file and "on" is the strict file.
+
+
 ### `pkg/utils`
 Generic utility functions.
 - **Ptr**: Pointer helpers (`Ptr[T]`, `ToVal[T]`).
@@ -427,17 +465,17 @@ Async events across STECH services flow through three cooperating packages — *
 ### `pkg/envelope`
 Single source of truth for the Kafka message envelope carried on every event.
 
-- **Header constants**: `HeaderEventID`, `HeaderEventType`, `HeaderAggregateType`, `HeaderAggregateID`, `HeaderOccurredAt`, `HeaderSchemaVersion`, `HeaderContentType`, `HeaderRetryCount`, `HeaderTraceparent`, plus legacy `HeaderOutboxID` for rolling-migration compat.
+- **Header constants**: `HeaderEventID`, `HeaderEventType`, `HeaderAggregateType`, `HeaderAggregateID`, `HeaderOccurredAt`, `HeaderSchemaVersion`, `HeaderContentType`, `HeaderRetryCount`, `HeaderTraceparent`. (The legacy `HeaderOutboxID` is gone.)
 - **`traceparent`** carries W3C trace context across the async hop, so one trace spans request → outbox → relay → consumer. It is injected by `PublishProto` from the **producing request's** context and read back by the Dispatcher as a remote parent. No migration was needed: the outbox row already had `headers JSONB`, and the relay copies every entry verbatim.
 - **Value constants**: `ContentTypeProtoJSON`, `SchemaVersionV1`.
 - **`Headers` type** (`map[string]string`) with typed accessors: `EventID()`, `EventType()`, `AggregateType()`, `AggregateID()`, `OccurredAt() (time.Time, error)`, `SchemaVersion()`, `ContentType()`, `RetryCount() int`, `Traceparent()`.
 - **`FromKafka([]kafka.Header) Headers`** — build typed view from raw Kafka headers.
-- **Extractors**: `ExtractEventID` (reads `event_id`, falls back to legacy `outbox_id`), `ExtractOutboxID` (deprecated alias), `ExtractEventType`.
+- **Extractors**: `ExtractEventID` (reads `event_id`), `ExtractEventType`. (`ExtractOutboxID` and the `outbox_id` fallback are gone.)
 
 ### `pkg/outbox`
 Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafka, plus consumer-side idempotency.
 
-- `New(pool, kafkaWriter, logger, cfg)`: Creates the full outbox subsystem.
+- `New(pool, kafkaWriter, logger, cfg, defaultTopic)`: Creates the full outbox subsystem. **Panics when `kafkaWriter` is `Async` or `RequireNone`** (`kafkawriter.Check`) — build it with `kafkawriter.NewProducer`. `NewRelay` does the same check.
 - `Start(ctx)`: Launches three background goroutines — relay (poll → Kafka), reaper (cleanup) and the metrics sampler — and returns one `stop()` that shuts all three down. There is no separate `StartMetrics` a repo could forget to call.
 - `Run(ctx) error`: `Start` for a blocking caller — blocks until `ctx` is cancelled, stops all three, returns `ctx.Err()`. This is the shape `pkg/lifecycle` registers: `app.Worker("outbox", ob.Run)`.
 - **Shutdown flush.** `FetchPending` runs on the relay's cancellable context, so no new batch is taken after a cancel; but a batch **already fetched** is written to Kafka and marked sent (both the full-success and the partial `kafka.WriteErrors` arms) on a context detached from that cancellation and cancelled `RelayConfig.ShutdownFlushTimeout` (default 5 s) **after** it — a SIGTERM mid-batch no longer leaves delivered rows pending to be re-published on restart. The bound starts at cancellation, not at fetch: a write slower than the timeout during normal operation is not cut short. A zero/negative value means the default.
@@ -447,10 +485,13 @@ Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafk
 
 **Publishing:**
 - `Publisher.PublishProto(ctx, tx, opts)` — **preferred**. Typed proto message path. Serializes via `protojson` (snake_case), auto-injects the full envelope header set (`event_id`, `event_type`, `aggregate_type`, `aggregate_id`, `occurred_at`, `schema_version`, `content_type`). Generates `event_id` UUID and writes it to both the header and the proto payload's `event_id` field.
-- `Publisher.Publish(ctx, tx, opts)` — legacy any-typed JSON path. Retained for transitional compat during the events-to-proto rollout; removed in the cleanup PR.
+- The legacy any-typed `Publisher.Publish` is gone; `PublishProto` is the only producer API.
 
 **Consumer-side idempotency:**
-- `Deduplicator.Process(ctx, eventID, fn)` — atomic check-and-record-and-run in a Postgres transaction with `SELECT ... FOR UPDATE`. If the event_id is already recorded, `fn` is not invoked and the call returns nil. If `fn` errors, the event_id is not recorded (safe to retry). Provides exactly-once processing on top of at-least-once Kafka delivery.
+- `Deduplicator.Process(ctx, eventID, fn)` — takes the claim by `INSERT INTO processed_outbox_messages … ON CONFLICT DO NOTHING` inside a Postgres transaction and branches on whether the row was taken: if the `event_id` was already recorded, `fn` is not invoked and the call returns nil; if `fn` errors, the transaction rolls back, the claim is not recorded and the error reaches the caller unchanged (so `ErrPoisonPill` survives). **What it does NOT do (SL-04, fixed in release 2):** `fn` receives no transaction, so the handler's own writes go through the pool on other connections and commit on their own — the claim and the side effects are not one atomic unit, and a failed claim `COMMIT` after a successful handler runs the handler again on redelivery. Treat it as at-least-once with a best-effort skip, not exactly-once, until `ProcessTx` ships. There was never a `SELECT … FOR UPDATE`.
+- **The Reaper deletes old claims** (SL-09): `Store.DeleteProcessed(ctx, retention, limit)` runs after every sent-rows cleanup, in statements of at most `OUTBOX_PROCESSED_BATCH_SIZE` rows (oldest first, so each `DELETE` walks `idx_processed_outbox_reaper` and stays short), until a short batch, an error, or 100 batches per cycle. `Deduplicator.CleanupProcessed` (one unbounded statement) is no longer called by anything. A database with no `processed_outbox_messages` table makes the reaper stop asking, once, at Info.
+- **Zero-value config is safe** (SL-15): a non-positive `PollInterval`, `BatchSize`, reaper `Interval` or `Retention` means its default (`DefaultPollInterval` 1 s, `DefaultBatchSize` 100, `DefaultReaperInterval` 5 m, `DefaultRetention` 72 h). `BatchSize: 0` used to be `LIMIT 0` plus a `continue` without sleeping — a hot loop against Postgres that forwarded nothing.
+- **Typed errors** (SL-26): every error this package returns is an `*errors.AppError` (500) with the driver error as its cause — `COMMON_OUTBOX_INSERT_FAILED`, `_FETCH_FAILED`, `_STATS_FAILED`, `_MARK_FAILED`, `_CLEANUP_FAILED`, `_TX_FAILED`, `_TX_INVALID`, `_PUBLISH_INVALID`, `_MARSHAL_FAILED`, `_DEDUP_FAILED`, `_MIGRATE_FAILED` (the `Reason*` constants). A handler's own error passes through `RunInTx` and `Process` untouched.
 
 **Environment Variables:**
 
@@ -461,6 +502,8 @@ Transactional Outbox Pattern for guaranteed at-least-once event delivery to Kafk
 | `OUTBOX_SHUTDOWN_FLUSH_TIMEOUT` | `5s` | How long an already-fetched batch may keep writing + marking sent after the relay is cancelled |
 | `OUTBOX_REAPER_INTERVAL` | `5m` | Cleanup schedule |
 | `OUTBOX_RETENTION` | `72h` | Sent message retention before deletion |
+| `OUTBOX_PROCESSED_RETENTION` | `720h` | How long deduplicator claims are kept. Must outlive the longest period a message can be redelivered (topic retention + DLQ replay window) — a claim deleted early lets a redelivery run its handler again |
+| `OUTBOX_PROCESSED_BATCH_SIZE` | `5000` | Claims deleted per statement |
 | `OUTBOX_METRICS_INTERVAL` | `15s` | Backlog gauge sampling (deliberately far slower than the poll interval) |
 
 **Metrics** (on `metrics.Registry`, all unlabelled so one panel covers both the Go fleet and sale-service's PHP relay):
@@ -509,12 +552,12 @@ outbox.RunInTx(ctx, pool, func(tx outbox.Tx) error {
 ### `pkg/events`
 Typed consumer dispatcher. Registers proto-typed handlers keyed on the proto FQN (`event_type` header), routes each Kafka message via `protojson` decode, and handles retry / DLQ / dedup.
 
-- `NewDispatcher(reader, dlq, opts ...)` — DLQ is a **required** positional arg; no code path drops a failed message. Options: `WithRetry(w)`, `WithDedup(d)` (takes any value satisfying `Process(ctx, id, fn) error` — typically `*outbox.Deduplicator`), `WithMaxRetries(n)` (default 3), `WithLogger(l)`, `WithGroup(id)`.
+- `NewDispatcher(reader, dlq, opts ...)` — DLQ is a **required** positional arg; no code path drops a failed message. Options: `WithRetry(w)`, `WithDedup(d)` (takes any value satisfying `Process(ctx, id, fn) error` — typically `*outbox.Deduplicator`), `WithMaxRetries(n)` (default 3), `WithLogger(l)`, `WithGroup(id)`. **Panics when the DLQ writer or the `WithRetry` writer is a `*kafka.Writer` that is `Async` or `RequireNone`** — the offset is committed behind a "successful" write, which on such a writer may be a message no broker holds. Build them with `kafkawriter.NewTopicWriter`. A writer of any other type (a test fake, a wrapper) is not inspected.
 - `WithGroup(id)` — the consumer group id used as the `group` label on every consumer metric. Pass the Kafka `GroupID` **verbatim**, exactly the string the `kafka.ReaderConfig` got: only that value matches kafka-exporter's `consumergroup` label, which is what lets a lag panel and a dead-letter counter sit on the same dashboard row. Do not pass the DLQ short name — a repo can have both and they differ (`order-review-events-consumer` vs `order`). Unset means `GroupUnknown` (`"unknown"`).
 - `Handle[T proto.Message](d *Dispatcher, fn func(ctx, T) error)` — register a typed handler. Routing key is derived from `proto.MessageName(*new(T))`; protojson-unmarshal into a fresh `T` per message.
 - `d.Run(ctx) error` — poll loop that handles one message at a time; the commit guarantees rely on that, so `Run` is not for concurrent use on one `Dispatcher`. Returns `ctx.Err()` on cancel and **`nil` once the reader is closed** (kafka-go answers a closed reader with `io.EOF` — before, `Run` busy-looped on it). Any other fetch error is retried with a capped exponential backoff (100 ms doubling to 5 s, ctx-aware, reset by a successful fetch), so a broker outage is not a hot loop. **A cancel finishes the message in flight:** `ctx` governs only fetching — it is checked before every fetch (kafka-go may hand out a buffered message even on a cancelled ctx) and passed to `FetchMessage` — while an already-fetched message's handler, dedup transaction, retry/DLQ write and offset commit run on `context.WithoutCancel(ctx)` (values and trace kept), so a shutdown never fails the steps that record a side effect the handler already performed. No extra timeout: the clients' own timeouts and lifecycle's budget bound it. It also returns — at once, whatever the state of `ctx` — when a handler leaves its message uncommitted (`ErrLeaveUncommitted`, below). Register it directly as a `pkg/lifecycle` worker: `app.Worker("…-consumer", disp.Run)` — no draining wrapper needed, unless its handlers can return `ErrLeaveUncommitted` (then map that return, below).
 - `DefaultReaderMaxWait` (2 s) — set it as `kafka.ReaderConfig.MaxWait` on **every** consumer reader. kafka-go's default is 10 s, and a reader's `Close` waits out the in-flight fetch long-poll, so with all readers in one lifecycle `CloserGroup("kafka", …)` the shutdown cost is one `MaxWait`: ~2 s instead of 10 s. Delivery latency is unaffected (a fetch returns as soon as data arrives; `MaxWait` bounds only an empty fetch). Trade-off: an idle consumer polls the broker every 2 s.
-- `TopicName(eventsv1.Topic) string` — converts the proto `Topic` enum to its wire name (e.g. `TOPIC_USER_EVENTS` → `"user-events"`).
+- `TopicName(eventsv1.Topic) string` — converts the proto `Topic` enum to its wire name (e.g. `TOPIC_USER_EVENTS` → `"user.events"`; dotted, Critical Rule 13).
 - `ErrPoisonPill` — sentinel for non-retryable handler errors (wrap with `%w`; goes straight to DLQ without consuming retry budget).
 - `ErrLeaveUncommitted` — sentinel for a handler that must stop **without its message being consumed**, typically one paused on a Postgres outage when the process starts shutting down. Handlers run on a context without `Run`'s cancellation, so such a handler watches its own shutdown signal (e.g. lifecycle's `app.Stopping()`) and then returns an error wrapping it. The dispatcher commits no offset, writes no retry or DLQ copy and counts no failure; the error reaches the deduplicator, whose claim rolls back with it (`outbox.Deduplicator` returns it unchanged from a rolled-back transaction). `Run` returns at once with an error wrapping `ErrLeaveUncommitted` and the handler's error, and stays stopped — a later `Run` on that dispatcher returns the same error without fetching — because kafka-go commits a partition by position (`offset+1`): committing any later message of that partition would consume the one left behind. Kafka redelivers it once the reader is closed and the partition moves on (to another pod, or to this one after its restart). It outranks every classification below, `ErrPoisonPill` included; a panic never leaves a message uncommitted. It is visible as one Warn line, `handler left the message uncommitted; dispatcher stopping` (`event_id`, `topic`, `group`, `partition`, `offset`, `error`), and a `message left uncommitted` event on the consumer span, which keeps an unset status.
 
@@ -557,7 +600,9 @@ Typed consumer dispatcher. Registers proto-typed handlers keyed on the proto FQN
 | `events_consumer_retried_total` | `topic`, `group` | Forwarded to the retry topic |
 | `events_consumer_dead_lettered_total` | `topic`, `group`, `reason` | Written to the DLQ, by failure reason |
 | `events_consumer_dedup_hits_total` | `topic`, `group` | Redelivery skipped because the `event_id` was already processed |
-| `events_consumer_failurepath_errors_total` | `topic`, `group` | **The DLQ/retry write itself failed** and the offset was left uncommitted — the group is wedged, not merely poisoned |
+| `events_consumer_failurepath_errors_total` | `topic`, `group` | **The DLQ/retry write itself failed.** The message was not forwarded and its offset was not committed — but `Run` goes on, and the next successful commit on the partition commits past it: the message is lost (SL-00; release 2 stops the consumer instead) |
+| `events_consumer_unhandled_total` | `topic`, `group` | Committed without a handler: no handler for its `event_type`, or no `event_type` header (that case also logs a Warn). Mostly legitimate for a consumer that handles some of a topic's types; a sudden rise on a topic that used to be handled is a renamed or moved proto message (SL-08) |
+| `events_consumer_commit_errors_total` | `topic`, `group` | An offset commit returned an error (logged at Error); the handler had already run or the failure tier already held the message |
 
 A message a handler left uncommitted (`ErrLeaveUncommitted`) moves none of these families: it was neither processed nor failed. The Warn line and the span event above record it.
 
@@ -578,7 +623,7 @@ reader := kafka.NewReader(kafka.ReaderConfig{
     MaxWait: events.DefaultReaderMaxWait, // fleet long-poll: Close costs ≤ ~2 s
 })
 // DLQ names come from the registry helpers — never hardcode a topic string.
-dlqWriter := &kafka.Writer{Topic: events.DLQName(eventsv1.Topic_TOPIC_USER_EVENTS, "auth"), /*...*/}
+dlqWriter := kafkawriter.NewTopicWriter(brokers, events.DLQName(eventsv1.Topic_TOPIC_USER_EVENTS, "auth"))
 dedup := outbox.NewDeduplicator(pool)
 
 disp := events.NewDispatcher(reader, dlqWriter, events.WithDedup(dedup))

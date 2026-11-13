@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/STECH-Super-App/go-common/pkg/envelope"
+	"github.com/STECH-Super-App/go-common/pkg/kafkawriter"
 	"github.com/STECH-Super-App/go-common/pkg/logger"
 )
 
@@ -154,7 +155,16 @@ func NewDispatcher(reader Reader, dlq Writer, opts ...DispatcherOption) *Dispatc
 	for _, o := range opts {
 		o(d)
 	}
+	checkTierWriter("DLQ", d.dlq)
+	checkTierWriter("retry", d.retry)
 	return d
+}
+
+// checkTierWriter refuses an unsafe *kafka.Writer used as a failure tier.
+func checkTierWriter(tier string, w Writer) {
+	if kw, ok := w.(*kafka.Writer); ok {
+		kafkawriter.MustCheck("events.NewDispatcher "+tier+" writer", kw)
+	}
 }
 
 type handlerFn func(ctx context.Context, rawPayload []byte, headers envelope.Headers) error
@@ -339,9 +349,21 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) error {
 
 	handler, ok := d.handlers[fqn]
 	if !ok {
-		msgLog.Debug("no handler for event type; skipping",
-			zap.String("event_type", fqn))
-		_ = d.reader.CommitMessages(ctx, msg)
+		// Skipping is legitimate for a consumer that handles only some of a
+		// topic's event types, so it is Debug — but it is counted, because a
+		// renamed proto message (the routing key is its fully-qualified name)
+		// makes every event skip here with lag 0 and nothing else moving
+		// (SL-08). A MISSING header is never legitimate: a producer forgot it.
+		unhandledTotal.WithLabelValues(msg.Topic, d.group).Inc()
+		if fqn == "" {
+			msgLog.Warn("message has no event_type header; skipping",
+				zap.Int("partition", msg.Partition),
+				zap.Int64("offset", msg.Offset))
+		} else {
+			msgLog.Debug("no handler for event type; skipping",
+				zap.String("event_type", fqn))
+		}
+		d.commit(ctx, msg, msgLog)
 		return nil
 	}
 
@@ -395,7 +417,7 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) error {
 		} else {
 			dedupHitsTotal.WithLabelValues(msg.Topic, d.group).Inc()
 		}
-		_ = d.reader.CommitMessages(ctx, msg)
+		d.commit(ctx, msg, msgLog)
 		return nil
 	}
 
@@ -418,9 +440,12 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) error {
 	handlerFailuresTotal.WithLabelValues(msg.Topic, d.group).Inc()
 
 	reason := classify(err)
-	// If the failure-path write (retry or DLQ) itself fails, do NOT commit the
-	// offset — leave the message uncommitted so Kafka redelivers it instead of
-	// losing it. The success path above commits unchanged.
+	// If the failure-path write (retry or DLQ) itself fails, this message's
+	// offset is not committed. CAUTION (SL-00): Run goes on to the next message
+	// and kafka-go commits by position, so the next successful commit on the
+	// partition commits PAST this one — it is lost unless the process restarts
+	// first. The log line below names that; release 2 stops the consumer here.
+	// The success path above commits unchanged.
 	if werr := d.routeFailure(ctx, msg, h, err, reason); werr != nil {
 		failurePathErrorsTotal.WithLabelValues(msg.Topic, d.group).Inc()
 		msgLog.Error("failure-path write failed; leaving offset uncommitted for redelivery",
@@ -428,8 +453,22 @@ func (d *Dispatcher) handleOne(ctx context.Context, msg kafka.Message) error {
 			zap.Error(werr))
 		return nil
 	}
-	_ = d.reader.CommitMessages(ctx, msg)
+	d.commit(ctx, msg, msgLog)
 	return nil
+}
+
+// commit commits msg's offset. A failure is logged and counted, not returned:
+// the handler already ran (or the failure tier already holds the message), and
+// Kafka redelivers an uncommitted offset to the dedup claim, which skips it.
+// What it must not be is silent (SL-08).
+func (d *Dispatcher) commit(ctx context.Context, msg kafka.Message, msgLog *zap.Logger) {
+	if err := d.reader.CommitMessages(ctx, msg); err != nil {
+		commitErrorsTotal.WithLabelValues(msg.Topic, d.group).Inc()
+		msgLog.Error("offset commit failed",
+			zap.Int("partition", msg.Partition),
+			zap.Int64("offset", msg.Offset),
+			zap.Error(err))
+	}
 }
 
 // startConsumerSpan continues the producing request's trace across the Kafka

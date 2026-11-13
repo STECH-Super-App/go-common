@@ -4,10 +4,14 @@
 package grpcopts
 
 import (
+	"context"
+	"net/http"
 	"os"
 	"time"
 
 	"google.golang.org/grpc"
+
+	commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
 )
 
 // EnvClientIdleTimeout is the environment variable that drives ClientIdleTimeoutFromEnv.
@@ -79,4 +83,95 @@ func clientIdleTimeoutFromEnv() time.Duration {
 		return DefaultClientIdleTimeout
 	}
 	return d
+}
+
+// EnvClientCallTimeout is the environment variable that drives
+// DefaultCallTimeoutFromEnv.
+const EnvClientCallTimeout = "GRPC_CLIENT_CALL_TIMEOUT"
+
+// DefaultClientCallTimeout is the per-call bound DefaultCallTimeoutFromEnv
+// applies when the environment says nothing. It is a ceiling for calls that
+// forgot their own deadline, not a target: a call that sets a deadline keeps it.
+const DefaultClientCallTimeout = 10 * time.Second
+
+// UnaryTimeoutInterceptor returns a client interceptor that gives a unary call
+// a deadline of d when — and only when — its context has none. A caller's own
+// deadline, shorter or longer, is never touched, so adopting the default cannot
+// shorten a call a service deliberately allowed to run long. A non-positive d
+// makes the interceptor a pass-through.
+//
+// Why: without it a client call whose context carries no deadline waits for as
+// long as the server (or the network) does, and unbounded calls keep turning up
+// in individual services (SL-30). Streams are left alone — a long-lived stream
+// is legitimate.
+func UnaryTimeoutInterceptor(d time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn,
+		invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if d <= 0 {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		if _, has := ctx.Deadline(); has {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		ctx, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+}
+
+// DefaultCallTimeout is the dial option form of UnaryTimeoutInterceptor:
+//
+//	conn, err := grpc.NewClient(addr, grpcopts.ClientIdleTimeoutFromEnv(), grpcopts.DefaultCallTimeoutFromEnv())
+func DefaultCallTimeout(d time.Duration) grpc.DialOption {
+	return grpc.WithChainUnaryInterceptor(UnaryTimeoutInterceptor(d))
+}
+
+// DefaultCallTimeoutFromEnv reads GRPC_CLIENT_CALL_TIMEOUT and returns the
+// matching DefaultCallTimeout option, falling back to DefaultClientCallTimeout
+// when the variable is unset, empty or unparseable. An explicit "0s" turns the
+// default off. Like ClientIdleTimeoutFromEnv, a typo falls back to the safe
+// value rather than failing the boot or silently removing the bound.
+func DefaultCallTimeoutFromEnv() grpc.DialOption {
+	return DefaultCallTimeout(callTimeoutFromEnv())
+}
+
+func callTimeoutFromEnv() time.Duration {
+	raw, ok := os.LookupEnv(EnvClientCallTimeout)
+	if !ok || raw == "" {
+		return DefaultClientCallTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		return DefaultClientCallTimeout
+	}
+	return d
+}
+
+// ReasonDialFailed is the Reason of the error NewClient returns.
+const ReasonDialFailed = "COMMON_GRPC_DIAL_FAILED"
+
+// NewClient is the fleet's one gRPC client constructor: grpc.NewClient with the
+// house defaults already applied — the idle timeout (ClientIdleTimeoutFromEnv)
+// and the default per-call deadline (DefaultCallTimeoutFromEnv) — followed by
+// the caller's own options, which win where they overlap. It adds no transport
+// credentials: pass grpc.WithTransportCredentials as before.
+//
+// .golangci.strict.yml bans a bare grpc.NewClient / grpc.Dial outside this
+// package, so a service cannot dial a channel that waits forever.
+//
+// A failure is a typed 500 (Critical Rule 7) with the grpc error as its cause.
+func NewClient(target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	all := make([]grpc.DialOption, 0, len(opts)+2)
+	all = append(all, ClientIdleTimeoutFromEnv(), DefaultCallTimeoutFromEnv())
+	all = append(all, opts...)
+
+	conn, err := grpc.NewClient(target, all...) //nolint:forbidigo // this IS the helper the guard sends everyone to
+	if err != nil {
+		return nil, commonErrors.New(http.StatusInternalServerError).
+			Reason(ReasonDialFailed).
+			Message("failed to create gRPC client for " + target).
+			Cause(err).
+			Build()
+	}
+	return conn, nil
 }

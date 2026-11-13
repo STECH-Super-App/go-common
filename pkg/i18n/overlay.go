@@ -24,6 +24,23 @@ type Snapshot struct {
 	overlay  map[string]map[string]string // localeTag -> dotted key -> template
 	baseline map[string]string            // en, dotted keys
 	tags     []language.Tag               // supported tags; index 0 is en (default)
+
+	// compiled holds every value above parsed once, at snapshot build, so a
+	// render is an Execute and not a Parse (SL-07). Keyed [layer][key]; the
+	// baseline's layer is baselineLayer. *template.Template is safe for
+	// concurrent Execute.
+	compiled map[string]map[string]*compiledTemplate
+	logger   *zap.Logger
+	ns       string
+}
+
+// baselineLayer is the compiled-map layer name of the compiled-in baseline.
+// It cannot collide with a locale tag.
+const baselineLayer = ""
+
+type compiledTemplate struct {
+	tmpl *template.Template
+	err  error // parse error; every Execute of this value fails with it
 }
 
 // Resolver hands out the current immutable Snapshot. Consumers resolve through
@@ -91,7 +108,7 @@ func NewOverlayBundle(baseline map[string]string, dirPath string, opts ...Option
 	for _, o := range opts {
 		o(b)
 	}
-	b.cur.Store(newSnapshot(baseline, map[string]map[string]string{}, nil))
+	b.cur.Store(newSnapshot(baseline, map[string]map[string]string{}, nil, b.logger, b.ns))
 	return b
 }
 
@@ -104,7 +121,7 @@ func (b *OverlayBundle) Snapshot() *Snapshot {
 // newSnapshot assembles an immutable Snapshot. tagSet maps a locale tag string
 // (e.g. "ru") to its parsed language.Tag; en is always the default/fallback and
 // is placed first in the supported-tag list (spec F6).
-func newSnapshot(baseline map[string]string, overlay map[string]map[string]string, tagSet map[string]language.Tag) *Snapshot {
+func newSnapshot(baseline map[string]string, overlay map[string]map[string]string, tagSet map[string]language.Tag, logger *zap.Logger, ns string) *Snapshot {
 	tags := []language.Tag{language.English}
 	for tagKey, tag := range tagSet {
 		if tagKey == "en" {
@@ -112,11 +129,28 @@ func newSnapshot(baseline map[string]string, overlay map[string]map[string]strin
 		}
 		tags = append(tags, tag)
 	}
+	compiled := make(map[string]map[string]*compiledTemplate, len(overlay)+1)
+	compiled[baselineLayer] = compileAll(baseline)
+	for tag, values := range overlay {
+		compiled[tag] = compileAll(values)
+	}
 	return &Snapshot{
 		overlay:  overlay,
 		baseline: baseline,
 		tags:     tags,
+		compiled: compiled,
+		logger:   logger,
+		ns:       ns,
 	}
+}
+
+func compileAll(values map[string]string) map[string]*compiledTemplate {
+	out := make(map[string]*compiledTemplate, len(values))
+	for key, val := range values {
+		t, err := parseTemplate(val)
+		out[key] = &compiledTemplate{tmpl: t, err: err}
+	}
+	return out
 }
 
 // Resolve renders key for the requested locale. Resolution order (spec F6):
@@ -128,14 +162,34 @@ func newSnapshot(baseline map[string]string, overlay map[string]map[string]strin
 func (s *Snapshot) Resolve(locale, key string, params map[string]any) (string, error) {
 	matchedTag := s.matchLocale(locale)
 
-	if tmpl, ok := s.overlay[matchedTag][key]; ok {
-		return render(tmpl, params)
+	// A layer whose value cannot be rendered is skipped, not returned: one bad
+	// translation must degrade to the next layer (finally the English baseline),
+	// not fail every message of its type (SL-07).
+	layers := []string{matchedTag}
+	if matchedTag != "en" {
+		layers = append(layers, "en")
 	}
-	if tmpl, ok := s.overlay["en"][key]; ok {
-		return render(tmpl, params)
+	layers = append(layers, baselineLayer)
+
+	var firstErr error
+	for _, layer := range layers {
+		c, ok := s.compiled[layer][key]
+		if !ok {
+			continue
+		}
+		out, err := c.render(params)
+		if err == nil {
+			return out, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		s.logger.Warn("i18n value failed to render; falling back to the next layer",
+			zap.String("namespace", s.ns), zap.String("locale", layer),
+			zap.String("key", key), zap.Error(err))
 	}
-	if tmpl, ok := s.baseline[key]; ok {
-		return render(tmpl, params)
+	if firstErr != nil {
+		return "", firstErr
 	}
 	return "", ErrKeyNotFound
 }
@@ -159,16 +213,25 @@ func (s *Snapshot) matchLocale(locale string) string {
 	return "en"
 }
 
-// render executes a template string with missingkey=error so an undeclared
-// placeholder surfaces as ErrTranslationFailed rather than an "<no value>"
-// leak. Both parse and execute failures map to the same sentinel.
-func render(tmplStr string, params map[string]any) (string, error) {
+// parseTemplate parses a translation value with missingkey=error, so an
+// undeclared placeholder surfaces as ErrTranslationFailed rather than an
+// "<no value>" leak.
+func parseTemplate(tmplStr string) (*template.Template, error) {
 	t, err := template.New("i18n").Option("missingkey=error").Parse(tmplStr)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrTranslationFailed, err)
+		return nil, fmt.Errorf("%w: %v", ErrTranslationFailed, err)
+	}
+	return t, nil
+}
+
+// render executes the compiled template. Both parse and execute failures map to
+// the same sentinel.
+func (c *compiledTemplate) render(params map[string]any) (string, error) {
+	if c.err != nil {
+		return "", c.err
 	}
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, params); err != nil {
+	if err := c.tmpl.Execute(&buf, params); err != nil {
 		return "", fmt.Errorf("%w: %v", ErrTranslationFailed, err)
 	}
 	return buf.String(), nil

@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+### UPGRADING — release 1 (audit-fix campaign, 14.11.2026)
+
+Release 1 is additive except for ONE intentional break (SL-01). Fleet checklist, per Go service, in this order:
+
+1. **Writers (breaking, do first).** Every `*kafka.Writer` handed to `outbox.New`, `outbox.NewRelay`, `events.NewDispatcher` (the DLQ writer) or `events.WithRetry` must be safe, or the service **panics at start-up** with `COMMON_KAFKA_WRITER_UNSAFE`. Replace each hand-built writer: `kafkawriter.NewProducer(brokers)` for the outbox, `kafkawriter.NewTopicWriter(brokers, events.DLQName(...))` / `events.RetryName(...)` for the tiers (`WithCompression(kafka.Snappy)` where the old one set it). `grep -rn "kafka.Writer{" --include=*.go .` lists the sites; a writer with no `RequiredAcks` was `RequireNone`. Expected offenders: tenant-, user-, media-, notification-, organisation-, auth- and chat-service, and every DLQ writer that sets only the retry triple (order-service's `reviewEventsDLQ`, `partsEventsDLQ`).
+2. **`config.GetEnv` empty = unset.** `GetEnv("X", "default")` now returns the default when `X` is set but empty. `grep -rn "GetEnv(" --include=*.go .`: any call that relied on `X=` (empty) to override a non-empty default must switch to `os.LookupEnv`. Typed getters now also write one JSON warn line to stderr for a set-but-unparseable value; nothing else changes.
+3. **Removed:** `middleware.CORS` and `middleware.Logger` (no callers in the fleet — `grep` to confirm). `Logger` users move to `RequestLogger`.
+4. **Behaviour changes to look for in tests:** `input.ParsePage` refuses a page > 10000 (`ParsePageMax` states another bound); `input.Email` refuses non-ASCII / non-dot-atom local parts, numeric TLDs and over-long parts; `input.Body` refuses unbalanced bidi controls; `input` text trim keeps emoji tag sequences and Arabic number signs; `Metrics()` labels any non-standard request method `OTHER`; `response.JSONError` returns 422 for an `*input.Failure`, the `*echo.HTTPError` status for bind/router errors and a `COMMON_INTERNAL` Reason for an untyped error (a service test asserting an empty Reason on a bare 500 changes); `pgerr.InvalidInput` now also claims `22003`, `22007`, `22008`, `54000` (those were 500s); `lifecycle` stops servers at `budget − reserve`, so a closer that used to be skipped behind a stuck handler now runs; `FormatTenantMemberships` omits an entry with a separator in its id or role.
+5. **Typed outbox/db errors:** `outbox` and `db` now return `*errors.AppError` (500, `COMMON_OUTBOX_*` / `COMMON_DB_*`) with the driver error as `Unwrap()` — `errors.As(err, &pgconn.PgError)` still works. A caller that compared error TEXT must use `errors.Is/As`.
+6. **Adopt when convenient (no break):** `httpserver.New`, `grpcopts.NewClient` / `DefaultCallTimeoutFromEnv`, `health.RegisterReadiness(e, app.Stopping())` (point the readiness probe at `/readyz`, keep liveness on `/health`), `authz.ParseTenantMembershipsStrict`, `authz.FormatRolesCSV`, `input.ParsePageMax`. Dedup claims are now reaped (`OUTBOX_PROCESSED_RETENTION`, default 720 h, must exceed topic retention + DLQ replay window).
+7. **Switch the guards on (wave 2, per service):** Makefile `LINTER_CONFIG_URL` → `.golangci.strict.yml`, add one `lintguards.Run` test, fix or `//nolint:forbidigo // reason` each hit. Until then nothing changes.
+8. Add `RequiredAcks` (and the Balancer) to Critical Rule 5 in the dev-setup CLAUDE.md, and the `c.JSON` note: the base file's `^c\.JSON$` forbidigo pattern never matched a call.
+
+### Added (release 1)
+- `pkg/kafkawriter` — **the one Kafka writer constructor** (SL-01): `NewProducer`, `NewTopicWriter`, `WithCompression`, `WithTransport`, `Check`, `MustCheck`, `ReasonUnsafeWriter`, consts `MaxAttempts`, `BackoffFloor`, `BackoffCeiling`. `outbox.New`, `outbox.NewRelay` and `events.NewDispatcher` (DLQ and `WithRetry` writers) panic on an `Async` or `RequireNone` `*kafka.Writer`.
+- `pkg/httpserver` — `New(Config) *echo.Echo`: body limit (default 1 MiB), `ReadHeaderTimeout`/`ReadTimeout`/`IdleTimeout`/`MaxHeaderBytes`, no default `WriteTimeout` (SSE), `ExtractIPDirect`, the standard error handler, `Tracing → requestid → RequestLogger → Metrics → Locale → body limit → panic recovery`. Not forced on any service yet.
+- `pkg/grpcopts` — `UnaryTimeoutInterceptor`, `DefaultCallTimeout`, `DefaultCallTimeoutFromEnv` (`GRPC_CLIENT_CALL_TIMEOUT`, default 10 s, applies only to a context with no deadline), `NewClient`, `ReasonDialFailed` (SL-30).
+- `pkg/health` — `RegisterReadiness(e, stopping)`: `/readyz`, 503 `COMMON_SHUTTING_DOWN` once `App.Stopping()` closes (SL-30).
+- `pkg/lifecycle` — `WithWorkerReserve`, `DefaultWorkerReserve` (SL-05).
+- `pkg/events` — `events_consumer_unhandled_total{topic,group}` and `events_consumer_commit_errors_total{topic,group}`; a missing `event_type` header is a Warn (SL-08).
+- `pkg/outbox` — reaper deletes old processed claims in bounded batches: `Store.DeleteProcessed`, `ErrProcessedTableMissing`, `ReaperConfig.ProcessedRetention` / `ProcessedBatchSize`, `OUTBOX_PROCESSED_RETENTION`, `OUTBOX_PROCESSED_BATCH_SIZE` (SL-09); `DefaultPollInterval`, `DefaultBatchSize`, `DefaultReaperInterval`, `DefaultRetention`, `DefaultProcessedRetention`, `DefaultProcessedBatchSize` (SL-15); `Reason*` constants of the typed errors (SL-26).
+- `pkg/i18n` — `Placeholders(s) ([]string, error)`: the placeholder names of a template from its parse tree (SL-07).
+- `pkg/input` — `ParsePageMax`, `DefaultMaxPage` (SL-20).
+- `pkg/authz` — `ParseTenantMembershipsStrict`, `ReasonTenantMembershipsInvalid`, `FormatRolesCSV` (SL-29).
+- `pkg/metrics` — `MethodLabel` (SL-06).
+- `pkg/db` — `RedisConfig.TLS/DialTimeout/ReadTimeout/WriteTimeout`; `ReasonConfigInvalid`, `ReasonUnavailable` (SL-22, SL-26).
+- `pkg/config` — `SetInvalidHandler`, `InvalidHandler` (SL-23).
+- `pkg/egress` — `ReasonTimeoutInvalid` (SL-32).
+- `pkg/response` — `COMMON_INTERNAL`, `COMMON_BAD_REQUEST`, `COMMON_NOT_FOUND`, `COMMON_METHOD_NOT_ALLOWED`, `COMMON_REQUEST_TOO_LARGE`, `COMMON_UNSUPPORTED_MEDIA_TYPE`, `COMMON_TOO_MANY_REQUESTS` Reasons need `en`/`ru` texts in i18n-catalog (SL-14).
+- `pkg/lintguards` + `.golangci.strict.yml` + `scripts/check-guards.sh` — the mechanical guards of spec §3.4 (see README).
+- Tests: Postgres integration tests for the outbox Store, migrations, Deduplicator and Reaper (`GOCOMMON_TEST_POSTGRES_URL`, CI service container; `REQUIRE_DB=1` fails instead of skipping), plus two known-red tests for release 2 (`GOCOMMON_KNOWN_RED=1`: SL-02 two relays send a row twice, SL-00 a failed DLQ write is committed past) (SL-16). CI now takes its Go version from `go.mod` and lints with the strict config.
+
+### Changed (release 1)
+- ⚠ **BREAKING (SL-01):** see UPGRADING step 1.
+- `config.GetEnv`: an empty variable counts as absent (SL-23). `db.PostgresConfig`: a zero field no longer overrides the URL / pgx default (SL-22). `egress`: the transport is built from a literal, no longer cloned from `http.DefaultTransport`; `HTTPClient` refuses a non-positive timeout and shares one transport per configuration (SL-32).
+- `outbox`: a non-positive relay/reaper config value means its default (SL-15); all errors are typed (SL-26). `db`: errors are typed (SL-26).
+- `i18n`: an overlay value is parsed at load; one that does not parse or reads an undeclared name (any action form) is rejected; `Resolve` falls through to the next layer on a render error (SL-07). `notifyrender.ValidateBundle` uses the parse tree, so an undeclared name inside `{{if}}`/`{{- -}}`/a pipeline now fails i18n-catalog CI.
+- `response.JSONError`: renders `*input.Failure`, `*echo.HTTPError`, `*http.MaxBytesError`; clamps an invalid status code; `COMMON_INTERNAL` fallback (SL-14).
+- `input`: see UPGRADING step 4 (SL-17, SL-18, SL-19, SL-20). `pgerr`: four more SQLSTATEs (SL-21). `middleware.Metrics`: method label clamped (SL-06). `lifecycle`: server phase capped at `budget − reserve` (SL-05). `authz.FormatTenantMemberships` omits entries with a separator (SL-29).
+- Docs: README and `.agentrules` describe the outbox/deduplicator as they are (SL-28); the failure-path metric Help and comments say a failed DLQ write loses the message once a later offset commits (SL-00).
+
+### Removed (release 1)
+- `middleware.CORS`, `middleware.Logger` (SL-27). The phone-number log line of `RegistrationAuthMiddleware` (SL-12).
+
+
 ### Removed
 - `pkg/notifyoutbox` + `pkg/notifyrender` — **retire chat appeal notices 177/178.** The `gen-go-lib` pin moves to `a0ada6865496` (proto-contracts `4db5cf0` removed `NotificationType` 177/178 and envelope arms 197/198, `SendChatAppealOpened`/`Closed`). `notifyoutbox` no longer treats them as messenger notices and drops the `appeal_kind` check; `notifyrender` drops the `chat_appeal_opened`/`chat_appeal_closed` names, params, English baselines and extract arms. 176 `CHAT_SECTION_CLOSED` is unchanged. ⚠ Breaking for consumers: they cannot compile against this release while still referencing the removed enum values or arms, so move together with the `gen-go-lib` bump; i18n-catalog may drop the `chat_appeal_*` overlay keys.
 

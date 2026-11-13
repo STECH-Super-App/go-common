@@ -2,7 +2,6 @@ package outbox
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,7 +39,7 @@ type PublishProtoOptions struct {
 // envelope header set per design §4.2. This is the only producer API.
 func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOptions) error {
 	if opts.Message == nil {
-		return fmt.Errorf("outbox: PublishProto: Message is nil")
+		return internalError(ReasonPublishInvalid, "outbox: PublishProto: Message is nil", nil)
 	}
 
 	eventID := opts.EventID
@@ -51,7 +50,7 @@ func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOp
 
 	payload, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(opts.Message)
 	if err != nil {
-		return fmt.Errorf("outbox: marshal proto: %w", err)
+		return internalError(ReasonMarshalFailed, "outbox: marshal proto", err)
 	}
 
 	topic := opts.Topic

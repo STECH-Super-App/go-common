@@ -17,11 +17,15 @@
 // does not trigger shutdown.
 //
 // Then, inside ONE deadline of WithShutdownBudget (default 25 s) measured from
-// the trigger:
+// the trigger (the server phase is cut off earlier, see 1):
 //
 //  0. Stopping() is closed, then the optional WithDrainDelay elapses.
 //  1. Servers stop in parallel, gracefully; a server still busy at the deadline
-//     is hard-stopped (Echo Close / gRPC Stop) and reported.
+//     is hard-stopped (Echo Close / gRPC Stop) and reported. Phases 0 and 1
+//     share only budget − reserve (WithWorkerReserve, default 10 s, at most 40%
+//     of the budget): the rest is kept for phases 2 and 3, so one handler or
+//     stream that never returns cannot leave the workers' in-flight batches and
+//     the closers abandoned at process exit.
 //  2. The workers' context — derived from context.WithoutCancel(ctx), NOT from
 //     the signal — is cancelled only now, so Kafka consumers and the outbox
 //     relay keep running while in-flight requests drain. Run waits for every

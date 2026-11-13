@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
+	"github.com/STECH-Super-App/go-common/pkg/input"
 	"github.com/STECH-Super-App/go-common/pkg/logger"
 )
 
@@ -59,9 +60,22 @@ func Accepted(c echo.Context, data interface{}) error {
 	return c.JSON(http.StatusAccepted, Response{Success: true, Data: data}) //nolint:forbidigo
 }
 
-// JSONError writes the given error as a JSON Response. If err is an *AppError,
-// Reason, Params, and Details are forwarded into the wire response. If err is
-// any other error, a generic 500 envelope is sent.
+// JSONError writes the given error as a JSON Response. It understands, in this
+// order:
+//
+//   - *AppError: Reason, Params and Details are forwarded; a Code outside
+//     100..599 (a zero value would make WriteHeader panic) is sent as 500.
+//   - *input.Failure (a validator's or domain constructor's error): 422 with
+//     the Failure's Reason and Params, or 400 for the storage backstop
+//     (COMMON_INPUT_REJECTED_BY_STORAGE), whose cause never reaches the client.
+//   - *http.MaxBytesError (a body over a http.MaxBytesReader limit, as the
+//     httpserver body limit sets): 413 COMMON_REQUEST_TOO_LARGE, even when c.Bind
+//     wrapped it in a 400.
+//   - *echo.HTTPError (a failed c.Bind, the router's 404/405): its status, a
+//     COMMON_* Reason chosen by status, and the status text — never the bind
+//     error's own message, which carries parser internals.
+//   - anything else: 500 with Reason COMMON_INTERNAL, so even an unclassified
+//     fault has an i18n key.
 //
 // The diagnostic log line is written through the request-scoped logger (see
 // logError), so it carries service, request_id, and trace_id/span_id and is
@@ -73,15 +87,25 @@ func Accepted(c echo.Context, data interface{}) error {
 // with empty Reason is serialized. Used during the migration sweep to catch
 // throw sites that haven't been updated yet.
 func JSONError(c echo.Context, err error) error {
-	out := &Error{Code: http.StatusInternalServerError, Message: "internal server error"}
+	out := &Error{
+		Code:    http.StatusInternalServerError,
+		Reason:  reasonInternal,
+		Message: "internal server error",
+	}
 
 	var appErr *commonErrors.AppError
-	if errors.As(err, &appErr) {
-		out.Code = appErr.Code
+	var failure *input.Failure
+	var httpErr *echo.HTTPError
+	var tooLarge *http.MaxBytesError
+	logReason := ""
+	switch {
+	case errors.As(err, &appErr):
+		out.Code = validStatus(appErr.Code)
 		out.Reason = appErr.Reason
 		out.Message = appErr.Message
 		out.Params = appErr.Params
 		out.Details = appErr.Details
+		logReason = appErr.Reason
 
 		if appErr.Reason == "" && os.Getenv("LOG_EMPTY_REASON_WARN") == "true" {
 			logger.FromContext(c.Request().Context()).Warn("AppError serialized with empty Reason",
@@ -89,11 +113,70 @@ func JSONError(c echo.Context, err error) error {
 				zap.String("message", appErr.Message),
 			)
 		}
+
+	case errors.As(err, &failure):
+		out.Code = http.StatusUnprocessableEntity
+		if failure.Reason == input.ReasonInputRejectedByStorage {
+			out.Code = http.StatusBadRequest
+		}
+		out.Reason = failure.Reason
+		out.Message = input.MessageFor(failure.Reason)
+		out.Params = failure.Params
+		logReason = failure.Reason
+
+	case errors.As(err, &tooLarge):
+		// http.MaxBytesReader refused a body while it was being read; c.Bind
+		// reports it as a 400, but the client's mistake is the size.
+		out.Code = http.StatusRequestEntityTooLarge
+		out.Reason = reasonForStatus(out.Code)
+		out.Message = http.StatusText(out.Code)
+		logReason = out.Reason
+
+	case errors.As(err, &httpErr):
+		out.Code = validStatus(httpErr.Code)
+		out.Reason = reasonForStatus(out.Code)
+		out.Message = http.StatusText(out.Code)
+		logReason = out.Reason
 	}
 
-	logError(c.Request().Context(), out.Code, out.Reason, err)
+	// The log carries a Reason only when the error was typed; the generic
+	// COMMON_INTERNAL fallback is not a classification worth a log field.
+	logError(c.Request().Context(), out.Code, logReason, err)
 
 	return c.JSON(out.Code, Response{Success: false, Error: out}) //nolint:forbidigo
+}
+
+// reasonInternal is the Reason of a fault no one classified.
+const reasonInternal = "COMMON_INTERNAL"
+
+// validStatus returns code when it is a status net/http can write (100..599)
+// and 500 otherwise: AppError{Code: 0} used to panic in WriteHeader.
+func validStatus(code int) int {
+	if code < 100 || code > 599 {
+		return http.StatusInternalServerError
+	}
+	return code
+}
+
+// reasonForStatus names the generic COMMON_* Reason of an *echo.HTTPError by
+// its status, so the frontend has an i18n key for it.
+func reasonForStatus(code int) string {
+	switch code {
+	case http.StatusNotFound:
+		return "COMMON_NOT_FOUND"
+	case http.StatusMethodNotAllowed:
+		return "COMMON_METHOD_NOT_ALLOWED"
+	case http.StatusRequestEntityTooLarge:
+		return "COMMON_REQUEST_TOO_LARGE"
+	case http.StatusUnsupportedMediaType:
+		return "COMMON_UNSUPPORTED_MEDIA_TYPE"
+	case http.StatusTooManyRequests:
+		return "COMMON_TOO_MANY_REQUESTS"
+	}
+	if code >= http.StatusInternalServerError {
+		return reasonInternal
+	}
+	return "COMMON_BAD_REQUEST"
 }
 
 // logError writes the error-envelope's diagnostic line through the

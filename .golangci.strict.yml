@@ -1,0 +1,130 @@
+# The STRICT golangci-lint config: .golangci.yml plus the mechanical guards of
+# the audit-fix campaign spec §3.4 ("enforcement of go-common rules"). Every
+# platform rule go-common implements has a ban on the home-made alternative
+# here, so a service cannot quietly skip it.
+#
+# It is a SUPERSET of .golangci.yml, kept in step by TestStrictConfigCoversTheBase
+# (pkg/lintguards): a linter added to the base file must be added here too.
+#
+# HOW A SERVICE SWITCHES THE GUARDS ON: point its Makefile's LINTER_CONFIG_URL at
+# this file instead of .golangci.yml —
+#
+#   LINTER_CONFIG_URL := "https://raw.githubusercontent.com/STECH-Super-App/go-common/refs/heads/main/.golangci.strict.yml"
+#
+# — and run `make lint`. The service then fails on every use listed below that
+# it has not yet moved to the go-common helper; fix it, or mark a justified
+# exception on the line with `//nolint:forbidigo // <reason>`. Until a service
+# makes that one-line change it keeps linting against .golangci.yml and nothing
+# changes for it. _test.go files are exempt from every guard.
+#
+# go-common lints itself with this file (CI job "lint"); the path exclusions
+# below name the packages that ARE the helpers.
+version: "2"
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - ineffassign
+    - bodyclose
+    - revive
+    - unconvert
+    - goconst
+    - gocyclo
+    - gosec
+    - misspell
+    - forbidigo
+    - depguard
+  settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        # With analyze-types a METHOD is matched as <package>.<Type>.<Method>,
+        # not as the source text: the base file's `^c\.JSON$` never matches a
+        # call, so the c.JSON ban did not fire there. This is the form that does.
+        - pattern: ^echo\.Context\.JSON$
+          pkg: ^github\.com/labstack/echo/v4$
+          msg: "Use github.com/STECH-Super-App/go-common/pkg/response instead of direct c.JSON"
+
+        # Kafka writers: one constructor, so acks, balancer, retries and
+        # async can never be left at kafka-go's unsafe zero values (SL-01).
+        # Only the deprecated constructor is matched here: forbidigo cannot tell
+        # a `kafka.Writer{...}` literal from a legitimate `*kafka.Writer`
+        # variable or field, so the literal is banned by
+        # pkg/lintguards.KafkaWriterLiterals (a CI test) instead.
+        - pattern: ^kafka\.NewWriter$
+          pkg: ^github\.com/segmentio/kafka-go$
+          msg: "Build Kafka writers with go-common/pkg/kafkawriter (NewProducer / NewTopicWriter): a hand-built writer defaults to RequireNone, which loses events"
+
+        # HTTP server: one constructor with the body limit, timeouts, recovery
+        # and the standard middleware chain.
+        - pattern: ^echo\.New$
+          pkg: ^github\.com/labstack/echo/v4$
+          msg: "Build the server with go-common/pkg/httpserver.New: a bare echo.New() has no body limit, no ReadHeaderTimeout and believes X-Forwarded-For"
+
+        # Shutdown: pkg/lifecycle owns the signal handling.
+        - pattern: ^signal\.(Notify|NotifyContext)$
+          pkg: ^os/signal$
+          msg: "Use go-common/pkg/lifecycle (SignalContext / App.Run) for signals and shutdown"
+
+        # Client address: the gateway is the single authority (spec §3.3);
+        # services read X-Client-IP through one go-common helper. The same rule
+        # for header string literals is pkg/lintguards.NoClientAddressHeaderLiterals.
+        - pattern: ^echo\.Context\.RealIP$
+          pkg: ^github\.com/labstack/echo/v4$
+          msg: "Do not read the client address from echo's RealIP (it believes X-Forwarded-For); use the go-common client-address helper"
+        - pattern: ^echo\.(HeaderXForwardedFor|HeaderXRealIP|ExtractIPFromXFFHeader|ExtractIPFromRealIPHeader)$
+          pkg: ^github\.com/labstack/echo/v4$
+          msg: "Do not read X-Forwarded-For / X-Real-IP; the gateway sets X-Client-IP and go-common reads it"
+
+        # Outbound HTTP: provider calls go through the egress proxy. An
+        # `http.Client{...}` literal cannot be told from a `*http.Client`
+        # variable here, so it is pkg/lintguards.HTTPClientLiterals (a CI test).
+        - pattern: ^http\.(DefaultClient|DefaultTransport|Get|Head|Post|PostForm)$
+          pkg: ^net/http$
+          msg: "Use go-common/pkg/egress (HTTPClient / Transport) for outbound HTTP: it routes through the egress proxy and sets a timeout"
+
+        # gRPC clients: one dial helper with the idle timeout and the default
+        # per-call deadline.
+        - pattern: ^grpc\.(NewClient|Dial|DialContext)$
+          pkg: ^google\.golang\.org/grpc$
+          msg: "Dial with go-common/pkg/grpcopts.NewClient: it adds the idle timeout and the default per-call deadline"
+
+    depguard:
+      rules:
+        # Logging: zap through go-common/pkg/logger, never the standard log
+        # package (a non-JSON line Loki cannot parse; Critical Rule 4).
+        no-stdlib-log:
+          files:
+            - $all
+            - "!$test"
+          deny:
+            - pkg: log
+              desc: "Use go-common/pkg/logger (zap), not the standard log package"
+
+  exclusions:
+    rules:
+      # pkg/errors is the canonical platform error envelope — the package name
+      # `errors` is intentional. Renaming would break every importing service.
+      - path: pkg/errors/
+        linters:
+          - revive
+        text: "var-naming: avoid package names that conflict"
+      # Tests build clients, servers and writers freely.
+      - path: _test\.go
+        linters:
+          - forbidigo
+          - depguard
+      # The helpers the guards point at are allowed to use what they ban.
+      - path: ^pkg/kafkawriter/
+        linters: [forbidigo]
+      - path: ^pkg/httpserver/
+        linters: [forbidigo]
+      - path: ^pkg/egress/
+        linters: [forbidigo]
+      - path: ^pkg/lifecycle/
+        linters: [forbidigo]
+      - path: ^pkg/grpcopts/
+        linters: [forbidigo]

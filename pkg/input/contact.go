@@ -37,12 +37,22 @@ func Phone(raw string) (string, *Failure) {
 
 // Email validates an email address of at most maxRunes runes. The value is trimmed
 // as in Line/Body, then must hold no whitespace, control or format character,
-// exactly one '@', a non-empty local part, and a domain of at least two
-// dot-separated labels, each made of [A-Za-z0-9-] without a leading or
-// trailing hyphen. The local part is returned unchanged and the domain
-// lower-cased. No DNS lookup, no IDN. Failure → COMMON_EMAIL_INVALID, or
-// COMMON_TEXT_TOO_LONG (params {max}) for an over-long but well-formed address.
-// maxRunes <= 0 panics.
+// exactly one '@', and:
+//
+//   - a local part of 1–64 bytes in the RFC 5322 dot-atom ASCII set — letters,
+//     digits and !#$%&'*+-/=?^_`{|}~, with single dots only between atoms — so
+//     a comma (a second SMTP recipient), angle brackets, quotes and every
+//     non-ASCII letter (a Cyrillic «а» posing as a Latin one) are refused;
+//   - a domain of at least two dot-separated labels, each 1–63 bytes of
+//     [A-Za-z0-9-] without a leading or trailing hyphen, at most 253 bytes in
+//     all, whose last label is not all digits (so a@127.0.0.1 is not an address);
+//   - at most 254 bytes in all.
+//
+// The local part is returned unchanged — CASE IS KEPT, so User@x.ru and
+// user@x.ru are two values; a caller that needs identity compares lower-cased
+// values itself — and the domain lower-cased. No DNS lookup, no IDN. Failure →
+// COMMON_EMAIL_INVALID, or COMMON_TEXT_TOO_LONG (params {max}) for an over-long
+// but well-formed address. maxRunes <= 0 panics.
 func Email(raw string, maxRunes int) (string, *Failure) {
 	if maxRunes <= 0 {
 		panic("input: Email max must be positive")
@@ -56,7 +66,8 @@ func Email(raw string, maxRunes int) (string, *Failure) {
 	}
 
 	local, domain, ok := strings.Cut(v, "@")
-	if !ok || local == "" || strings.Contains(domain, "@") || !validEmailDomain(domain) {
+	if !ok || strings.Contains(domain, "@") || !validEmailLocal(local) || !validEmailDomain(domain) ||
+		len(v) > maxEmailBytes {
 		return "", fail(ReasonEmailInvalid, nil)
 	}
 
@@ -66,13 +77,44 @@ func Email(raw string, maxRunes int) (string, *Failure) {
 	return local + "@" + strings.ToLower(domain), nil
 }
 
+// Email size limits (RFC 5321 §4.5.3.1).
+const (
+	maxEmailBytes      = 254
+	maxEmailLocalBytes = 64
+	maxEmailDomainLen  = 253
+	maxEmailLabelBytes = 63
+)
+
+// validEmailLocal accepts an RFC 5322 dot-atom: atext runs separated by single
+// dots, no leading or trailing dot.
+func validEmailLocal(local string) bool {
+	if local == "" || len(local) > maxEmailLocalBytes ||
+		local[0] == '.' || local[len(local)-1] == '.' || strings.Contains(local, "..") {
+		return false
+	}
+	for i := 0; i < len(local); i++ {
+		if !isAtext(local[i]) && local[i] != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func isAtext(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		strings.IndexByte("!#$%&'*+-/=?^_`{|}~", c) >= 0
+}
+
 func validEmailDomain(domain string) bool {
+	if len(domain) > maxEmailDomainLen {
+		return false
+	}
 	labels := strings.Split(domain, ".")
-	if len(labels) < 2 {
+	if len(labels) < 2 || isAllDigits(labels[len(labels)-1]) {
 		return false
 	}
 	for _, label := range labels {
-		if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
+		if label == "" || len(label) > maxEmailLabelBytes || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for i := 0; i < len(label); i++ {
@@ -83,6 +125,15 @@ func validEmailDomain(domain string) bool {
 		}
 	}
 	return true
+}
+
+func isAllDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func isControlOrFormat(r rune) bool {

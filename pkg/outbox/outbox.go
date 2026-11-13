@@ -7,6 +7,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
+
+	"github.com/STECH-Super-App/go-common/pkg/kafkawriter"
 )
 
 // Outbox is the top-level coordinator for the transactional outbox pattern.
@@ -41,8 +43,16 @@ type Outbox struct {
 // New creates the full outbox subsystem.
 // The kafkaWriter should have no fixed Topic — each message carries its own topic.
 // defaultTopic is the Kafka destination applied when PublishProtoOptions.Topic is empty.
+//
+// New panics when kafkaWriter is Async or RequireNone (kafkawriter.Check): the
+// relay marks a row sent the moment WriteMessages returns, so such a writer
+// loses events without an error. Build the writer with kafkawriter.NewProducer.
 func New(pool *pgxpool.Pool, kafkaWriter *kafka.Writer, logger *zap.Logger, cfg *Config, defaultTopic string) *Outbox {
 	store := NewStore(pool)
+
+	// NewRelay checks the writer too; checking here first names New in the
+	// panic and keeps the failure before any other construction work.
+	kafkawriter.MustCheck("outbox.New", kafkaWriter)
 
 	return &Outbox{
 		Publisher: NewPublisher(store, defaultTopic),

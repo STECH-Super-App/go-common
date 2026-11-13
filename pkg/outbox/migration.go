@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"embed"
-	"fmt"
 	"io/fs"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql
@@ -33,7 +32,7 @@ const outboxGooseTable = "goose_db_version_outbox"
 func Migrate(postgresURL string) error {
 	db, err := sql.Open("pgx", postgresURL)
 	if err != nil {
-		return fmt.Errorf("outbox: open db for migration: %w", err)
+		return internalError(ReasonMigrateFailed, "outbox: open db for migration", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -44,11 +43,11 @@ func Migrate(postgresURL string) error {
 		goose.WithTableName(outboxGooseTable),
 	)
 	if err != nil {
-		return fmt.Errorf("outbox: create migration provider: %w", err)
+		return internalError(ReasonMigrateFailed, "outbox: create migration provider", err)
 	}
 
 	if _, err := provider.Up(context.Background()); err != nil {
-		return fmt.Errorf("outbox: run migrations: %w", err)
+		return internalError(ReasonMigrateFailed, "outbox: run migrations", err)
 	}
 
 	return nil

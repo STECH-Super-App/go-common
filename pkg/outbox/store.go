@@ -3,10 +3,12 @@ package outbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -28,7 +30,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 func (s *Store) InsertTx(ctx context.Context, tx Tx, msg *Message) error {
 	pgxTx, ok := TxAsPgx(tx)
 	if !ok {
-		return fmt.Errorf("outbox: Store.InsertTx expects pgx.Tx, got %T", tx)
+		return internalError(ReasonTxInvalid, fmt.Sprintf("outbox: Store.InsertTx expects pgx.Tx, got %T", tx), nil)
 	}
 
 	const query = `
@@ -38,7 +40,7 @@ func (s *Store) InsertTx(ctx context.Context, tx Tx, msg *Message) error {
 
 	headersJSON, err := json.Marshal(msg.Headers)
 	if err != nil {
-		return fmt.Errorf("outbox: marshal headers: %w", err)
+		return internalError(ReasonMarshalFailed, "outbox: marshal headers", err)
 	}
 
 	_, err = pgxTx.Exec(ctx, query,
@@ -54,7 +56,7 @@ func (s *Store) InsertTx(ctx context.Context, tx Tx, msg *Message) error {
 		msg.CreatedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("outbox: insert message: %w", err)
+		return internalError(ReasonInsertFailed, "outbox: insert message", err)
 	}
 
 	return nil
@@ -76,7 +78,7 @@ func (s *Store) FetchPending(ctx context.Context, batchSize int) ([]*Message, er
 
 	rows, err := s.pool.Query(ctx, query, batchSize)
 	if err != nil {
-		return nil, fmt.Errorf("outbox: fetch pending: %w", err)
+		return nil, internalError(ReasonFetchFailed, "outbox: fetch pending", err)
 	}
 	defer rows.Close()
 
@@ -90,7 +92,7 @@ func (s *Store) FetchPending(ctx context.Context, batchSize int) ([]*Message, er
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("outbox: iterate pending rows: %w", err)
+		return nil, internalError(ReasonFetchFailed, "outbox: iterate pending rows", err)
 	}
 
 	return messages, nil
@@ -118,7 +120,7 @@ func (s *Store) PendingStats(ctx context.Context) (count int64, oldestAgeSeconds
 		WHERE status = 'pending'`
 
 	if err := s.pool.QueryRow(ctx, query).Scan(&count, &oldestAgeSeconds); err != nil {
-		return 0, 0, fmt.Errorf("outbox: pending stats: %w", err)
+		return 0, 0, internalError(ReasonStatsFailed, "outbox: pending stats", err)
 	}
 
 	return count, oldestAgeSeconds, nil
@@ -133,11 +135,11 @@ func (s *Store) MarkSent(ctx context.Context, id string) error {
 
 	result, err := s.pool.Exec(ctx, query, id, time.Now().UTC())
 	if err != nil {
-		return fmt.Errorf("outbox: mark sent %s: %w", id, err)
+		return internalError(ReasonMarkFailed, "outbox: mark sent "+id, err)
 	}
 
 	if result.RowsAffected() == 0 {
-		return fmt.Errorf("outbox: message %s not found", id)
+		return internalError(ReasonMarkFailed, "outbox: message "+id+" not found", nil)
 	}
 
 	return nil
@@ -157,7 +159,7 @@ func (s *Store) MarkSentBatch(ctx context.Context, ids []string) error {
 		WHERE id = ANY($1::uuid[])`
 
 	if _, err := s.pool.Exec(ctx, query, ids, time.Now().UTC()); err != nil {
-		return fmt.Errorf("outbox: mark sent batch (%d ids): %w", len(ids), err)
+		return internalError(ReasonMarkFailed, fmt.Sprintf("outbox: mark sent batch (%d ids)", len(ids)), err)
 	}
 	return nil
 }
@@ -175,10 +177,44 @@ func (s *Store) DeleteSent(ctx context.Context, retention time.Duration) (int64,
 
 	result, err := s.pool.Exec(ctx, query, cutoff)
 	if err != nil {
-		return 0, fmt.Errorf("outbox: delete sent: %w", err)
+		return 0, internalError(ReasonCleanupFailed, "outbox: delete sent", err)
 	}
 
 	return result.RowsAffected(), nil
+}
+
+// pgUndefinedTable is SQLSTATE 42P01.
+const pgUndefinedTable = "42P01"
+
+// ErrProcessedTableMissing is DeleteProcessed's answer when the database has no
+// processed_outbox_messages table (SQLSTATE 42P01); the Reaper stops asking.
+var ErrProcessedTableMissing = errors.New("outbox: processed_outbox_messages does not exist")
+
+// DeleteProcessed removes up to limit deduplicator claims older than retention
+// and returns how many it removed; a result equal to limit means more may
+// remain. The Reaper calls it in a loop (SL-09).
+//
+// Selecting the oldest claims by processed_at walks idx_processed_outbox_reaper
+// and keeps each DELETE short, so the claim INSERTs of live consumers are never
+// queued behind one huge delete. Big O: O(limit log n).
+func (s *Store) DeleteProcessed(ctx context.Context, retention time.Duration, limit int) (int64, error) {
+	const query = `
+		DELETE FROM processed_outbox_messages
+		WHERE event_id IN (
+			SELECT event_id FROM processed_outbox_messages
+			WHERE processed_at < $1
+			ORDER BY processed_at
+			LIMIT $2)`
+
+	tag, err := s.pool.Exec(ctx, query, time.Now().UTC().Add(-retention), limit)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUndefinedTable {
+			return 0, ErrProcessedTableMissing
+		}
+		return 0, internalError(ReasonCleanupFailed, "outbox: delete processed", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // scanMessage maps a single database row to a Message struct.
@@ -203,14 +239,14 @@ func scanMessage(rows pgx.Rows) (*Message, error) {
 		&msg.SentAt,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("outbox: scan message: %w", err)
+		return nil, internalError(ReasonFetchFailed, "outbox: scan message", err)
 	}
 
 	msg.Status = Status(status)
 
 	if len(headersJSON) > 0 {
 		if err := json.Unmarshal(headersJSON, &msg.Headers); err != nil {
-			return nil, fmt.Errorf("outbox: unmarshal headers: %w", err)
+			return nil, internalError(ReasonFetchFailed, "outbox: unmarshal headers", err)
 		}
 	}
 

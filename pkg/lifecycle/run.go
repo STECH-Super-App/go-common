@@ -101,9 +101,15 @@ func (a *App) Run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), began.Add(a.budget))
 	defer cancel()
 
+	// Phase 0 and 1 may use only budget - reserve (SL-05); the workers and the
+	// closers keep the rest even when a handler never returns.
+	serverCtx, cancelServerPhase := context.WithDeadline(shutdownCtx, began.Add(a.serverBudget()))
+	defer cancelServerPhase()
+
 	rep := &report{}
-	a.drain(shutdownCtx)
-	a.stopServers(shutdownCtx, rep)
+	a.drain(serverCtx)
+	a.stopServers(serverCtx, rep)
+	cancelServerPhase()
 	cancelWorkers()
 	a.waitWorkers(shutdownCtx, rep)
 	a.runClosers(shutdownCtx, rep)

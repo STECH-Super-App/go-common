@@ -7,6 +7,8 @@ import (
 
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
+
+	"github.com/STECH-Super-App/go-common/pkg/kafkawriter"
 )
 
 // RelayConfig tunes the polling relay behavior.
@@ -22,8 +24,16 @@ type RelayConfig struct {
 	ShutdownFlushTimeout time.Duration
 }
 
-// DefaultShutdownFlushTimeout is RelayConfig.ShutdownFlushTimeout's default.
-const DefaultShutdownFlushTimeout = 5 * time.Second
+// Relay defaults. A zero or negative PollInterval or BatchSize means the
+// default: BatchSize 0 used to be LIMIT 0 plus a `continue` without sleeping, a
+// hot loop against Postgres that forwarded nothing (SL-15).
+const (
+	DefaultPollInterval = time.Second
+	DefaultBatchSize    = 100
+
+	// DefaultShutdownFlushTimeout is RelayConfig.ShutdownFlushTimeout's default.
+	DefaultShutdownFlushTimeout = 5 * time.Second
+)
 
 // relayStore is the slice of *Store the relay actually uses. It exists so the
 // poll loop — and the metric wiring hanging off its outcomes — can be unit
@@ -53,7 +63,12 @@ type Relay struct {
 // NewRelay creates a new polling relay. The concrete parameter types are kept
 // so every existing call site compiles unchanged; the fields behind them are
 // interfaces purely for testability.
+//
+// It panics when writer is Async or RequireNone (kafkawriter.Check): the relay
+// marks a row sent as soon as WriteMessages returns nil, which such a writer
+// does before any broker answered.
 func NewRelay(store *Store, writer *kafka.Writer, logger *zap.Logger, cfg RelayConfig) *Relay {
+	kafkawriter.MustCheck("outbox.NewRelay", writer)
 	return &Relay{
 		store:  store,
 		writer: writer,
@@ -67,8 +82,8 @@ func NewRelay(store *Store, writer *kafka.Writer, logger *zap.Logger, cfg RelayC
 // When fewer messages are returned, it sleeps for PollInterval before the next poll.
 func (r *Relay) Run(ctx context.Context) error {
 	r.logger.Info("outbox relay started",
-		zap.Duration("poll_interval", r.cfg.PollInterval),
-		zap.Int("batch_size", r.cfg.BatchSize),
+		zap.Duration("poll_interval", r.pollInterval()),
+		zap.Int("batch_size", r.batchSize()),
 		zap.Duration("shutdown_flush_timeout", r.shutdownFlushTimeout()),
 	)
 
@@ -95,7 +110,7 @@ func (r *Relay) Run(ctx context.Context) error {
 		}
 
 		// If we got a full batch, there might be more — poll immediately.
-		if processed >= r.cfg.BatchSize {
+		if processed >= r.batchSize() {
 			continue
 		}
 
@@ -103,7 +118,7 @@ func (r *Relay) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			r.logger.Info("outbox relay stopped")
 			return ctx.Err()
-		case <-time.After(r.cfg.PollInterval):
+		case <-time.After(r.pollInterval()):
 		}
 	}
 }
@@ -125,7 +140,7 @@ func (r *Relay) Run(ctx context.Context) error {
 //
 // Returns the number of messages successfully processed.
 func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
-	messages, err := r.store.FetchPending(ctx, r.cfg.BatchSize)
+	messages, err := r.store.FetchPending(ctx, r.batchSize())
 	if err != nil {
 		return 0, err
 	}
@@ -219,6 +234,21 @@ func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
 		zap.Int("count", len(messages)),
 	)
 	return len(messages), nil
+}
+
+// pollInterval and batchSize apply the defaults for non-positive config values.
+func (r *Relay) pollInterval() time.Duration {
+	if r.cfg.PollInterval > 0 {
+		return r.cfg.PollInterval
+	}
+	return DefaultPollInterval
+}
+
+func (r *Relay) batchSize() int {
+	if r.cfg.BatchSize > 0 {
+		return r.cfg.BatchSize
+	}
+	return DefaultBatchSize
 }
 
 // shutdownFlushTimeout applies the ShutdownFlushTimeout default.
