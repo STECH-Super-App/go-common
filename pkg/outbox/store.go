@@ -12,7 +12,7 @@ import (
 
 // Store manages persistence for outbox_messages rows.
 // It separates transactional writes (InsertTx) from non-transactional reads
-// (FetchPending) and deletes (DeleteSent).
+// (FetchPending, FetchPendingExcept) and deletes (DeleteSent).
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -78,22 +78,40 @@ func (s *Store) FetchPending(ctx context.Context, batchSize int) ([]*Message, er
 	if err != nil {
 		return nil, fmt.Errorf("outbox: fetch pending: %w", err)
 	}
-	defer rows.Close()
+	return collectMessages(rows)
+}
 
-	var messages []*Message
-	for rows.Next() {
-		msg, err := scanMessage(rows)
-		if err != nil {
-			return nil, err
-		}
-		messages = append(messages, msg)
+// FetchPendingExcept is FetchPending without the rows in exclude — the ids
+// the relay has parked (see Relay). Excluded rows take no slot of the batch,
+// so however many rows are parked, the relay still gets batchSize live ones.
+//
+// An empty exclude is exactly FetchPending. It must not reach the query
+// below: pgx sends a nil slice as SQL NULL, and `id <> ALL(NULL)` is NULL for
+// every row, which would fetch nothing at all.
+//
+// Big O: the partial index idx_outbox_pending walk, plus a linear check of
+// each scanned row against the k parked ids — k grows only by parking, so it
+// stays small.
+func (s *Store) FetchPendingExcept(ctx context.Context, batchSize int, exclude []string) ([]*Message, error) {
+	if len(exclude) == 0 {
+		return s.FetchPending(ctx, batchSize)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("outbox: iterate pending rows: %w", err)
-	}
+	const query = `
+		SELECT id, aggregate_type, aggregate_id, event_type, topic, key,
+		       payload, headers, status, created_at, sent_at
+		FROM outbox_messages
+		WHERE status = 'pending'
+		  AND id <> ALL($2::uuid[])
+		ORDER BY created_at ASC
+		LIMIT $1
+		FOR UPDATE SKIP LOCKED`
 
-	return messages, nil
+	rows, err := s.pool.Query(ctx, query, batchSize, exclude)
+	if err != nil {
+		return nil, fmt.Errorf("outbox: fetch pending (excluding %d parked): %w", len(exclude), err)
+	}
+	return collectMessages(rows)
 }
 
 // PendingStats returns the number of pending outbox rows and the age in
@@ -106,7 +124,8 @@ func (s *Store) FetchPending(ctx context.Context, batchSize int) ([]*Message, er
 //
 // MIN(created_at) over zero rows is SQL NULL, so the age is COALESCEd to 0 —
 // both numbers must be reportable on an empty table, or the gauges only appear
-// once a backlog exists.
+// once a backlog exists. (Before the first query that SUCCEEDS the gauges are
+// absent instead — see backlogGauges; an empty table is a success.)
 //
 // Big O: O(log n) via the partial index idx_outbox_pending.
 func (s *Store) PendingStats(ctx context.Context) (count int64, oldestAgeSeconds float64, err error) {
@@ -179,6 +198,26 @@ func (s *Store) DeleteSent(ctx context.Context, retention time.Duration) (int64,
 	}
 
 	return result.RowsAffected(), nil
+}
+
+// collectMessages drains a FetchPending-shaped result set and closes it.
+func collectMessages(rows pgx.Rows) ([]*Message, error) {
+	defer rows.Close()
+
+	var messages []*Message
+	for rows.Next() {
+		msg, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("outbox: iterate pending rows: %w", err)
+	}
+
+	return messages, nil
 }
 
 // scanMessage maps a single database row to a Message struct.

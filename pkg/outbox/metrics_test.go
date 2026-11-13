@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -47,8 +48,8 @@ func counterOf(t *testing.T, family string) float64 {
 	return 0
 }
 
-// Test (e), part one: BOTH gauges must be published from process start,
-// including on an empty table (§3.3).
+// Test (e), part one: BOTH gauges must be published by the first successful
+// sample, including on an empty table (§3.3).
 //
 // A series that only appears once a row exists makes the e2e assertion return
 // an empty vector — a test ERROR, not a failure — and leaves the stall alert
@@ -85,13 +86,16 @@ func TestSampler_UpdatesBothGaugesOnNonEmptyResult(t *testing.T) {
 
 // A failed query must leave the last known values alone rather than reporting
 // a false "0 pending": a gauge that lies about an empty backlog silences the
-// stall alert exactly when the database is in trouble.
+// stall alert exactly when the database is in trouble. Nor may it withhold
+// the series: a scrape without them writes a staleness marker and resolves a
+// firing OutboxStalled. The failure counter says why the values stopped.
 func TestSampler_QueryErrorLeavesGaugesUntouched(t *testing.T) {
 	s := newSampler(func(context.Context) (int64, float64, error) {
 		return 7, 90, nil
 	}, time.Hour, zap.NewNop())
 	s.collect(context.Background())
 
+	failuresBefore := counterOf(t, "outbox_pending_query_failures_total")
 	s.query = func(context.Context) (int64, float64, error) {
 		return 0, 0, errors.New("connection refused")
 	}
@@ -99,6 +103,99 @@ func TestSampler_QueryErrorLeavesGaugesUntouched(t *testing.T) {
 
 	assert.Equal(t, 7.0, gaugeValue(t, "outbox_pending_messages"))
 	assert.Equal(t, 90.0, gaugeValue(t, "outbox_oldest_pending_age_seconds"))
+	assert.Equal(t, failuresBefore+1, counterOf(t, "outbox_pending_query_failures_total"))
+}
+
+// D23 (sale-service#208): before the first successful sample both backlog
+// series are ABSENT, not 0. A plain gauge reads 0 from registration, which is
+// the healthiest value OutboxStalled can see — a sampler that never got an
+// answer (unmigrated table, database down from boot) looked idle and healthy.
+//
+// The package's own collector has usually been sampled by an earlier test,
+// so this one observes a fresh collector on a private registry.
+func TestBacklogGauges_AbsentUntilFirstSuccessfulSample(t *testing.T) {
+	gauges := newBacklogGauges()
+	reg := prometheus.NewPedanticRegistry()
+	require.NoError(t, reg.Register(gauges))
+
+	s := newSampler(func(context.Context) (int64, float64, error) {
+		return 0, 0, errors.New(`relation "outbox_messages" does not exist`)
+	}, time.Hour, zap.NewNop())
+	s.gauges = gauges
+
+	failuresBefore := counterOf(t, "outbox_pending_query_failures_total")
+	s.collect(context.Background())
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	assert.Empty(t, families, "a failed first sample must export nothing — never a reassuring 0")
+	assert.Equal(t, failuresBefore+1, counterOf(t, "outbox_pending_query_failures_total"),
+		"the failure counter is what says why the series are absent")
+
+	s.query = func(context.Context) (int64, float64, error) { return 0, 0, nil }
+	s.collect(context.Background())
+
+	families, err = reg.Gather()
+	require.NoError(t, err)
+	got := map[string]float64{}
+	for _, f := range families {
+		require.Len(t, f.GetMetric(), 1, "%s must be a single unlabelled series", f.GetName())
+		got[f.GetName()] = f.GetMetric()[0].GetGauge().GetValue()
+	}
+	assert.Equal(t, map[string]float64{
+		"outbox_pending_messages":           0,
+		"outbox_oldest_pending_age_seconds": 0,
+	}, got, "the first success exposes both series, an empty table included")
+
+	// And nothing hides them again.
+	s.query = func(context.Context) (int64, float64, error) { return 0, 0, errors.New("timeout") }
+	s.collect(context.Background())
+	families, err = reg.Gather()
+	require.NoError(t, err)
+	assert.Len(t, families, 2)
+}
+
+// The failure counter and the parked counter are exported from registration
+// on (value 0), unlike the backlog series: `increase(...) > 0` must be
+// evaluable on a service that never failed.
+func TestOutboxCounters_ExportedFromRegistration(t *testing.T) {
+	families, err := metrics.Registry.Gather()
+	require.NoError(t, err)
+	names := map[string]bool{}
+	for _, f := range families {
+		names[f.GetName()] = true
+	}
+	for _, family := range []string{
+		"outbox_pending_query_failures_total",
+		"outbox_parked_events_total",
+		"outbox_last_success_timestamp_seconds",
+		"outbox_relayed_events_total",
+		"outbox_relay_errors_total",
+		"outbox_reaped_events_total",
+	} {
+		assert.True(t, names[family], "%s must be on metrics.Registry", family)
+	}
+}
+
+// A sample cut short by shutdown is not a database failure: counting it would
+// move outbox_pending_query_failures_total on every rolling deploy.
+func TestSampler_CancelledSampleIsNotAFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := newSampler(func(ctx context.Context) (int64, float64, error) {
+		return 0, 0, ctx.Err()
+	}, time.Hour, zap.NewNop())
+	s.gauges = newBacklogGauges()
+
+	before := counterOf(t, "outbox_pending_query_failures_total")
+	s.collect(ctx)
+	assert.Equal(t, before, counterOf(t, "outbox_pending_query_failures_total"))
+}
+
+func TestRecordParked_CountsParkedRows(t *testing.T) {
+	before := counterOf(t, "outbox_parked_events_total")
+	recordParked()
+	assert.Equal(t, before+1, counterOf(t, "outbox_parked_events_total"))
 }
 
 func TestSampler_RunSamplesImmediatelyAndStopsWithContext(t *testing.T) {
