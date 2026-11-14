@@ -48,7 +48,7 @@ var (
 
 	relayErrors = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "outbox_relay_errors_total",
-		Help: "Relay poll cycles that ended in an error.",
+		Help: "Relay attempts that ended in an error: a topic forward (claim, Kafka write or mark) or the topic list.",
 	})
 
 	reapedEvents = prometheus.NewCounter(prometheus.CounterOpts{
@@ -82,6 +82,22 @@ var (
 		Name: "outbox_topic_relay_errors_total",
 		Help: "Relay attempts on a topic that ended in an error (claim, Kafka write or mark), by topic.",
 	}, []string{"topic"})
+
+	// A relay that finds a topic held by another relay's transaction skips it.
+	// That is normal for a moment (a rolling deploy); a counter that keeps
+	// growing for one topic is a holder that never finishes: a hung relay or an
+	// abandoned connection.
+	topicBusy = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "outbox_topic_busy_total",
+		Help: "Relay attempts on a topic skipped because another relay's transaction holds it, by topic. Growing without end means a holder that never finishes.",
+	}, []string{"topic"})
+
+	// kafka-go refused a message for its size: the row can never be sent and
+	// holds its topic (in order) until someone removes it. The log line names it.
+	topicMessageTooLarge = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "outbox_topic_message_too_large_total",
+		Help: "Kafka writes refused with MessageTooLargeError, by topic: a stuck row bigger than the writer's BatchBytes. Any increase needs a person.",
+	}, []string{"topic"})
 )
 
 func init() {
@@ -96,6 +112,8 @@ func init() {
 		topicOldestPendingAge,
 		topicRelayedEvents,
 		topicRelayErrors,
+		topicBusy,
+		topicMessageTooLarge,
 	)
 }
 
@@ -130,6 +148,14 @@ func recordTopicRelayed(topic string, n int) {
 
 func recordTopicError(topic string) {
 	topicRelayErrors.WithLabelValues(topic).Inc()
+}
+
+func recordTopicBusy(topic string) {
+	topicBusy.WithLabelValues(topic).Inc()
+}
+
+func recordTopicMessageTooLarge(topic string) {
+	topicMessageTooLarge.WithLabelValues(topic).Inc()
 }
 
 func recordReaped(deleted int64) {

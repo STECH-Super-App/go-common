@@ -14,13 +14,14 @@
 //	w := kafkawriter.NewProducer(cfg.KafkaBrokers)               // outbox relay
 //	dlq := kafkawriter.NewTopicWriter(cfg.KafkaBrokers, dlqTopic) // DLQ / retry
 //
-// outbox.New, outbox.NewRelay and events.NewDispatcher (also its WithRetry
-// writer) call Check and panic on a writer it refuses, so a service that still
-// builds an unsafe one fails at start-up instead of losing events in
-// production.
+// outbox.New and outbox.NewRelay call CheckProducer (Check plus a key-hashing
+// balancer); events.NewDispatcher calls Check on its DLQ and WithRetry writers.
+// Each panics on a writer it refuses, so a service that still builds an unsafe
+// one fails at start-up instead of losing or reordering events in production.
 package kafkawriter
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -109,6 +110,38 @@ func Check(w *kafka.Writer) error {
 		return unsafe("writer has RequiredAcks=RequireNone (the zero value): WriteMessages returns before any broker answered; set kafka.RequireAll or build the writer with kafkawriter.NewProducer")
 	}
 	return nil
+}
+
+// CheckProducer is Check plus the one setting only a domain-event producer
+// needs: the writer must partition by the message key (Critical Rule 13).
+// kafka-go's nil Balancer is round-robin and LeastBytes ignores the key, so on a
+// multi-partition topic the events of one aggregate would land on different
+// partitions and be consumed out of order. Accepted: the key-hashing balancers
+// (*kafka.Hash, *kafka.ReferenceHash, kafka.CRC32Balancer, kafka.Murmur2Balancer;
+// NewProducer sets &kafka.Hash{}). The outbox relay's writer is checked with it;
+// DLQ and retry writers (NewTopicWriter, events.NewDispatcher) are not — a
+// dead letter has no ordering to keep, and Check is what they get.
+func CheckProducer(w *kafka.Writer) error {
+	if err := Check(w); err != nil {
+		return err
+	}
+	switch w.Balancer.(type) {
+	case *kafka.Hash, *kafka.ReferenceHash, kafka.CRC32Balancer, *kafka.CRC32Balancer,
+		kafka.Murmur2Balancer, *kafka.Murmur2Balancer:
+		return nil
+	}
+	return unsafe(fmt.Sprintf("writer's Balancer is %T: a domain event must stay on the partition of its key; "+
+		"set Balancer: &kafka.Hash{} or build the writer with kafkawriter.NewProducer", w.Balancer))
+}
+
+// MustCheckProducer is CheckProducer for a constructor that has no error return.
+func MustCheckProducer(who string, w *kafka.Writer) {
+	if err := CheckProducer(w); err != nil {
+		panic(errors.New(500).
+			Reason(ReasonUnsafeWriter).
+			Message(who + ": " + err.Error()).
+			Build())
+	}
 }
 
 // MustCheck is Check for a constructor that has no error return: it panics

@@ -44,22 +44,24 @@ type Outbox struct {
 // The kafkaWriter should have no fixed Topic — each message carries its own topic.
 // defaultTopic is the Kafka destination applied when PublishProtoOptions.Topic is empty.
 //
-// New panics when kafkaWriter is Async or RequireNone (kafkawriter.Check): the
-// relay marks a row sent the moment WriteMessages returns, so such a writer
-// loses events without an error. Build the writer with kafkawriter.NewProducer.
+// New panics when kafkaWriter is Async or RequireNone, or does not partition by
+// key (kafkawriter.CheckProducer): the relay marks a row sent the moment
+// WriteMessages returns, so such a writer loses events without an error, and a
+// round-robin one scatters an aggregate's events over partitions. Build the
+// writer with kafkawriter.NewProducer.
 func New(pool *pgxpool.Pool, kafkaWriter *kafka.Writer, logger *zap.Logger, cfg *Config, defaultTopic string) *Outbox {
 	store := NewStore(pool)
 
 	// NewRelay checks the writer too; checking here first names New in the
 	// panic and keeps the failure before any other construction work.
-	kafkawriter.MustCheck("outbox.New", kafkaWriter)
+	kafkawriter.MustCheckProducer("outbox.New", kafkaWriter)
 
 	return &Outbox{
 		Publisher: NewPublisher(store, defaultTopic, WithMaxMessageBytes(cfg.MaxMessageBytes)),
 		store:     store,
 		relay:     NewRelay(store, kafkaWriter, logger, cfg.Relay),
 		reaper:    NewReaper(store, logger, cfg.Reaper),
-		sampler:   newSampler(store.PendingStats, cfg.MetricsInterval, logger),
+		sampler:   newSampler(store.PendingStats, cfg.MetricsInterval, logger).withTopics(store.PendingStatsByTopic),
 		logger:    logger,
 	}
 }

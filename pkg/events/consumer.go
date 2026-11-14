@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"reflect"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -71,10 +72,11 @@ type Dispatcher struct {
 	left error
 }
 
-// GroupUnknown is the group label value used when WithGroup was not supplied.
-// It is deliberately a real value rather than an empty label: a metric that
-// silently drops its group dimension is harder to notice than one that says
-// "unknown".
+// GroupUnknown was the group a dispatcher without WithGroup used for its metric
+// label AND for its deduplicator claims, so two consumers that both forgot it
+// shared claims and silently dropped each other's events. NewDispatcher no longer
+// defaults: it takes the group from the reader's GroupID or panics. The constant
+// is kept only so code that names it still compiles; nothing applies it.
 const GroupUnknown = "unknown"
 
 // Defaults of the in-place retry and the per-message limit. Each is overridable
@@ -178,7 +180,10 @@ func WithLogger(l *zap.Logger) DispatcherOption {
 
 // WithGroup supplies the consumer group id used as the "group" label on every
 // §3.4 consumer metric AND as the consumer name of the deduplicator's claims.
-// Unset means GroupUnknown.
+// Optional only when the reader exposes its GroupID (a *kafka.Reader built with
+// one: the dispatcher reads it); a reader that does not and no WithGroup is a
+// panic in NewDispatcher — a shared default would make two dispatchers share
+// claims.
 //
 // Pass the Kafka GroupID VERBATIM — the exact string the kafka.ReaderConfig
 // got, whether it came from env or a literal. It is a contract, not a naming
@@ -201,14 +206,19 @@ func WithGroup(id string) DispatcherOption {
 //
 //   - dedup is a Deduplicator, whose only values come from this package
 //     (NewPostgresDeduplicator in production, NewMemoryDeduplicator in tests).
-//     A nil one panics.
+//     A nil one — including a typed nil such as (*PostgresDeduplicator)(nil) —
+//     panics.
+//   - the consumer group is the reader's GroupID (a *kafka.Reader exposes it), or
+//     WithGroup's. With neither NewDispatcher panics: the group names the
+//     deduplicator's claims, and a shared default would let two dispatchers
+//     swallow each other's events.
 //   - A failed message is retried in place (see Classify) and then written to
 //     dlq; if THAT write fails the dispatcher stops (Run returns an error
 //     wrapping ErrDeadLetterWriteFailed) without committing — it never moves
 //     on and loses the message.
 //   - A handler's ErrLeaveUncommitted also stops Run, without any write.
 func NewDispatcher(reader Reader, dlq Writer, dedup Deduplicator, opts ...DispatcherOption) *Dispatcher {
-	if dedup == nil {
+	if isNilDeduplicator(dedup) {
 		panic(internalError(ReasonDedupFailed, "events.NewDispatcher: dedup is nil: every consumer needs a Deduplicator (events.NewPostgresDeduplicator)", nil))
 	}
 	d := &Dispatcher{
@@ -221,15 +231,46 @@ func NewDispatcher(reader Reader, dlq Writer, dedup Deduplicator, opts ...Dispat
 		retryMax:       config.GetEnvDuration("EVENTS_RETRY_MAX_BACKOFF", DefaultRetryMaxBackoff),
 		messageTimeout: config.GetEnvDuration("EVENTS_MESSAGE_TIMEOUT", DefaultMessageTimeout),
 		log:            zap.NewNop(),
-		group:          GroupUnknown,
 		handlers:       make(map[string]handlerFn),
 	}
 	for _, o := range opts {
 		o(d)
 	}
+	if d.group == "" {
+		d.group = readerGroupID(reader)
+	}
+	if d.group == "" {
+		panic(internalError(ReasonDedupFailed, "events.NewDispatcher: no consumer group: pass events.WithGroup(<the reader's GroupID>) — "+
+			"it names the deduplicator's claims, and two dispatchers without one would share them and drop each other's events", nil))
+	}
 	checkTierWriter("DLQ", d.dlq)
 	checkTierWriter("retry", d.retry)
 	return d
+}
+
+// isNilDeduplicator reports a nil Deduplicator, typed nil included: a
+// (*PostgresDeduplicator)(nil) is a non-nil interface that fails on first use.
+func isNilDeduplicator(d Deduplicator) bool {
+	if d == nil {
+		return true
+	}
+	v := reflect.ValueOf(d)
+	return v.Kind() == reflect.Pointer && v.IsNil()
+}
+
+// readerGroupID is the GroupID of a reader that exposes its configuration
+// (*kafka.Reader), or "".
+func readerGroupID(r Reader) string {
+	if r == nil {
+		return ""
+	}
+	if v := reflect.ValueOf(r); v.Kind() == reflect.Pointer && v.IsNil() {
+		return ""
+	}
+	if c, ok := r.(interface{ Config() kafka.ReaderConfig }); ok {
+		return c.Config().GroupID
+	}
+	return ""
 }
 
 // checkTierWriter refuses an unsafe *kafka.Writer used as a failure tier.
@@ -406,6 +447,8 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 // makes the process exit non-zero so Kubernetes restarts it LOUDLY:
 //
 //   - the dead-letter write failed (ErrDeadLetterWriteFailed): always an error;
+//   - the reader was closed (EOF) while the process is not stopping
+//     (ErrReaderClosed): an error — a dead consumer must restart the pod;
 //   - the handler left a message uncommitted (ErrLeaveUncommitted): an error
 //     while the process is running — lifecycle takes a worker's nil before
 //     shutdown as "returned early; continuing", which would leave the pod alive
@@ -418,7 +461,20 @@ func (d *Dispatcher) Worker(stopping <-chan struct{}) func(context.Context) erro
 	return func(ctx context.Context) error {
 		err := d.Run(ctx)
 		if err == nil {
-			return nil
+			// Run returns nil for a closed reader. That is a shutdown only when
+			// the process is shutting down; otherwise the consumer is dead and the
+			// pod must restart (see ErrReaderClosed).
+			select {
+			case <-stopping:
+				return nil
+			default:
+			}
+			if ctx.Err() != nil {
+				return nil
+			}
+			return internalError(ReasonReaderClosed,
+				"events: the Kafka reader was closed while the process is running; the consumer is dead",
+				fmt.Errorf("%w (group %s)", ErrReaderClosed, d.group))
 		}
 		if errors.Is(err, ErrDeadLetterWriteFailed) {
 			return err

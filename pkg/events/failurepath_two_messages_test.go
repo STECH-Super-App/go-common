@@ -3,6 +3,7 @@ package events_test
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -184,4 +185,27 @@ func TestDispatcherWorker_MapsTheStopsForLifecycle(t *testing.T) {
 		cancel()
 		assert.ErrorIs(t, d.Worker(running)(ctx), context.Canceled)
 	})
+}
+
+// R11: Run returns nil on a closed reader, which Worker used to pass on as a
+// clean return; lifecycle then kept the pod alive around a dead consumer.
+func TestDispatcherWorker_AReaderClosedWhileRunningIsAnError(t *testing.T) {
+	closedReader := func() *events.Dispatcher {
+		return newDisp(&scriptedFetchReader{script: []fetchStep{{err: io.EOF}}}, &fakeWriter{})
+	}
+	running := make(chan struct{})
+	stopping := make(chan struct{})
+	close(stopping)
+
+	err := closedReader().Worker(running)(context.Background())
+	require.ErrorIs(t, err, events.ErrReaderClosed)
+	var ae *commonerrors.AppError
+	require.True(t, errors.As(err, &ae))
+	assert.Equal(t, events.ReasonReaderClosed, ae.Reason)
+
+	assert.NoError(t, closedReader().Worker(stopping)(context.Background()), "closed during shutdown is the shutdown")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.NotErrorIs(t, closedReader().Worker(running)(ctx), events.ErrReaderClosed, "a cancelled context is the cancel")
 }

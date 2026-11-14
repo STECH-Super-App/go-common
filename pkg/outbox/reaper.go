@@ -41,7 +41,7 @@ type ReaperConfig struct {
 	// ProcessedBatchSize bounds one DELETE of old claims (default: 5000).
 	ProcessedBatchSize int
 
-	// IdempotencyRetention is how long idempotency_keys rows are kept (default:
+	// IdempotencyRetention is how long common_idempotency_keys rows are kept (default:
 	// 24h, DefaultIdempotencyRetention).
 	IdempotencyRetention time.Duration
 }

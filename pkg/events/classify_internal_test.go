@@ -39,7 +39,7 @@ func TestRetryDelay_DoublesCapsAndJitters(t *testing.T) {
 }
 
 func TestDispatcherDefaults(t *testing.T) {
-	d := NewDispatcher(nil, nil, NewMemoryDeduplicator())
+	d := NewDispatcher(nil, nil, NewMemoryDeduplicator(), WithGroup("g"))
 	assert.Equal(t, 2*time.Minute, d.retryWindow, "about two minutes in place before a dead letter")
 	assert.Equal(t, time.Minute, d.messageTimeout)
 	assert.Equal(t, 500*time.Millisecond, d.retryInitial)
@@ -51,13 +51,13 @@ func TestDispatcherDefaultsFromEnvironment(t *testing.T) {
 	t.Setenv("EVENTS_MESSAGE_TIMEOUT", "3s")
 	t.Setenv("EVENTS_RETRY_INITIAL_BACKOFF", "20ms")
 	t.Setenv("EVENTS_RETRY_MAX_BACKOFF", "90ms")
-	d := NewDispatcher(nil, nil, NewMemoryDeduplicator())
+	d := NewDispatcher(nil, nil, NewMemoryDeduplicator(), WithGroup("g"))
 	assert.Equal(t, 7*time.Second, d.retryWindow)
 	assert.Equal(t, 3*time.Second, d.messageTimeout)
 	assert.Equal(t, 20*time.Millisecond, d.retryInitial)
 	assert.Equal(t, 90*time.Millisecond, d.retryMax)
 
-	d = NewDispatcher(nil, nil, NewMemoryDeduplicator(), WithRetryWindow(time.Second), WithMessageTimeout(time.Second))
+	d = NewDispatcher(nil, nil, NewMemoryDeduplicator(), WithGroup("g"), WithRetryWindow(time.Second), WithMessageTimeout(time.Second))
 	assert.Equal(t, time.Second, d.retryWindow, "an option beats the environment")
 	assert.Equal(t, time.Second, d.messageTimeout)
 }

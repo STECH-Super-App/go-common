@@ -261,9 +261,11 @@ func TestPG_MessageTimeoutRollsTheTransactionBack(t *testing.T) {
 }
 
 func TestNewDispatcher_RequiresADeduplicator(t *testing.T) {
-	assert.Panics(t, func() { events.NewDispatcher(&fakeReader{}, &fakeWriter{}, nil) })
+	assert.Panics(t, func() { events.NewDispatcher(&fakeReader{}, &fakeWriter{}, nil, events.WithGroup("g")) })
 	assert.Panics(t, func() { events.NewPostgresDeduplicator(nil) })
-	assert.NotPanics(t, func() { events.NewDispatcher(&fakeReader{}, &fakeWriter{}, events.NewMemoryDeduplicator()) })
+	assert.NotPanics(t, func() {
+		events.NewDispatcher(&fakeReader{}, &fakeWriter{}, events.NewMemoryDeduplicator(), events.WithGroup("g"))
+	})
 }
 
 func TestPG_DeduplicatorReadyFailsWhenTheTableIsMissing(t *testing.T) {

@@ -148,24 +148,8 @@ func TestDispatcher_TagsTopicPerMessageAndGroup(t *testing.T) {
 		"the retry tier of the same dispatcher must get its own topic label")
 }
 
-func TestDispatcher_GroupDefaultsToUnknown(t *testing.T) {
-	labels := map[string]string{"topic": "user.events", "group": events.GroupUnknown}
-	before := counterValue(t, "events_consumer_processed_total", labels)
-
-	reader := &fakeReader{msgs: []kafka.Message{userRegisteredMessage(t, "user.events", "e3")}}
-
-	done := make(chan struct{}, 1)
-	disp := newDisp(reader, &fakeWriter{}) // no WithGroup
-	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
-		done <- struct{}{}
-		return nil
-	})
-
-	runDispatcher(t, disp, 1, done)
-
-	eventuallyCounter(t, "events_consumer_processed_total", labels, before+1,
-		"an unset group must label as \"unknown\", never as an empty string")
-}
+// (TestDispatcher_GroupDefaultsToUnknown is gone: an unset group is now a panic in
+// NewDispatcher, see group_required_test.go.)
 
 func TestDispatcher_DeadLetterCounterCarriesReason(t *testing.T) {
 	const group = "media"

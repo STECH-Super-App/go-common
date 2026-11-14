@@ -10,9 +10,18 @@
 -- The row names the record the request created (resource_type + resource_id),
 -- never the response text: a replay loads that record and passes the normal
 -- permission check.
+--
+-- NAMES. The table is common_idempotency_keys, not idempotency_keys: order-,
+-- seo- and machinery-service already own an `idempotency_keys` table of another
+-- shape, and `CREATE TABLE IF NOT EXISTS idempotency_keys` would silently adopt
+-- it (order, seo) or fail on its index (machinery has no created_at). A service
+-- keeps its old table untouched until its endpoints are moved to
+-- pkg/idempotency, then drops it in a migration of its own. Every object below
+-- carries the common_ prefix, the primary key and check constraint included
+-- (their names live in the same namespace as the service's own).
 
 -- +goose Up
-CREATE TABLE IF NOT EXISTS idempotency_keys (
+CREATE TABLE IF NOT EXISTS common_idempotency_keys (
     caller        VARCHAR(128) NOT NULL,
     endpoint      VARCHAR(256) NOT NULL,
     key           VARCHAR(128) NOT NULL,
@@ -20,15 +29,15 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
     resource_type VARCHAR(64),
     resource_id   VARCHAR(128),
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (caller, endpoint, key),
+    CONSTRAINT common_idempotency_keys_pkey PRIMARY KEY (caller, endpoint, key),
     -- Both set once the work is done, both empty before. Inside the transaction
     -- only; a committed row always has both.
-    CONSTRAINT idempotency_keys_resource_both_or_none
+    CONSTRAINT common_idempotency_keys_resource_both_or_none
         CHECK ((resource_type IS NULL) = (resource_id IS NULL))
 );
 
 -- Reaper index: delete keys older than the retention (24 h).
-CREATE INDEX IF NOT EXISTS idx_idempotency_keys_reaper ON idempotency_keys (created_at);
+CREATE INDEX IF NOT EXISTS idx_common_idempotency_keys_reaper ON common_idempotency_keys (created_at);
 
 -- +goose Down
-DROP TABLE IF EXISTS idempotency_keys;
+DROP TABLE IF EXISTS common_idempotency_keys;

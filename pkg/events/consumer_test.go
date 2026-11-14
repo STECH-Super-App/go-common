@@ -357,6 +357,6 @@ func newDisp(reader events.Reader, dlq events.Writer, opts ...events.DispatcherO
 }
 
 func newDispWith(dedup events.Deduplicator, reader events.Reader, dlq events.Writer, opts ...events.DispatcherOption) *events.Dispatcher {
-	fast := []events.DispatcherOption{events.WithRetryWindow(50 * time.Millisecond), events.WithRetryBackoff(5*time.Millisecond, 10*time.Millisecond)}
+	fast := []events.DispatcherOption{events.WithGroup("test-group"), events.WithRetryWindow(50 * time.Millisecond), events.WithRetryBackoff(5*time.Millisecond, 10*time.Millisecond)}
 	return events.NewDispatcher(reader, dlq, dedup, append(fast, opts...)...)
 }

@@ -85,3 +85,44 @@ func TestMustCheck_PanicsWithTypedErrorNamingTheCaller(t *testing.T) {
 	}()
 	kafkawriter.MustCheck("my.caller", &kafka.Writer{})
 }
+
+// Critical Rule 13: a producer of domain events must partition by key; a DLQ or
+// retry writer need not (Check, which events.NewDispatcher uses for them).
+func TestCheckProducer_RequiresAKeyHashingBalancer(t *testing.T) {
+	safe := func(b kafka.Balancer) *kafka.Writer {
+		return &kafka.Writer{Addr: kafka.TCP("x:9092"), RequiredAcks: kafka.RequireAll, Balancer: b}
+	}
+	for name, b := range map[string]kafka.Balancer{
+		"Hash":          &kafka.Hash{},
+		"ReferenceHash": &kafka.ReferenceHash{},
+		"CRC32":         kafka.CRC32Balancer{},
+		"Murmur2":       kafka.Murmur2Balancer{},
+	} {
+		assert.NoError(t, kafkawriter.CheckProducer(safe(b)), name)
+	}
+	for name, b := range map[string]kafka.Balancer{
+		"nil":        nil,
+		"RoundRobin": &kafka.RoundRobin{},
+		"LeastBytes": &kafka.LeastBytes{},
+	} {
+		err := kafkawriter.CheckProducer(safe(b))
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "partition of its key", name)
+		assert.NoError(t, kafkawriter.Check(safe(b)), "%s: a DLQ/retry writer is exempt", name)
+	}
+	assert.Error(t, kafkawriter.CheckProducer(&kafka.Writer{Addr: kafka.TCP("x:9092"), Balancer: &kafka.Hash{}}), "Check's rules still apply")
+	assert.NoError(t, kafkawriter.CheckProducer(kafkawriter.NewProducer([]string{"x:9092"})))
+	assert.NoError(t, kafkawriter.Check(kafkawriter.NewTopicWriter([]string{"x:9092"}, "t.dlq.g")))
+}
+
+func TestMustCheckProducer_PanicsWithTypedErrorNamingTheCaller(t *testing.T) {
+	defer func() {
+		r := recover()
+		require.NotNil(t, r)
+		ae, ok := r.(*apperr.AppError)
+		require.True(t, ok, "panic value must be the typed error, got %T", r)
+		assert.Equal(t, kafkawriter.ReasonUnsafeWriter, ae.Reason)
+		assert.Contains(t, ae.Message, "my.caller")
+	}()
+	kafkawriter.MustCheckProducer("my.caller", &kafka.Writer{Addr: kafka.TCP("x:9092"), RequiredAcks: kafka.RequireAll})
+}

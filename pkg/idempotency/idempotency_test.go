@@ -192,7 +192,7 @@ func TestRun_FailedFirstRequestLeavesNothingAndTheRetryRuns(t *testing.T) {
 	})
 	require.ErrorIs(t, err, boom, "the work's own error passes through untouched")
 	var rows int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM idempotency_keys`).Scan(&rows))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM common_idempotency_keys`).Scan(&rows))
 	assert.Zero(t, rows)
 
 	var out idempotency.Outcome
@@ -253,7 +253,7 @@ func TestRun_WorkErrorReleasesTheKeyEvenIfTheCallerCommits(t *testing.T) {
 		return nil // commits anyway
 	}))
 	var rows int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM idempotency_keys`).Scan(&rows))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM common_idempotency_keys`).Scan(&rows))
 	assert.Zero(t, rows)
 }
 

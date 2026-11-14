@@ -47,8 +47,24 @@ func TestNewRelay_RefusesUnsafeWriter(t *testing.T) {
 }
 
 func TestNew_AcceptsSafeWriter(t *testing.T) {
-	w := &kafka.Writer{Addr: kafka.TCP("localhost:9092"), RequiredAcks: kafka.RequireAll}
+	w := &kafka.Writer{Addr: kafka.TCP("localhost:9092"), RequiredAcks: kafka.RequireAll, Balancer: &kafka.Hash{}}
 	assert.NotPanics(t, func() {
 		New(nil, w, zap.NewNop(), &Config{}, "topic")
 	})
+}
+
+// R11 / Critical Rule 13: a domain-event writer must keep a key on its
+// partition. nil is round-robin and LeastBytes ignores the key.
+func TestNewAndNewRelay_RefuseAWriterThatIgnoresTheKey(t *testing.T) {
+	for name, b := range map[string]kafka.Balancer{
+		"nil (round-robin)": nil,
+		"RoundRobin":        &kafka.RoundRobin{},
+		"LeastBytes":        &kafka.LeastBytes{},
+	} {
+		w := &kafka.Writer{Addr: kafka.TCP("localhost:9092"), RequiredAcks: kafka.RequireAll, Balancer: b}
+		t.Run(name, func(t *testing.T) {
+			assert.Panics(t, func() { New(nil, w, zap.NewNop(), &Config{}, "topic") })
+			assert.Panics(t, func() { NewRelay(nil, w, zap.NewNop(), RelayConfig{}) })
+		})
+	}
 }

@@ -47,4 +47,12 @@ if [ "$missing" -ne 0 ]; then
   echo "$out" >&2
   exit 1
 fi
-echo "all ${#expected[@]} guards fire on the violations sample"
+# The AST rules of pkg/lintguards are tests, not linters: run the ones that scan
+# the same sample (every rule trips on it; the lookalikes at its end do not).
+if ! lg="$(go test -count=1 -run 'TestScan_TheViolationsSampleTripsEveryRule|TestScan_TheSampleLookalikesAreNotReported|TestScan_OptInRulesFireOnTheSampleAndStayOutOfTheDefaults' ./pkg/lintguards/ 2>&1)"; then
+  echo "GUARD DID NOT FIRE: a pkg/lintguards rule no longer matches the violations sample (or flags a lookalike)" >&2
+  echo "$lg" >&2
+  exit 1
+fi
+
+echo "all ${#expected[@]} golangci guards and the pkg/lintguards rules fire on the violations sample"

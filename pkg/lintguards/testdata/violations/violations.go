@@ -96,6 +96,14 @@ func idempotencyTable() string {
 	return "INSERT INTO idempotency_records (key) VALUES ($1)" // lintguards: hand-rolled idempotency table
 }
 
+func libraryIdempotencyTable() string {
+	return "SELECT resource_id FROM common_idempotency_keys WHERE key = $1" // lintguards: hand-rolled idempotency table (the library's own table is not a service's to read)
+}
+
+func idempotencyHeaderValues(r *http.Request) []string {
+	return r.Header.Values("idempotency-key") // lintguards: Idempotency-Key header literal (any case, any accessor)
+}
+
 func dedupTable() string {
 	return "INSERT INTO processed_events (event_id) VALUES ($1)" // lintguards: hand-rolled deduplicator
 }
@@ -124,4 +132,17 @@ func readerLoop(ctx context.Context, r *kafka.Reader) {
 
 func legacyHandler(d *events.Dispatcher) {
 	events.Handle(d, func(context.Context, *usersv1.UserRegistered) error { return nil }) // lintguards (opt-in): legacy event handler form
+}
+
+// --- lookalikes: NOT reported (R12). Everything below is legitimate; the
+// lintguards test fails when any rule flags a line from here down. ---
+
+func lookalikes() []string {
+	return []string{
+		"SELECT id FROM orders WHERE idempotency_key = $1",                      // a column, not a table
+		"INSERT INTO conversation_processed_events(event_id) VALUES($1)",        // a longer table name
+		"SELECT 1 FROM conversation_messages WHERE client_idempotency_key = $1", // a column
+		"Content-Type,Authorization,Idempotency-Key,Range",                      // a CORS / config default
+		"Idempotency-Key", // an allow-list entry or field name, not a read
+	}
 }

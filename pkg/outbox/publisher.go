@@ -11,6 +11,13 @@ type MessageInserter interface {
 	InsertTx(ctx context.Context, tx Tx, msg *Message) error
 }
 
+// limitedInserter is the optional extra of a store that can measure the size
+// of the row it writes exactly (*Store, in Postgres). TestStore does not have
+// it: it keeps the compact payload and has no jsonb form to measure.
+type limitedInserter interface {
+	InsertTxLimited(ctx context.Context, tx Tx, msg *Message, maxWireBytes int) error
+}
+
 // Publisher provides transactional event publishing via the outbox pattern.
 // The new API is PublishProto (see publish_proto.go) — the JSON-payload
 // `Publish` method that used to live here was removed in the events-to-proto
@@ -25,11 +32,11 @@ type Publisher struct {
 }
 
 // DefaultMaxMessageBytes is the largest event PublishProto accepts: key, payload
-// and headers together. Kafka's default record limit (message.max.bytes) and
-// kafka-go's writer batch limit are both 1 MiB; this stays well under so the
-// record framing and the growth of the payload when Postgres stores it as jsonb
-// (it adds a space after every colon and comma) cannot push a row that passed
-// the check over the broker's limit.
+// (measured as Postgres will send it, jsonb::text) and headers together. Kafka's
+// default record limit (message.max.bytes) and kafka-go's writer batch limit
+// (BatchBytes) are both 1 MiB; this stays under so the record framing around the
+// measured bytes (a few dozen bytes per record, per-header length prefixes)
+// cannot push a row that passed the check over that limit.
 const DefaultMaxMessageBytes = 900_000
 
 // PublisherOption tunes a Publisher.

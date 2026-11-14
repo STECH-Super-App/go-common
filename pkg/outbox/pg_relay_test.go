@@ -333,17 +333,17 @@ func TestPG_MigrationsCreateTheReleaseTwoTables(t *testing.T) {
 	require.NoError(t, Migrate(url))
 	ctx := context.Background()
 
-	for _, table := range []string{"processed_events", "idempotency_keys"} {
+	for _, table := range []string{"processed_events", "common_idempotency_keys"} {
 		var n int
 		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_name = $1`, table).Scan(&n))
 		assert.Equal(t, 1, n, table)
 	}
-	for _, idx := range []string{"idx_processed_events_reaper", "idx_idempotency_keys_reaper", "idx_outbox_pending_topic"} {
+	for _, idx := range []string{"idx_processed_events_reaper", "idx_common_idempotency_keys_reaper", "idx_outbox_pending_topic"} {
 		var n int
 		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM pg_indexes WHERE indexname = $1`, idx).Scan(&n))
 		assert.Equal(t, 1, n, idx)
 	}
-	_, err := pool.Exec(ctx, `INSERT INTO idempotency_keys (caller, endpoint, key, request_hash, resource_type)
+	_, err := pool.Exec(ctx, `INSERT INTO common_idempotency_keys (caller, endpoint, key, request_hash, resource_type)
 		VALUES ('c', 'e', 'k', '\x00', 'order')`)
 	require.Error(t, err, "a resource type without an id violates the both-or-none check")
 }
@@ -354,7 +354,7 @@ func TestPG_ReaperDeletesOldEventClaimsAndIdempotencyKeys(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO processed_events (consumer, event_id, processed_at) VALUES
 			('g', 'old', NOW() - INTERVAL '40 days'), ('g', 'fresh', NOW());
-		INSERT INTO idempotency_keys (caller, endpoint, key, request_hash, created_at) VALUES
+		INSERT INTO common_idempotency_keys (caller, endpoint, key, request_hash, created_at) VALUES
 			('c', 'e', 'old', '\x00', NOW() - INTERVAL '2 days'), ('c', 'e', 'fresh', '\x00', NOW());`)
 	require.NoError(t, err)
 
@@ -363,7 +363,7 @@ func TestPG_ReaperDeletesOldEventClaimsAndIdempotencyKeys(t *testing.T) {
 
 	var events, keys int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM processed_events`).Scan(&events))
-	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM idempotency_keys`).Scan(&keys))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM common_idempotency_keys`).Scan(&keys))
 	assert.Equal(t, 1, events, "the 40-day-old claim is reaped, the fresh one kept")
 	assert.Equal(t, 1, keys, "the 2-day-old key is reaped (retention 24 h), the fresh one kept")
 }
@@ -371,7 +371,7 @@ func TestPG_ReaperDeletesOldEventClaimsAndIdempotencyKeys(t *testing.T) {
 func TestPG_ReaperStopsAskingForATableThatDoesNotExist(t *testing.T) {
 	pool, store := migratedDB(t)
 	ctx := context.Background()
-	_, err := pool.Exec(ctx, `DROP TABLE processed_events; DROP TABLE idempotency_keys`)
+	_, err := pool.Exec(ctx, `DROP TABLE processed_events; DROP TABLE common_idempotency_keys`)
 	require.NoError(t, err)
 
 	r := NewReaper(store, zap.NewNop(), ReaperConfig{})
@@ -379,4 +379,36 @@ func TestPG_ReaperStopsAskingForATableThatDoesNotExist(t *testing.T) {
 
 	assert.True(t, r.eventsOff)
 	assert.True(t, r.idempotencyOff)
+}
+
+// R3 against the real store: a topic whose write blocks holds ITS rows (and one
+// connection), nothing else. Rows of a healthy topic inserted while it blocks go
+// out within a couple of polls.
+func TestPG_ABlockedTopicDoesNotDelayAHealthyOne(t *testing.T) {
+	pool, store := migratedDB(t)
+	for i := 0; i < 3; i++ {
+		insertTopicMessage(t, pool, store, newID(), "stuck.events", "k", time.Now().UTC().Add(-time.Minute+time.Duration(i)*time.Millisecond))
+	}
+	w := newGateWriter()
+	release := w.block("stuck.events")
+	r := schedulerRelay(store, w, RelayConfig{SendTimeout: time.Minute})
+	stop := runInBackground(r)
+	defer stop()
+	defer close(release)
+	require.Eventually(t, func() bool { return w.enteredCount("stuck.events") == 1 }, 3*time.Second, 5*time.Millisecond)
+
+	var healthy []string
+	for i := 0; i < 4; i++ {
+		id := newID()
+		healthy = append(healthy, id)
+		insertTopicMessage(t, pool, store, id, "healthy.events", "k", time.Now().UTC())
+	}
+
+	require.Eventually(t, func() bool { return w.sentTo("healthy.events") == 4 }, time.Second, 10*time.Millisecond)
+	for _, id := range healthy {
+		assert.Equal(t, "sent", statusOf(t, pool, id))
+	}
+	var pending int
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM outbox_messages WHERE status = 'pending'`).Scan(&pending))
+	assert.Equal(t, 3, pending, "the blocked topic's rows are still pending, claimed by its open transaction")
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 
@@ -115,6 +116,9 @@ type Claim struct {
 	endpoint string
 	hash     [sha256.Size]byte
 	valid    bool
+	// ran is the request's "a claim was run" flag, shared by every copy of the
+	// Claim ClaimFor built (nil for NewClaim: no Require middleware is watching).
+	ran *atomic.Bool
 }
 
 // NewClaim builds a Claim from a validated key and the request's identity.
@@ -212,6 +216,9 @@ func (c Claim) Run(ctx context.Context, tx pgx.Tx, work func(ctx context.Context
 	if tx == nil {
 		return Outcome{}, internal(ReasonFailed, "idempotency: Run needs the work's transaction", nil)
 	}
+	if c.ran != nil {
+		c.ran.Store(true) // Require sees that this request really went through its key
+	}
 
 	// Three rounds at most: a conflicting row can be reaped between the INSERT
 	// that saw it and the SELECT that reads it, which only means "try again".
@@ -236,7 +243,7 @@ func (c Claim) Run(ctx context.Context, tx pgx.Tx, work func(ctx context.Context
 
 func (c Claim) insert(ctx context.Context, tx pgx.Tx) (bool, error) {
 	const q = `
-		INSERT INTO idempotency_keys (caller, endpoint, key, request_hash)
+		INSERT INTO common_idempotency_keys (caller, endpoint, key, request_hash)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (caller, endpoint, key) DO NOTHING`
 	tag, err := tx.Exec(ctx, q, c.caller, c.endpoint, c.key.v, c.hash[:])
@@ -258,7 +265,7 @@ func (c Claim) runWork(ctx context.Context, tx pgx.Tx, work func(context.Context
 			"idempotency: work must return the Resource it created (type 1-64, id 1-128 characters)", nil)
 	}
 	const q = `
-		UPDATE idempotency_keys SET resource_type = $4, resource_id = $5
+		UPDATE common_idempotency_keys SET resource_type = $4, resource_id = $5
 		WHERE caller = $1 AND endpoint = $2 AND key = $3`
 	tag, err := tx.Exec(ctx, q, c.caller, c.endpoint, c.key.v, res.Type, res.ID)
 	if err != nil {
@@ -274,7 +281,7 @@ func (c Claim) runWork(ctx context.Context, tx pgx.Tx, work func(context.Context
 // transaction is already aborted the statement fails, and the rollback the
 // caller owes removes the row anyway.
 func (c Claim) release(ctx context.Context, tx pgx.Tx) {
-	_, _ = tx.Exec(ctx, `DELETE FROM idempotency_keys WHERE caller = $1 AND endpoint = $2 AND key = $3`,
+	_, _ = tx.Exec(ctx, `DELETE FROM common_idempotency_keys WHERE caller = $1 AND endpoint = $2 AND key = $3`,
 		c.caller, c.endpoint, c.key.v)
 }
 
@@ -282,7 +289,7 @@ func (c Claim) release(ctx context.Context, tx pgx.Tx) {
 // gone again.
 func (c Claim) replay(ctx context.Context, tx pgx.Tx) (out Outcome, found bool, err error) {
 	const q = `
-		SELECT request_hash, resource_type, resource_id FROM idempotency_keys
+		SELECT request_hash, resource_type, resource_id FROM common_idempotency_keys
 		WHERE caller = $1 AND endpoint = $2 AND key = $3`
 	var (
 		hash       []byte

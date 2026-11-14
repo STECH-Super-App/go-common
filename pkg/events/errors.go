@@ -57,8 +57,18 @@ var ErrLeaveUncommitted = errors.New("events: leave the message uncommitted")
 // the one it had just failed to dead-letter (SL-00, go-common#38).
 var ErrDeadLetterWriteFailed = errors.New("events: dead-letter write failed")
 
+// ErrReaderClosed marks the error Dispatcher.Worker returns when the reader was
+// closed (kafka-go answers io.EOF) while the process was NOT stopping. Run
+// treats a closed reader as a shutdown and returns nil, which is right for a
+// shutdown and wrong for a reader that something else closed: lifecycle takes a
+// worker's early nil as "returned; continuing", and the pod would live on with
+// a consumer that is dead and a reader that no longer holds its partitions.
+var ErrReaderClosed = errors.New("events: reader closed while the process is running")
+
 // Reasons of the typed errors this package returns (Critical Rule 7).
 const (
+	// ReasonReaderClosed: the 500 Worker returns with ErrReaderClosed in its chain.
+	ReasonReaderClosed = "COMMON_EVENTS_READER_CLOSED"
 	// ReasonDeadLetterWriteFailed: the 500 Run returns with ErrDeadLetterWriteFailed
 	// in its chain.
 	ReasonDeadLetterWriteFailed = "COMMON_EVENTS_DEAD_LETTER_WRITE_FAILED"
