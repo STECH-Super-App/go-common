@@ -79,12 +79,22 @@ func HTTPClientLiterals() Rule {
 
 // ClientAddressHeaderLiterals bans naming the headers a client controls and a
 // service might believe as its address. The gateway is the single authority and
-// writes X-Client-IP (spec §3.3); services read only that, through go-common.
+// writes X-Client-IP (spec §3.3); services read only that, through
+// go-common/pkg/clientip.
+//
+// The list is the address headers of pkg/trustedheaders minus X-Client-IP itself
+// (a service naming that is fine — only the helper should READ it, but a literal
+// is not worth a false positive); TestClientAddressRuleCoversTrustedHeaders keeps
+// the two in step. A service that must name one for a reason (a proxy that
+// strips them, a test double) lists the file in its exempt map with that reason.
 func ClientAddressHeaderLiterals() Rule {
 	return Rule{
 		Name:    "client address header",
 		Message: "read the client address from X-Client-IP through the go-common helper, never from forwarding headers",
-		Strings: []string{"X-Forwarded-For", "X-Real-IP", "Forwarded", "X-Forwarded-Host", "X-Forwarded-Proto"},
+		Strings: []string{
+			"X-Forwarded-For", "X-Real-IP", "Forwarded",
+			"X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port", "X-Forwarded-Prefix",
+		},
 	}
 }
 

@@ -78,6 +78,20 @@ linters:
         - pattern: ^echo\.(HeaderXForwardedFor|HeaderXRealIP|ExtractIPFromXFFHeader|ExtractIPFromRealIPHeader)$
           pkg: ^github\.com/labstack/echo/v4$
           msg: "Do not read X-Forwarded-For / X-Real-IP; the gateway sets X-Client-IP and go-common reads it"
+        # The two constants that used to be the way in.
+        - pattern: ^auth\.(HeaderRealIP|HeaderForwardedFor)$
+          pkg: ^github\.com/STECH-Super-App/go-common/pkg/auth$
+          msg: "Do not read X-Real-IP / X-Forwarded-For; read the client address with go-common/pkg/clientip"
+        # The TCP peer is the ingress pod behind ingress, never the visitor.
+        # A field, not a call: with analyze-types forbidigo matches it by the
+        # selected type, so it fires on `req.RemoteAddr` for any *http.Request.
+        - pattern: ^http\.Request\.RemoteAddr$
+          pkg: ^net/http$
+          msg: "r.RemoteAddr is the TCP peer (the ingress pod), not the client: read the address with go-common/pkg/clientip. For logging or a peer-only check, mark the line //nolint:forbidigo // <reason>"
+        # Only api-gateway writes the trusted address.
+        - pattern: ^clientip\.Set$
+          pkg: ^github\.com/STECH-Super-App/go-common/pkg/clientip$
+          msg: "clientip.Set asserts the client address and is reserved for api-gateway; services read it with clientip.FromRequest / FromEcho / FromContext"
 
         # Outbound HTTP: provider calls go through the egress proxy. An
         # `http.Client{...}` literal cannot be told from a `*http.Client`

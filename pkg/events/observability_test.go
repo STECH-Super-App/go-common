@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -390,4 +391,34 @@ func TestDispatcher_WithNilLoggerDoesNotPanic(t *testing.T) {
 	})
 
 	require.NotPanics(t, func() { runDispatcher(t, disp, 1, done) })
+}
+
+// SL-24: a baggage header on a Kafka message (written by an old producer, or
+// by anything with broker access) never reaches the handler's context, even
+// when the process propagator would carry it.
+func TestDispatcher_IgnoresBaggageHeader(t *testing.T) {
+	prevPropagator := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	t.Cleanup(func() { otel.SetTextMapPropagator(prevPropagator) })
+
+	msg := userRegisteredMessage(t, "user.events", "e-baggage")
+	msg.Headers = append(msg.Headers,
+		kafka.Header{Key: envelope.HeaderTraceparent, Value: []byte("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")},
+		kafka.Header{Key: "baggage", Value: []byte("tenant=evil")},
+	)
+
+	var members int
+	var traceID trace.TraceID
+	done := make(chan struct{}, 1)
+	disp := events.NewDispatcher(&fakeReader{msgs: []kafka.Message{msg}}, &fakeWriter{}, events.WithGroup("user"))
+	events.Handle(disp, func(ctx context.Context, _ *usersv1.UserRegistered) error {
+		members = len(baggage.FromContext(ctx).Members())
+		traceID = trace.SpanContextFromContext(ctx).TraceID()
+		done <- struct{}{}
+		return nil
+	})
+	runDispatcher(t, disp, 1, done)
+
+	assert.Zero(t, members)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", traceID.String(), "the trace link stays")
 }

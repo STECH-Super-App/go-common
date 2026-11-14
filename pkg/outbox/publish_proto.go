@@ -2,10 +2,10 @@ package outbox
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -62,6 +62,10 @@ func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOp
 
 	headers := make(map[string]string, len(opts.Headers)+7)
 	for k, v := range opts.Headers {
+		// Baggage is caller-controlled data, never an event header (SL-24).
+		if strings.EqualFold(k, "baggage") {
+			continue
+		}
 		headers[k] = v
 	}
 	headers[envelope.HeaderEventID] = eventID
@@ -81,7 +85,11 @@ func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOp
 	//
 	// Injects nothing when no span is active, so this is a no-op for services
 	// that never call tracing.Init.
-	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(headers))
+	//
+	// Only the W3C trace context is written — never the global propagator,
+	// which may include Baggage: a client-sent baggage header would otherwise
+	// be copied into every row and Kafka message the request causes (SL-24).
+	propagation.TraceContext{}.Inject(ctx, propagation.MapCarrier(headers))
 
 	msg := &Message{
 		ID:            eventID,

@@ -8,12 +8,16 @@ package violations
 import (
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 
 	"github.com/labstack/echo/v4"
 	"github.com/segmentio/kafka-go"
 	"google.golang.org/grpc"
+
+	"github.com/STECH-Super-App/go-common/pkg/auth"
+	"github.com/STECH-Super-App/go-common/pkg/clientip"
 )
 
 func kafkaWriterLiteral() *kafka.Writer {
@@ -47,6 +51,18 @@ func clientIP(c echo.Context) string {
 
 func xffConstant() string {
 	return echo.HeaderXForwardedFor // want forbidigo: HeaderXForwardedFor
+}
+
+func peerAddress(r *http.Request) string {
+	return r.RemoteAddr // want forbidigo: RemoteAddr
+}
+
+func authHeaderConstant() string {
+	return auth.HeaderRealIP // want forbidigo: auth.HeaderRealIP
+}
+
+func assertClientAddress(h http.Header) {
+	clientip.Set(h, netip.Addr{}) // want forbidigo: clientip.Set
 }
 
 func httpClientLiteral() *http.Client {

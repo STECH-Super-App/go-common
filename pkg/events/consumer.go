@@ -484,7 +484,9 @@ func (d *Dispatcher) startConsumerSpan(
 	h envelope.Headers,
 	eventType string,
 ) (context.Context, trace.Span) {
-	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(h))
+	// Trace context only, whatever the process propagator is: a baggage header
+	// on a message is not ours to honour (SL-24).
+	ctx = propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier(h))
 
 	return otel.Tracer(tracerName).Start(ctx,
 		"consume "+msg.Topic,

@@ -1,6 +1,7 @@
 package lintguards_test
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/STECH-Super-App/go-common/pkg/clientip"
 	"github.com/STECH-Super-App/go-common/pkg/lintguards"
+	"github.com/STECH-Super-App/go-common/pkg/trustedheaders"
 )
 
 func write(t *testing.T, root, rel, src string) {
@@ -144,4 +147,34 @@ func TestScan_TheViolationsSampleTripsEveryRule(t *testing.T) {
 	assert.Contains(t, joined, "kafka.Writer literal")
 	assert.Contains(t, joined, "http.Client literal")
 	assert.Contains(t, joined, "client address header")
+}
+
+// The AST rule bans naming each client-address header; the list lives here
+// because lintguards must not need a service's imports to run, so a test keeps
+// it equal to the one the gateway strips.
+func TestClientAddressRuleCoversTrustedHeaders(t *testing.T) {
+	banned := map[string]bool{}
+	for _, s := range lintguards.ClientAddressHeaderLiterals().Strings {
+		banned[http.CanonicalHeaderKey(s)] = true
+	}
+	for _, name := range trustedheaders.ClientAddress() {
+		if name == http.CanonicalHeaderKey(clientip.Header) {
+			assert.False(t, banned[name], "X-Client-IP is the header services read: naming it is not a violation")
+			continue
+		}
+		assert.True(t, banned[name], "%s is a client-address header the gateway strips but lintguards does not ban", name)
+	}
+}
+
+func TestScan_FlagsEveryForwardingHeaderSpelling(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "a.go", `package a
+
+func f(h interface{ Get(string) string }) {
+	_ = h.Get("x-forwarded-port")
+	_ = h.Get("X-Forwarded-Prefix")
+	_ = h.Get("X-Client-IP")
+}
+`)
+	assert.Equal(t, []string{"a.go:4: client address header", "a.go:5: client address header"}, scan(t, root, nil))
 }

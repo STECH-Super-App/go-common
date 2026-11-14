@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/STECH-Super-App/go-common/pkg/clientip"
 	"github.com/STECH-Super-App/go-common/pkg/httpserver"
 	"github.com/STECH-Super-App/go-common/pkg/requestid"
 	"github.com/STECH-Super-App/go-common/pkg/response"
@@ -165,6 +166,34 @@ func TestNew_RealIPIgnoresClientSentForwardingHeaders(t *testing.T) {
 	do(e, req)
 
 	assert.Equal(t, "10.1.2.3", got)
+}
+
+// The one address a service believes is the gateway's X-Client-IP; New parks it
+// on the request context so the gRPC client interceptor can forward it.
+func TestNew_ClientAddressFromXClientIPOnly(t *testing.T) {
+	const peer = "10.1.2.3:5555"
+	e := httpserver.New(httpserver.Config{})
+	var got string
+	var ok bool
+	e.GET("/ip", func(c echo.Context) error {
+		addr, found := clientip.FromContext(c.Request().Context())
+		got, ok = addr.String(), found
+		return response.Success(c, nil)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ip", nil)
+	req.RemoteAddr = peer
+	req.Header.Set("X-Forwarded-For", "203.0.113.77")
+	req.Header.Set(clientip.Header, "203.0.113.9")
+	do(e, req)
+	assert.True(t, ok)
+	assert.Equal(t, "203.0.113.9", got)
+
+	req = httptest.NewRequest(http.MethodGet, "/ip", nil)
+	req.RemoteAddr = peer
+	req.Header.Set("X-Forwarded-For", "203.0.113.77")
+	do(e, req)
+	assert.False(t, ok, "no X-Client-IP: absent, not the peer")
 }
 
 func TestNew_NilLoggerIsAllowed(t *testing.T) {

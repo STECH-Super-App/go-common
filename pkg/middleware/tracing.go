@@ -15,6 +15,21 @@ import (
 // package produces.
 const tracerName = "github.com/STECH-Super-App/go-common/pkg/middleware"
 
+// TracingOption configures Tracing.
+type TracingOption func(*tracingConfig)
+
+type tracingConfig struct{ untrustedParent bool }
+
+// WithUntrustedParent makes every request a NEW trace root: the inbound
+// traceparent is recorded as a span link but is neither the parent nor a
+// sampling decision. For api-gateway only — it is the one place whose callers
+// are the public. Services behind the gateway keep the default, because the
+// gateway's traceparent is exactly the link request → service → outbox → relay
+// → consumer they must continue.
+func WithUntrustedParent() TracingOption {
+	return func(c *tracingConfig) { c.untrustedParent = true }
+}
+
 // Tracing returns the fleet-wide HTTP server tracing middleware (§3c).
 //
 // Per request it extracts the inbound W3C traceparent, starts a server span
@@ -33,7 +48,23 @@ const tracerName = "github.com/STECH-Super-App/go-common/pkg/middleware"
 // tracer captured too early would stay a no-op for the process's whole life.
 //
 // Wire it BEFORE RequestLogger and Metrics so both see the span.
-func Tracing() echo.MiddlewareFunc {
+//
+// # What it trusts (SL-24)
+//
+// Only the W3C trace context (traceparent, tracestate) is read — never
+// `baggage`, whatever propagator the process installed. A client-sent baggage
+// header would otherwise land on the request context and be copied into every
+// outbox row, Kafka message and gRPC call that request causes.
+//
+// Inside the platform the inbound traceparent is a trusted remote parent: it is
+// how the gateway's span becomes the parent of the service's. At the EDGE it is
+// not — a caller who sets the sampled flag would force sampling whatever the
+// configured ratio. api-gateway passes WithUntrustedParent.
+func Tracing(opts ...TracingOption) echo.MiddlewareFunc {
+	var cfg tracingConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if isOperationalRoute(c) {
@@ -43,15 +74,26 @@ func Tracing() echo.MiddlewareFunc {
 			req := c.Request()
 			route := routeTemplate(c)
 
-			ctx := otel.GetTextMapPropagator().Extract(req.Context(), propagation.HeaderCarrier(req.Header))
-			ctx, span := otel.Tracer(tracerName).Start(ctx,
-				req.Method+" "+route,
+			// Extract with the W3C trace-context propagator alone, never the
+			// global one: baggage must not enter the context (SL-24).
+			ctx := propagation.TraceContext{}.Extract(req.Context(), propagation.HeaderCarrier(req.Header))
+			startOpts := []trace.SpanStartOption{
 				trace.WithSpanKind(trace.SpanKindServer),
 				trace.WithAttributes(
 					attribute.String("http.method", req.Method),
 					attribute.String("http.route", route),
 				),
-			)
+			}
+			if cfg.untrustedParent {
+				// A new root, so the sampler's own ratio decides; the caller's
+				// span survives as a link for anyone correlating by hand.
+				if remote := trace.SpanContextFromContext(ctx); remote.IsValid() {
+					startOpts = append(startOpts, trace.WithLinks(trace.Link{SpanContext: remote}))
+				}
+				ctx = req.Context()
+				startOpts = append(startOpts, trace.WithNewRoot())
+			}
+			ctx, span := otel.Tracer(tracerName).Start(ctx, req.Method+" "+route, startOpts...)
 			defer span.End()
 
 			c.SetRequest(req.WithContext(ctx))

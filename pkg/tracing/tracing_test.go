@@ -140,3 +140,17 @@ func TestInit_EnvSamplerIsApplied(t *testing.T) {
 		})
 	}
 }
+
+// SL-24: baggage is caller-controlled data and nothing in the platform reads
+// it, so the process propagator carries the W3C trace context only. A baggage
+// header arriving on any hop is ignored and never forwarded.
+func TestInit_PropagatorCarriesNoBaggage(t *testing.T) {
+	require.NoError(t, unsetOTLPEndpoints(t))
+
+	_, err := tracing.Init("order-service")
+	require.NoError(t, err)
+
+	fields := otel.GetTextMapPropagator().Fields()
+	assert.Contains(t, fields, "traceparent")
+	assert.NotContains(t, fields, "baggage")
+}

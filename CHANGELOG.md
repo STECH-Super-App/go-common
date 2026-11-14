@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Wave 3 — trusted client address, trace hygiene, chat_read removal (audit-fix campaign)
+
+**UPGRADING.** Roll **api-gateway first**: it must write `X-Client-IP` (`clientip.Set`), strip `trustedheaders.StripAtEdge()` and use `middleware.WithUntrustedParent()` before any service takes this version, because:
+1. `middleware.ClientMiddleware` reads the address from `X-Client-IP` only. It used to fall back to `X-Real-IP`, `X-Forwarded-For`, then the TCP peer; with no valid `X-Client-IP` it now answers 400 `COMMON_CLIENT_INFO_INVALID`.
+2. ⚠ **BREAKING (SL-25):** `auth.Claims.ChatRead`, `auth.ChatReadContext` / `ChatReadMembership`, `ValidateChatReadContext`, `FormatChatReadContext`, `ParseChatReadContext`, `(*ChatReadContext).Membership`, `ValidateChatAccessTokenSize`, `HeaderChatReadContext`, `MaxChatReadContextBytes`, `MaxAuthorizationHeaderBytes`, `MaxChatReadMemberships`, `ChatReadReady/NotReady`, `ChatGrant*`, `ChatRole*`, `ChatTenant*`, `ReasonChatReadContextInvalid` are **removed**. Kept: `HeaderActingTenantID`, `ParseActingTenantID`, `ReasonActingTenantInvalid`. Old tokens that still carry a `chat_read` claim keep decoding (the unknown key is ignored).
+3. Baggage is no longer propagated: `tracing.Init` installs the trace-context propagator only; `outbox.PublishProto` writes `traceparent`/`tracestate` only and drops a caller-supplied `baggage` header; `middleware.Tracing` and the `events` consumer read trace context only.
+
+### Added (wave 3)
+- `pkg/clientip` — `Header`, `MetadataKey`, `MaxLen`, `Parse`, `FromHeader`, `FromRequest`, `FromEcho`, `Set` (gateway only), `NewContext`, `FromContext`, `Middleware`, `UnaryClientInterceptor`, `StreamClientInterceptor`, `UnaryServerInterceptor`, `StreamServerInterceptor` (GW-04, GW-07, ID-24).
+- `pkg/trustedheaders` — `GatewayAsserted`, `ClientAddress`, `TraceContext`, `Retired`, `StripAtEdge`, `Strip`; a test that fails when a new `Header*` constant in `pkg/auth` / `pkg/authz` is not classified.
+- `middleware.Tracing(opts ...TracingOption)` and `middleware.WithUntrustedParent()` (SL-24): the gateway starts a new root and links the caller's span instead of obeying its sampled flag.
+- `.golangci.strict.yml`: `http.Request.RemoteAddr`, `auth.HeaderRealIP`, `auth.HeaderForwardedFor` and `clientip.Set` are banned outside the helper; `lintguards.ClientAddressHeaderLiterals` also bans `X-Forwarded-Port` / `X-Forwarded-Prefix`. `scripts/check-guards.sh` proves the three new rules fire.
+- `httpserver.New` installs `clientip.Middleware`.
+
+### Changed (wave 3)
+- `middleware.ClientMiddleware`: address from `X-Client-IP` only (see UPGRADING).
+- `tracing.Init`: no Baggage in the global propagator (SL-24).
+
+### Removed (wave 3)
+- The `chat_read` claim and everything around it (SL-25), see UPGRADING 2.
+
 ### UPGRADING — release 1 (audit-fix campaign, 14.11.2026)
 
 Release 1 is additive except for ONE intentional break (SL-01). Fleet checklist, per Go service, in this order:

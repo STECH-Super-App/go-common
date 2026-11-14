@@ -24,6 +24,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 
+	"github.com/STECH-Super-App/go-common/pkg/clientip"
 	commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
 	"github.com/STECH-Super-App/go-common/pkg/logger"
 	"github.com/STECH-Super-App/go-common/pkg/middleware"
@@ -78,8 +79,10 @@ type Config struct {
 //   - HTTPErrorHandler renders every error, router 404/405 and failed binds
 //     included, through response.JSONError — the standard envelope with a
 //     COMMON_* Reason;
-//   - middleware, outermost first: Tracing, requestid, RequestLogger, Metrics,
-//     Locale, body limit, panic recovery. Recovery sits INSIDE the logger and
+//   - the validated X-Client-IP, when present, is put on the request context
+//     (clientip.Middleware; read it with clientip.FromContext or FromEcho);
+//   - middleware, outermost first: Tracing, requestid, clientip, RequestLogger,
+//     Metrics, Locale, body limit, panic recovery. Recovery sits INSIDE the logger and
 //     the metrics so a panic is still one access line and one 5xx observation.
 func New(cfg Config) *echo.Echo {
 	log := cfg.Logger
@@ -110,6 +113,7 @@ func New(cfg Config) *echo.Echo {
 	e.Use(
 		middleware.Tracing(),
 		requestid.Middleware(),
+		clientip.Middleware(),
 		middleware.RequestLogger(log),
 		middleware.Metrics(),
 		middleware.LocaleMiddleware(),

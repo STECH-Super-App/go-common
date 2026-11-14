@@ -23,6 +23,9 @@ expected=(
   "standard log package"                 # depguard: log
   "client-address helper"                # c.RealIP
   "the gateway sets X-Client-IP"         # echo.HeaderXForwardedFor
+  "r.RemoteAddr is the TCP peer"         # http.Request.RemoteAddr
+  "read the client address with go-common/pkg/clientip"  # auth.HeaderRealIP
+  "reserved for api-gateway"             # clientip.Set
   "go-common/pkg/egress"                 # http.DefaultClient
   "grpcopts.NewClient"                   # grpc.NewClient
   "go-common/pkg/response"               # c.JSON
