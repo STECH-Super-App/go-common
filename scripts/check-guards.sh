@@ -29,6 +29,9 @@ expected=(
   "go-common/pkg/egress"                 # http.DefaultClient
   "grpcopts.NewClient"                   # grpc.NewClient
   "go-common/pkg/response"               # c.JSON
+  "Consume with go-common/pkg/events"    # kafka.Reader.FetchMessage / CommitMessages
+  "is for _test.go files"                # events.NewMemoryDeduplicator
+  "outbox.Deduplicator gives the handler no transaction"  # outbox.NewDeduplicator
 )
 
 missing=0

@@ -72,6 +72,10 @@ func ClientAddress() []string {
 		"X-Forwarded-Prefix",
 		"X-Forwarded-Host",
 		"X-Forwarded-Proto",
+		// What ingress-nginx names the client's own X-Forwarded-For when it
+		// does not trust it (use-forwarded-headers: false): still caller-
+		// supplied text, and the gateway used to pass it through (release 2).
+		"X-Original-Forwarded-For",
 	)
 }
 

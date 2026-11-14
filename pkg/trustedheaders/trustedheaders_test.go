@@ -34,6 +34,9 @@ func TestStripAtEdge_CarriesTheNamedHeaders(t *testing.T) {
 	required := canon(
 		"X-Real-IP", "X-Client-IP", "Forwarded", "X-Forwarded-For", "X-Forwarded-Port",
 		"X-Forwarded-Prefix", "X-Forwarded-Host", "X-Forwarded-Proto", "baggage",
+		// Release 2: ingress-nginx renames an untrusted client's X-Forwarded-For
+		// to this one; the gateway used to pass it through.
+		"X-Original-Forwarded-For",
 	)
 	assert.Subset(t, got, required)
 
@@ -51,6 +54,10 @@ func TestStripAtEdge_CarriesTheNamedHeaders(t *testing.T) {
 	assert.Subset(t, got, canon("X-Chat-Read-Context", "X-Team-Memberships"))
 	// Trace context is overwritten by the gateway's own root span.
 	assert.Subset(t, got, canon("traceparent", "tracestate"))
+}
+
+func TestClientAddress_IncludesXOriginalForwardedFor(t *testing.T) {
+	assert.Contains(t, trustedheaders.ClientAddress(), http.CanonicalHeaderKey("X-Original-Forwarded-For"))
 }
 
 func TestStripAtEdge_IsCanonicalDeduplicatedAndACopy(t *testing.T) {

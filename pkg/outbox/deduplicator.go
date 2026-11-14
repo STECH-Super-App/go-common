@@ -10,6 +10,14 @@ import (
 )
 
 // Deduplicator tracks processed event IDs to guarantee idempotent consumption.
+//
+// DEPRECATED (release 2): events.NewDispatcher no longer accepts this type; use
+// events.NewPostgresDeduplicator with events.HandleTx, which gives the handler
+// the claim's transaction (SL-04) and keys the claim by consumer (SL-31). Kept
+// for one release so code that calls Process directly still compiles; the strict
+// lint config bans NewDeduplicator. Not marked with the Go "Deprecated:"
+// convention so staticcheck does not fail every service's lint at once.
+//
 // The outbox pattern provides at-least-once delivery, which means consumers
 // may receive the same message more than once. This component solves that by
 // recording each processed event_id in a Postgres table.

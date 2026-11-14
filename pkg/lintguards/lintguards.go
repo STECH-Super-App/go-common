@@ -7,8 +7,11 @@
 // match a string literal such as "X-Forwarded-For". This package can: it parses
 // the service's own source and reports
 //
-//   - composite literals of banned types (kafka.Writer, http.Client), and
-//   - string literals that name a banned header (X-Forwarded-For, X-Real-IP, …).
+//   - composite literals of banned types (kafka.Writer, http.Client),
+//   - string literals that name a banned header (X-Forwarded-For, X-Real-IP, …)
+//     or contain a banned fragment (an SQL table a go-common package owns),
+//   - uses of a banned package member (events.NewMemoryDeduplicator; with
+//     OnlyUnder, pgxpool.Pool inside the handler packages).
 //
 // One test per service calls it with the service's own exempt list, where every
 // line carries a reason:
@@ -49,6 +52,17 @@ type Rule struct {
 	// Strings, when set, bans a string literal equal (case-insensitively) to
 	// any of them.
 	Strings []string
+	// Contains, when set, bans a string literal that contains any of them
+	// (case-insensitively): an SQL statement that names a table a go-common
+	// package owns.
+	Contains []string
+	// Selector, when set, bans any use of pkg.Name — a call, a type, a value —
+	// where pkg is imported from ImportPath.
+	Selector *TypeRef
+	// OnlyUnder, when set, restricts the rule to files whose root-relative path
+	// starts with one of the prefixes (slash-separated, "internal/kafka/"). Empty
+	// means everywhere.
+	OnlyUnder []string
 }
 
 // TypeRef names a type by import path and name.
@@ -94,13 +108,100 @@ func ClientAddressHeaderLiterals() Rule {
 		Strings: []string{
 			"X-Forwarded-For", "X-Real-IP", "Forwarded",
 			"X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port", "X-Forwarded-Prefix",
+			"X-Original-Forwarded-For",
 		},
 	}
 }
 
-// DefaultRules is every rule above.
+// IdempotencyKeyHeaderLiterals bans reading the Idempotency-Key header by hand:
+// pkg/idempotency validates it (pkg/input), scopes it to the caller and the
+// endpoint, and stores it in the work's transaction (spec §3.2).
+func IdempotencyKeyHeaderLiterals() Rule {
+	return Rule{
+		Name:    "Idempotency-Key header literal",
+		Message: "use go-common/pkg/idempotency (Post/Add + ClaimFor + Claim.Run): it keeps the key in the work's transaction",
+		Strings: []string{"Idempotency-Key"},
+	}
+}
+
+// HandRolledIdempotencyTables bans SQL that names an idempotency table. The one
+// table is idempotency_keys, and only pkg/idempotency touches it.
+func HandRolledIdempotencyTables() Rule {
+	return Rule{
+		Name:     "hand-rolled idempotency table",
+		Message:  "use go-common/pkg/idempotency; a service keeps no idempotency table of its own",
+		Contains: []string{"idempotency_"},
+	}
+}
+
+// HandRolledDeduplicator bans SQL that names a consumer deduplication table:
+// events.NewPostgresDeduplicator owns processed_events, and the dispatcher is
+// the only thing that writes it, in the handler's transaction.
+func HandRolledDeduplicator() Rule {
+	return Rule{
+		Name:     "hand-rolled deduplicator",
+		Message:  "use events.NewPostgresDeduplicator with events.NewDispatcher and events.HandleTx; a service keeps no dedup table of its own",
+		Contains: []string{"processed_events", "processed_outbox_messages", "processed_messages", "processed_event_ids"},
+	}
+}
+
+// HandRolledOutbox bans SQL that names outbox_messages: rows are written by
+// outbox.Publisher.PublishProto inside the business transaction and read by the
+// relay, never by a service's own SQL.
+func HandRolledOutbox() Rule {
+	return Rule{
+		Name:     "hand-rolled outbox access",
+		Message:  "publish with outbox.Publisher.PublishProto (in the business transaction); the relay and reaper own the table",
+		Contains: []string{"outbox_messages"},
+	}
+}
+
+// MemoryDeduplicator bans events.NewMemoryDeduplicator in non-test code. The
+// in-memory deduplicator forgets on restart and gives handlers no transaction;
+// it exists for unit tests (whose files this scan skips).
+func MemoryDeduplicator() Rule {
+	return Rule{
+		Name:     "in-memory deduplicator in production code",
+		Message:  "use events.NewPostgresDeduplicator; NewMemoryDeduplicator is for _test.go files",
+		Selector: &TypeRef{ImportPath: "github.com/STECH-Super-App/go-common/pkg/events", Name: "NewMemoryDeduplicator"},
+	}
+}
+
+// LegacyEventHandlers bans events.Handle, the handler form that gets no
+// transaction (SL-04). It is NOT in DefaultRules: a service adds it to its guard
+// test once it has converted its handlers to events.HandleTx, so the old form
+// cannot creep back.
+func LegacyEventHandlers() Rule {
+	return Rule{
+		Name:     "legacy event handler form",
+		Message:  "register handlers with events.HandleTx: it hands the handler the deduplicator's transaction, so the effect and the processed mark commit together",
+		Selector: &TypeRef{ImportPath: "github.com/STECH-Super-App/go-common/pkg/events", Name: "Handle"},
+	}
+}
+
+// NoPoolIn bans naming *pgxpool.Pool in the given directories: the packages that
+// hold event handlers must write through the transaction the dispatcher hands
+// them, never through a pool (that is a second transaction, outside the
+// "processed" mark). Not in DefaultRules — the directories are the service's.
+//
+//	lintguards.NoPoolIn("internal/infrastructure/kafka/")
+func NoPoolIn(dirs ...string) Rule {
+	return Rule{
+		Name:      "pool in an event-handler package",
+		Message:   "an event handler writes through the events.Tx it is given, not through a pool",
+		Selector:  &TypeRef{ImportPath: "github.com/jackc/pgx/v5/pgxpool", Name: "Pool"},
+		OnlyUnder: dirs,
+	}
+}
+
+// DefaultRules is every rule above that needs no per-service input and no
+// finished migration: LegacyEventHandlers and NoPoolIn are opt-in.
 func DefaultRules() []Rule {
-	return []Rule{KafkaWriterLiterals(), HTTPClientLiterals(), ClientAddressHeaderLiterals()}
+	return []Rule{
+		KafkaWriterLiterals(), HTTPClientLiterals(), ClientAddressHeaderLiterals(),
+		IdempotencyKeyHeaderLiterals(), HandRolledIdempotencyTables(),
+		HandRolledDeduplicator(), HandRolledOutbox(), MemoryDeduplicator(),
+	}
 }
 
 // Violation is one banned use.
@@ -148,7 +249,7 @@ func Scan(root string, rules []Rule, exempt map[string]string) ([]Violation, err
 		if parseErr != nil {
 			return fmt.Errorf("lintguards: parse %s: %w", rel, parseErr)
 		}
-		out = append(out, scanFile(fset, file, rel, rules)...)
+		out = append(out, scanFile(fset, file, rel, applicable(rules, rel))...)
 		return nil
 	})
 	if err != nil {
@@ -178,6 +279,24 @@ func Run(t testing.TB, root string, rules []Rule, exempt map[string]string) {
 	for _, v := range violations {
 		t.Errorf("%s — %s (or add the file to the exempt list with a reason)", v, msgs[v.Rule])
 	}
+}
+
+// applicable keeps the rules that apply to the file at rel.
+func applicable(rules []Rule, rel string) []Rule {
+	var out []Rule
+	for _, r := range rules {
+		if len(r.OnlyUnder) == 0 {
+			out = append(out, r)
+			continue
+		}
+		for _, prefix := range r.OnlyUnder {
+			if strings.HasPrefix(rel, prefix) {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func skipDir(name string) bool {
@@ -233,6 +352,16 @@ func scanFile(fset *token.FileSet, file *ast.File, rel string, rules []Rule) []V
 					add(r.Name, n.Pos())
 				}
 			}
+		case *ast.SelectorExpr:
+			pkg, ok := n.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			for _, r := range rules {
+				if r.Selector != nil && n.Sel.Name == r.Selector.Name && imports[pkg.Name] == r.Selector.ImportPath {
+					add(r.Name, n.Pos())
+				}
+			}
 		case *ast.BasicLit:
 			if n.Kind != token.STRING {
 				return true
@@ -241,10 +370,17 @@ func scanFile(fset *token.FileSet, file *ast.File, rel string, rules []Rule) []V
 			if err != nil {
 				return true
 			}
+			lower := strings.ToLower(val)
 			for _, r := range rules {
 				for _, s := range r.Strings {
 					if strings.EqualFold(val, s) {
 						add(r.Name, n.Pos())
+					}
+				}
+				for _, s := range r.Contains {
+					if strings.Contains(lower, strings.ToLower(s)) {
+						add(r.Name, n.Pos())
+						break
 					}
 				}
 			}

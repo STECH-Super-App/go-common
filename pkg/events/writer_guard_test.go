@@ -24,9 +24,9 @@ func TestNewDispatcher_RefusesUnsafeDLQWriter(t *testing.T) {
 	}
 	for name, w := range unsafe {
 		t.Run(name, func(t *testing.T) {
-			assert.Panics(t, func() { events.NewDispatcher(&fakeReader{}, w) })
+			assert.Panics(t, func() { events.NewDispatcher(&fakeReader{}, w, events.NewMemoryDeduplicator()) })
 			assert.Panics(t, func() {
-				events.NewDispatcher(&fakeReader{}, &fakeWriter{}, events.WithRetry(w))
+				events.NewDispatcher(&fakeReader{}, &fakeWriter{}, events.NewMemoryDeduplicator(), events.WithRetry(w))
 			})
 		})
 	}
@@ -34,5 +34,5 @@ func TestNewDispatcher_RefusesUnsafeDLQWriter(t *testing.T) {
 
 func TestNewDispatcher_AcceptsSafeDLQWriter(t *testing.T) {
 	w := &kafka.Writer{Addr: kafka.TCP("localhost:9092"), Topic: "x.dlq.g", RequiredAcks: kafka.RequireAll}
-	assert.NotPanics(t, func() { events.NewDispatcher(&fakeReader{}, w, events.WithRetry(w)) })
+	assert.NotPanics(t, func() { events.NewDispatcher(&fakeReader{}, w, events.NewMemoryDeduplicator(), events.WithRetry(w)) })
 }

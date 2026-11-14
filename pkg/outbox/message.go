@@ -34,3 +34,13 @@ type Message struct {
 	CreatedAt     time.Time
 	SentAt        *time.Time
 }
+
+// wireSize is the size of the Kafka record this row becomes, as far as the
+// broker's record limit is concerned: key, value and every header key and value.
+func (m *Message) wireSize() int {
+	n := len(m.Key) + len(m.Payload)
+	for k, v := range m.Headers {
+		n += len(k) + len(v)
+	}
+	return n
+}

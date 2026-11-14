@@ -2,6 +2,172 @@
 
 ## [Unreleased]
 
+### Release 2 — outbox, consumer and idempotency rework (audit-fix campaign wave 4)
+
+Fixes SL-00, SL-02, SL-03, SL-04, SL-11 (and with them SL-09's second half, SL-28, SL-31; B-04, NOTIF-02, ORD-04, B-09, TO-L3, MED-05 for the library part) and adds `pkg/idempotency` (spec §3.2). Spec: `docs/superpowers/specs/2026-11-14-audit-fix-campaign-design.md` §3.1, §3.2, §3.4. Not in this release: SL-10 (a per-aggregate sequence column — "no new columns" was the owner's rule for the relay), SL-P5.
+
+#### What changed, in one paragraph
+
+The relay claims, sends and marks **one topic per transaction** (a stuck topic waits in order, the others flow). `PublishProto` refuses an event over the Kafka record limit. `events.NewDispatcher` **requires** a `Deduplicator` that only the library can build, and handlers get the dedup transaction as an argument (`HandleTx`), so an event's effect and its "processed" mark are one atomic commit. One exported function, `events.Classify`, decides what a failed message deserves: dead-letter at once only for decode failures, `ErrPoisonPill` and validation (400/422/`input.Failure`); everything else is retried in place for about two minutes, then dead-lettered. **A failed dead-letter write now stops the consumer** (it used to lose the message: this **reverses go-common#38**). `pkg/idempotency` is the one REST idempotency.
+
+#### UPGRADING — release 2 (steps for a service agent, in order)
+
+**0. Know what you are touching.** Per Go service: `grep -rn "events.NewDispatcher\|events.WithDedup\|events.Handle\|outbox.NewDeduplicator\|NewDeduplicator\|FetchPending\|Idempotency-Key\|idempotency" --include=*.go .`
+
+**1. Bump go-common.** `go get github.com/STECH-Super-App/go-common@<release 2 sha>`; `go mod tidy`. Expect compile errors in exactly these places:
+
+| Compile error | Cause | Fix |
+|---|---|---|
+| `not enough arguments in call to events.NewDispatcher` | the deduplicator is now a required 3rd argument | step 3 |
+| `undefined: events.WithDedup` | removed | step 3 |
+| `cannot use … as events.Deduplicator … unexported method` | `events.Deduplicator` is sealed; `*outbox.Deduplicator` and hand-written fakes no longer satisfy it | step 3; fakes in tests become `events.NewMemoryDeduplicator()` |
+| `undefined: (*outbox.Store).FetchPending / MarkSent / MarkSentBatch` | removed (a mark outside the claim's transaction is SL-02) | nobody outside go-common should call them; if you do, use `outbox.New(...).Run` |
+
+**2. Migrations.** Nothing to add if `outbox.Migrate(url)` already runs on every boot (it must; it runs after the service's own migrations). It now also creates `processed_events` and `idempotency_keys` and the index `idx_outbox_pending_topic` (migrations 005–007, same goose table `goose_db_version_outbox`). A **consumer-only** service calls `outbox.Migrate` too (the empty `outbox_messages` table is harmless). After it, call `dedup.Ready(ctx)` once at start-up and treat an error as fatal (see step 3): without the table every message would dead-letter after two minutes.
+
+**3. Consumers: the deduplicator and the handler form.**
+
+*Wiring.*
+```go
+// BEFORE
+dedup := outbox.NewDeduplicator(pool)
+disp := events.NewDispatcher(reader, dlq, events.WithGroup(group), events.WithLogger(log), events.WithDedup(dedup))
+events.Handle(disp, h.onUserDeleted)
+app.Worker("user-events", func(ctx context.Context) error { err := disp.Run(ctx); /* ErrLeaveUncommitted mapping */ return err })
+
+// AFTER
+dedup := events.NewPostgresDeduplicator(pool)
+if err := dedup.Ready(ctx); err != nil { log.Fatal(...) } // after outbox.Migrate
+disp := events.NewDispatcher(reader, dlq, dedup, events.WithGroup(group), events.WithLogger(log))
+events.HandleTx(disp, h.onUserDeleted)
+app.Worker("user-events", disp.Worker(app.Stopping())) // replaces any hand-written ErrLeaveUncommitted mapping
+```
+- Constructors that took `dedup events.Deduplicator` keep the parameter type; only the value changes (`events.NewPostgresDeduplicator(pool)`).
+- A consumer that had **no** dedup (notification-service's admission consumer, crm-sync-service) now passes one. notification-service: its admission transaction claimed the event id itself — convert that handler to `HandleTx` and **delete its own claim** (a second claim would conflict). crm-sync-service: gets a small Postgres database (owner decision): DSN in config, `outbox.Migrate`, `events.NewPostgresDeduplicator`, and the reaper as a worker — `reaper := outbox.NewReaper(outbox.NewStore(pool), log, outbox.DefaultConfig().Reaper); app.Worker("reaper", reaper.Run)` — because there is no `outbox.New` to run it.
+- One dedup value per service is fine; the claim is keyed `(group, event_id)` where group is `WithGroup`. **Every dispatcher must pass `WithGroup(<the reader's GroupID>)`** (without it the group is `"unknown"` and two consumers of one database would share claims).
+- `WithRetry` and `WithMaxRetries` still compile and keep the old retry-**tier** behaviour. To adopt in-place retry (recommended) delete `WithRetry` and the retry topic's reader, writer and Kafka topic declarations.
+
+*Converting a handler (the transaction form).* The dispatcher opens the transaction; you write through it and pass it down. A write through the pool is a second transaction and is NOT covered.
+```go
+// BEFORE: handler + service each open their own transaction
+events.Handle(disp, func(ctx context.Context, e *userv1.UserDeleted) error {
+    return svc.AnonymiseUser(ctx, e.UserId)            // svc does tx.RunInTx(...) inside
+})
+func (s *Service) AnonymiseUser(ctx context.Context, id string) error {
+    return s.tx.RunInTx(ctx, func(tx outbox.Tx) error {
+        if err := s.repo.WithTx(tx).Anonymise(ctx, id); err != nil { return err }
+        return s.pub.PublishProto(ctx, tx, opts)
+    })
+}
+
+// AFTER: the dispatcher's transaction is the only one
+events.HandleTx(disp, func(ctx context.Context, tx events.Tx, e *userv1.UserDeleted) error {
+    return svc.AnonymiseUser(ctx, tx, e.UserId)
+})
+func (s *Service) AnonymiseUser(ctx context.Context, tx events.Tx, id string) error {  // events.Tx = pgx.Tx, assignable to outbox.Tx
+    if err := s.repo.WithTx(tx).Anonymise(ctx, id); err != nil { return err }
+    return s.pub.PublishProto(ctx, tx, opts)           // the event commits with the handler
+}
+```
+If the same service method is also called from an HTTP handler, split it: `AnonymiseUser(ctx, id)` opens a transaction and calls `AnonymiseUserTx(ctx, tx, id)`; the Kafka handler calls the `…Tx` one. A handler may convert one at a time: `Handle` and `HandleTx` coexist on one dispatcher, and the old form still deduplicates (non-atomically, as before). A non-Postgres effect (an HTTP call, a push) is not atomic either way: keep it idempotent. A handler that returns an error rolls the claim back with its writes, so the retry starts clean.
+
+*Handler errors — what to return.* Use `events.Classify(err)` in your handler tests. **Behaviour change you will see in tests:** an error that is not a decode failure, an `ErrPoisonPill` or a validation failure (`*errors.AppError` 400/422, `*input.Failure`) is no longer dead-lettered at once; it is retried in place for `EVENTS_RETRY_WINDOW` (2 min) first. Tests that fed a handler an arbitrary error and expected a dead letter must either return a validation/poison error, or build the dispatcher with `events.WithRetryWindow(50*time.Millisecond), events.WithRetryBackoff(5*time.Millisecond, 10*time.Millisecond)`. Review your handlers' errors against the table: a 404/409/503 that is **final** (the event can never succeed) must wrap `events.ErrPoisonPill`; one that is a race or an outage needs nothing. Remove hand-written "pause and return `ErrLeaveUncommitted` on a Postgres outage" code unless it is needed for something else: the in-place retry covers it, and a shutdown during a retry leaves the message uncommitted by itself.
+
+*Dead-letter write failure.* Nothing to write: `disp.Worker(app.Stopping())` returns the error, `lifecycle` exits non-zero, Kubernetes restarts the pod, Kafka redelivers. **Every consumer's `<topic>.dlq.<group>` topic must exist before this release runs** (it already had to: Critical Rule 13); a missing tier now restarts the pod in a loop instead of silently losing the message — that is the intent. Do not add a retry-after-restart wrapper.
+
+*Unit tests.* `events.NewDispatcher(reader, dlq, events.NewMemoryDeduplicator(), opts...)`. The in-memory deduplicator gives handlers a **nil** `events.Tx`; a handler test that needs a real transaction uses a Postgres test database (`outbox.Migrate` + `events.NewPostgresDeduplicator`). Delete hand-written dedup fakes (the interface is sealed).
+
+**4. Producers.** No code change. `PublishProto` now returns a typed **422 `COMMON_OUTBOX_EVENT_TOO_LARGE`** for an event over `OUTBOX_MAX_MESSAGE_BYTES` (900000): the request that built it fails (map or let it through the response envelope; it is a typed AppError). The relay is replaced under the same `outbox.New(...).Run`: no wiring change. The connection pool must now cover `OUTBOX_TOPIC_CONCURRENCY` (4) extra connections while topics are written — raise `PG` pool size if it is at its limit.
+
+**5. REST idempotency (every endpoint that has its own idempotency today).**
+```go
+// BEFORE: a middleware wraps the route; a table with an in_progress state; the response body is stored and replayed
+g.POST("/requests", h.Create, orderapi.IdempotencyMiddleware(repo, ttl, tenantKeyFn))
+
+// AFTER
+idempotency.Post(g, "/requests", h.Create)       // registers Require() in front of the handler and tags the route
+
+func (h *Handler) Create(c echo.Context) error {
+    claim, err := idempotency.ClaimFor(c, callerUserID.String())   // caller = verified token, never the body
+    if err != nil { return response.JSONError(c, err) }
+    order, err := h.svc.Create(c.Request().Context(), claim, cmd)  // the create method REQUIRES the claim
+    ...
+}
+func (s *Service) Create(ctx context.Context, claim idempotency.Claim, cmd Cmd) (*Order, error) {
+    var out *Order
+    err := s.tx.RunInTx(ctx, func(tx outbox.Tx) error {
+        pgxTx, _ := outbox.TxAsPgx(tx)
+        outcome, err := claim.Run(ctx, pgxTx, func(ctx context.Context) (idempotency.Resource, error) {
+            o, err := s.createOrder(ctx, tx, cmd)        // the real work, in tx
+            if err != nil { return idempotency.Resource{}, err }
+            out = o
+            return idempotency.Resource{Type: "order", ID: o.ID.String()}, nil
+        })
+        if err != nil { return err }
+        if outcome.Replayed {                              // the first result: load the record, then the NORMAL permission check
+            out, err = s.getForCaller(ctx, tx, outcome.Resource.ID, cmd.Caller)
+        }
+        return err
+    })
+    return out, err
+}
+```
+- Delete the service's idempotency middleware, repository, table (drop it in a **new** migration, after the release is live and its 24 h are over), the "in progress"/TTL/`Release`/`Complete` code and the stored response bodies. `idempotency_keys` is created by `outbox.Migrate`.
+- Same key + same body → the replay path above; same key + different body → 409 `COMMON_IDEMPOTENCY_KEY_REUSED` (order-service's `ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH`, machinery's equivalents are replaced); a missing header → 400 `COMMON_IDEMPOTENCY_KEY_REQUIRED` (was `ORDER_IDEMPOTENCY_KEY_REQUIRED`); malformed → 400 `COMMON_IDEMPOTENCY_KEY_INVALID`. **i18n-catalog needs en/ru texts for the eight new `COMMON_IDEMPOTENCY_*` Reasons (`_KEY_REQUIRED`, `_KEY_INVALID`, `_KEY_REUSED`, `_BODY_UNREADABLE`, `_BODY_TOO_LARGE`, `_ROUTE_UNGUARDED`, `_RECORD_INCOMPLETE`, `_FAILED` — the last three are 500s that normally never reach a client) and `COMMON_OUTBOX_EVENT_TOO_LARGE`, `COMMON_EVENTS_*`** — and the frontend's error map is told the old per-service Reasons are gone.
+- A replay **no longer returns the original response bytes**: it returns the current state of the record the first request created, to a caller who passes the permission check. Clients that compared the two see the live record.
+- Keep the 2xx-only behaviour: a failed first request leaves no key, so its retry is a first request (the old code needed `Release` for that).
+- One test per service: `idempotency.CheckRoutes(t, newRouter(t), exempt)` — every POST/PUT/PATCH/DELETE route is registered through `idempotency.Post/Put/Patch/Delete/Add` or listed in `exempt` with a reason (admin force-expire endpoints, webhooks with their own dedup, …).
+- Behind a key, an endpoint that has a natural unique constraint (a favourite, a follow) can keep the constraint; use the key for the endpoints that create a record per request.
+
+**6. Guards (when the service switches the strict lint on; per service).** Makefile `LINTER_CONFIG_URL` → `.golangci.strict.yml` (if not already), and in the service's one `lintguards` test:
+```go
+lintguards.Run(t, "../..", append(lintguards.DefaultRules(),
+    lintguards.LegacyEventHandlers(),                              // once every handler is HandleTx
+    lintguards.NoPoolIn("internal/infrastructure/kafka/"),         // the packages holding event handlers
+), exempt)
+```
+New findings to fix or exempt (with a reason): a `kafka.Reader` read loop (`FetchMessage`/`ReadMessage`/`CommitMessages` on a `*kafka.Reader`; an adapter that wraps a reader, like crm-sync's lazy reader, marks the line `//nolint:forbidigo // <reason>`); `events.NewMemoryDeduplicator` or `outbox.NewDeduplicator` in non-test code; the literal `"Idempotency-Key"`; SQL naming `idempotency_*`, `processed_events`, `processed_outbox_messages`, `outbox_messages`. `DefaultRules()` gained five rules, so a service that already runs the guard test may see these.
+
+**7. Alerts and dashboards (infrastructure repo, by hand).** New: `outbox_topic_oldest_pending_age_seconds{topic}` and `outbox_topic_pending_messages{topic}` (alert on the age; it names the stuck topic); `events_consumer_inplace_retries_total`; `events_consumer_dead_lettered_total{reason="max_retries"}` now means "two minutes of retries failed" (alert on any increase); `events_consumer_failurepath_errors_total` now means "the consumer stopped and the pod restarts" (alert on any increase and on the restart). Changed: `outbox_last_success_timestamp_seconds` stops refreshing while ANY topic is failing, so the existing "relay stalled" alert also fires for one stuck topic. Unchanged names: `outbox_pending_messages`, `outbox_oldest_pending_age_seconds`.
+
+**8. Environment keys (all optional).** `OUTBOX_TOPIC_CONCURRENCY` (4), `OUTBOX_SEND_TIMEOUT` (30s), `OUTBOX_MAX_MESSAGE_BYTES` (900000), `OUTBOX_IDEMPOTENCY_RETENTION` (24h), `EVENTS_RETRY_WINDOW` (2m), `EVENTS_RETRY_INITIAL_BACKOFF` (500ms), `EVENTS_RETRY_MAX_BACKOFF` (15s), `EVENTS_MESSAGE_TIMEOUT` (60s). Existing `OUTBOX_*` keys are unchanged; `OUTBOX_BATCH_SIZE` now means rows **per topic** per poll.
+
+**9. PHP consumers (sale-service) follow the same table by hand:** dead-letter at once only when the message cannot be decoded, is marked poison, or fails validation (400/422); everything else (including 404, 409, 503, timeouts) is retried with backoff for about two minutes, then dead-lettered with an alert; a failed dead-letter write stops the consumer non-zero. `events.Classify` is the reference.
+
+#### Rollout across the fleet: is old/new side by side safe?
+
+There is no required fleet-wide order: each service moves as one deploy (its relay, its dispatchers and its `outbox.Migrate` ship together), and a producer's and a consumer's versions do not depend on each other (the wire format and the envelope are unchanged). Exactly what happens while an old and a new pod of the **same service** run together during a rolling deploy:
+
+- **Migrations** (005–007) are additive (two new tables, one index): old pods never read them. `outbox.Migrate` runs at the new pod's boot, before its dispatchers start (`dedup.Ready` enforces it). Nothing to run by hand.
+- **Old relay + new relay on one database.** Not worse than today's old + old: the old relay's `FetchPending` takes no lock, so for a short window both can send the same rows (the consumer's deduplicator absorbs it) and, for one key, two relays can interleave. The new relay's row locks make an old relay's `SKIP LOCKED` skip rows the new one holds, and an old relay's mark waits for the new one's commit, so no row is lost or left sent-but-pending. Two NEW relays never duplicate or interleave a topic.
+- **Old consumer + new consumer in one group.** The new deduplicator also treats an event recorded in the old `processed_outbox_messages` table as processed, so a message the OLD pod handled and Kafka redelivers to a NEW pod is not run twice. The reverse (new pod handled it, an old pod receives the redelivery) can run the handler once more: it needs a rebalance between the handler's commit and the offset commit of one in-flight message, i.e. at most one repeat per partition at the moment of a handover, and only during the overlap. Handlers must already tolerate a repeat (they did).
+- **A new consumer without the table** dead-letters every message after two minutes: this is what `dedup.Ready` at start-up prevents. **A new consumer without its `<topic>.dlq.<group>` topic** restarts in a loop on the first dead letter (by design; it used to lose the message): the tier must be declared and applied first (Critical Rule 13: topics first, then env, then Deployment).
+- **Rollback to release 1:** safe for the tables (old code ignores them). Claims written by the new deduplicator are unknown to the old one, so redelivered in-flight messages may run once more; idempotency keys are ignored by old code, which has its own table.
+- **crm-sync-service** needs its database (secret, DSN, `outbox.Migrate`) before it can run this release: order = database and secret, then the deploy.
+- **Connections:** a new relay holds up to `OUTBOX_TOPIC_CONCURRENCY` connections while it writes; each dispatcher holds one per message in flight (one, as before). Check each service's pool size.
+
+#### Added (release 2)
+- `pkg/outbox`: `Store.ForwardTopic`, `SendFunc`, `ForwardResult`, `Store.PendingTopics`, `Store.PendingStatsByTopic`, `TopicStat`, `Store.DeleteProcessedEvents`, `Store.DeleteIdempotencyKeys`, `ErrIdempotencyTableMissing`, `RelayConfig.SendTimeout` / `TopicConcurrency` (`DefaultSendTimeout`, `DefaultTopicConcurrency`), `Config.MaxMessageBytes`, `DefaultMaxMessageBytes`, `WithMaxMessageBytes`, `PublisherOption`, `ReasonEventTooLarge`, `ReaperConfig.IdempotencyRetention`, `DefaultIdempotencyRetention`; migrations `005_create_processed_events`, `006_create_idempotency_keys`, `007_outbox_pending_by_topic`; metrics `outbox_topic_pending_messages`, `outbox_topic_oldest_pending_age_seconds`, `outbox_topic_relayed_events_total`, `outbox_topic_relay_errors_total`.
+- `pkg/events`: `NewPostgresDeduplicator`, `(*PostgresDeduplicator).Ready`, `NewMemoryDeduplicator`, the sealed `Deduplicator`, `Tx`, `HandleTx`, `Classify`, `Class` (`ClassDecode`, `ClassPoisonPill`, `ClassValidation`, `ClassRetryable`, `DeadLetterNow`), `(*Dispatcher).Worker`, `WithRetryWindow`, `WithRetryBackoff`, `WithMessageTimeout`, `ErrDeadLetterWriteFailed`, `ReasonDeadLetterWriteFailed`, `ReasonDedupFailed`, `ReasonMessageTimeout`, the `Default*` constants, metric `events_consumer_inplace_retries_total`, DLQ reason `validation`.
+- `pkg/idempotency`: the whole package (`ParseKey`, `KeyFromRequest`, `Key`, `Request`, `Claim`, `NewClaim`, `ClaimFromRequest`, `(Claim).Run`, `Resource`, `Outcome`, `Require`, `ClaimFor`, `Add`/`Post`/`Put`/`Patch`/`Delete`, `Registrar`, `WriteRoutesWithout`, `CheckRoutes`, `IsKeyReused`, `Reason*`).
+- `pkg/lintguards`: `Rule.Contains` / `Selector` / `OnlyUnder`; `IdempotencyKeyHeaderLiterals`, `HandRolledIdempotencyTables`, `HandRolledDeduplicator`, `HandRolledOutbox`, `MemoryDeduplicator` (in `DefaultRules`), `LegacyEventHandlers`, `NoPoolIn` (opt-in). `.golangci.strict.yml`: `kafka.Reader.FetchMessage/ReadMessage/CommitMessages`, `events.NewMemoryDeduplicator`, `outbox.NewDeduplicator`; `scripts/check-guards.sh` proves each fires.
+- `pkg/trustedheaders`: `ClientAddress()` (and so `StripAtEdge()`) gains `X-Original-Forwarded-For`, the name ingress-nginx gives a client's own `X-Forwarded-For` when it does not trust it; the gateway strips it with the rest. `lintguards.ClientAddressHeaderLiterals` bans naming it.
+
+#### Changed (release 2)
+- `events.NewDispatcher(reader, dlq, dedup, opts...)`: `dedup` is required.
+- `events.Handle` is the legacy handler form (still deduplicated; no transaction). Documented DEPRECATED in prose, not with the Go marker (staticcheck's SA1019 would fail every service's lint at once).
+- Failure handling: see "What changed" and `Classify`. `WithRetry` (retry tier) and `WithMaxRetries` still work and are DEPRECATED in prose.
+- The dedup claim is per `(group, event_id)` in `processed_events`; the Reaper deletes it with `OUTBOX_PROCESSED_RETENTION`.
+- `outbox_last_success_timestamp_seconds`: refreshed only by a poll in which every topic succeeded.
+- `OUTBOX_BATCH_SIZE`: rows per topic per poll.
+- The README sections for outbox and events are rewritten (they described removed functions and an "exactly-once" deduplicator: SL-28).
+
+#### Removed (release 2)
+- `events.WithDedup`; the old `events.Deduplicator` interface shape (`Process(ctx, id, fn)`); `outbox.Store.FetchPending`, `MarkSent`, `MarkSentBatch`.
+- **The go-common#38 behaviour** (SL-00): a failed dead-letter write is no longer logged and survived; the dispatcher stops. The log line `failure-path write failed; leaving offset uncommitted for redelivery` is gone; `events_consumer_failurepath_errors_total` now counts a consumer stop, not a lost message.
+- The `GOCOMMON_KNOWN_RED` gate: its two tests (SL-02, SL-00) are ordinary tests now.
+- Deprecated but kept: `outbox.Deduplicator`, `outbox.NewDeduplicator` (banned by the strict lint; `events.NewDispatcher` does not accept it), `Deduplicator.CleanupProcessed`.
+
 ### Wave 3 — trusted client address, trace hygiene, chat_read removal (audit-fix campaign)
 
 **UPGRADING.** Roll **api-gateway first**: it must write `X-Client-IP` (`clientip.Set`), strip `trustedheaders.StripAtEdge()` and use `middleware.WithUntrustedParent()` before any service takes this version, because:

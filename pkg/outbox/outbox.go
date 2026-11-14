@@ -55,7 +55,7 @@ func New(pool *pgxpool.Pool, kafkaWriter *kafka.Writer, logger *zap.Logger, cfg 
 	kafkawriter.MustCheck("outbox.New", kafkaWriter)
 
 	return &Outbox{
-		Publisher: NewPublisher(store, defaultTopic),
+		Publisher: NewPublisher(store, defaultTopic, WithMaxMessageBytes(cfg.MaxMessageBytes)),
 		store:     store,
 		relay:     NewRelay(store, kafkaWriter, logger, cfg.Relay),
 		reaper:    NewReaper(store, logger, cfg.Reaper),

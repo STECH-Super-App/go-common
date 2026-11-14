@@ -11,8 +11,6 @@ package outbox
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -97,6 +95,27 @@ func TestPG_MigrationsApplyIdempotentlyAndCreateTheContract(t *testing.T) {
 	}
 }
 
+// markSent flips rows to sent the way a relay's transaction does, for tests that
+// need sent rows without running one.
+func markSent(t *testing.T, pool *pgxpool.Pool, ids ...string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(),
+		`UPDATE outbox_messages SET status = 'sent', sent_at = NOW() WHERE id = ANY($1::uuid[])`, ids)
+	require.NoError(t, err)
+}
+
+// forwardAll is a SendFunc that acknowledges every row, remembering what it saw.
+func forwardAll(seen *[]*Message) SendFunc {
+	return func(_ context.Context, msgs []*Message) ([]string, error) {
+		*seen = append(*seen, msgs...)
+		ids := make([]string, len(msgs))
+		for i, m := range msgs {
+			ids[i] = m.ID
+		}
+		return ids, nil
+	}
+}
+
 func TestPG_StoreRoundTrip(t *testing.T) {
 	pool, store := migratedDB(t)
 	ctx := context.Background()
@@ -106,8 +125,17 @@ func TestPG_StoreRoundTrip(t *testing.T) {
 		insertMessage(t, pool, store, id, base.Add(time.Duration(i)*time.Second))
 	}
 
-	got, err := store.FetchPending(ctx, 2)
+	topics, err := store.PendingTopics(ctx)
 	require.NoError(t, err)
+	assert.Equal(t, []string{"user.events"}, topics)
+
+	var got []*Message
+	res, err := store.ForwardTopic(ctx, "user.events", 2, func(_ context.Context, msgs []*Message) ([]string, error) {
+		got = msgs
+		return []string{msgs[0].ID}, nil // only the first is acknowledged
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ForwardResult{Claimed: 2, Sent: 1}, res)
 	require.Len(t, got, 2)
 	assert.Equal(t, ids[0], got[0].ID, "oldest first")
 	assert.Equal(t, ids[1], got[1].ID)
@@ -119,35 +147,48 @@ func TestPG_StoreRoundTrip(t *testing.T) {
 
 	count, age, err := store.PendingStats(ctx)
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, count)
+	assert.EqualValues(t, 2, count, "the unacknowledged row and the unclaimed one stay pending")
 	assert.Greater(t, age, 55.0, "age of the oldest pending row in seconds")
 
-	require.NoError(t, store.MarkSent(ctx, ids[0]))
-	// MarkSentBatch binds the ids as $1::uuid[]: the real cast, never run before.
-	require.NoError(t, store.MarkSentBatch(ctx, ids[1:]))
-	require.NoError(t, store.MarkSentBatch(ctx, nil), "an empty batch is a no-op")
-
-	left, err := store.FetchPending(ctx, 10)
+	stats, err := store.PendingStatsByTopic(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, left)
+	require.Len(t, stats, 1)
+	assert.Equal(t, "user.events", stats[0].Topic)
+	assert.EqualValues(t, 2, stats[0].Pending)
+
+	var seen []*Message
+	res, err = store.ForwardTopic(ctx, "user.events", 10, forwardAll(&seen))
+	require.NoError(t, err)
+	assert.Equal(t, ForwardResult{Claimed: 2, Sent: 2}, res)
+	assert.Equal(t, []string{ids[1], ids[2]}, []string{seen[0].ID, seen[1].ID})
+
+	res, err = store.ForwardTopic(ctx, "user.events", 10, forwardAll(&seen))
+	require.NoError(t, err)
+	assert.Equal(t, ForwardResult{}, res, "nothing left")
 	count, age, err = store.PendingStats(ctx)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, count)
 	assert.Zero(t, age, "no pending row: the age gauge reads 0, not NULL")
 }
 
-func TestPG_MarkSentFailuresAreTyped(t *testing.T) {
-	_, store := migratedDB(t)
+// ForwardTopic's mark is a guarded write: a SendFunc that names an id it was
+// never handed rolls the whole transaction back, and the rows stay pending.
+func TestPG_ForwardTopicRollsBackWhenAnUnclaimedIDIsMarked(t *testing.T) {
+	pool, store := migratedDB(t)
 	ctx := context.Background()
+	id := newID()
+	insertMessage(t, pool, store, id, time.Now().UTC())
 
-	err := store.MarkSent(ctx, newID())
+	_, err := store.ForwardTopic(ctx, "user.events", 10, func(_ context.Context, msgs []*Message) ([]string, error) {
+		return []string{msgs[0].ID, newID()}, nil
+	})
+
 	var ae *apperr.AppError
-	require.True(t, errors.As(err, &ae), "an unknown id is a typed error, got %v", err)
+	require.True(t, errors.As(err, &ae), "a typed error, got %v", err)
 	assert.Equal(t, ReasonMarkFailed, ae.Reason)
-
-	err = store.MarkSentBatch(ctx, []string{"not-a-uuid"})
-	require.True(t, errors.As(err, &ae))
-	assert.Equal(t, ReasonMarkFailed, ae.Reason)
+	count, _, err := store.PendingStats(ctx)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, count, "nothing was marked sent")
 }
 
 func TestPG_InsertRollsBackWithTheCallersTransaction(t *testing.T) {
@@ -176,7 +217,7 @@ func TestPG_DeleteSentHonoursRetention(t *testing.T) {
 	for _, id := range []string{oldID, freshID, pendingID} {
 		insertMessage(t, pool, store, id, time.Now().UTC().Add(-time.Hour))
 	}
-	require.NoError(t, store.MarkSentBatch(ctx, []string{oldID, freshID}))
+	markSent(t, pool, oldID, freshID)
 	_, err := pool.Exec(ctx, `UPDATE outbox_messages SET sent_at = NOW() - INTERVAL '5 days' WHERE id = $1`, oldID)
 	require.NoError(t, err)
 
@@ -320,11 +361,9 @@ func TestPG_DeduplicatorCleanupProcessed(t *testing.T) {
 	assert.Equal(t, 3, countClaims(t, pool))
 }
 
-// ---- Known-red: defects of the NEXT release, kept here so that release has a
-// failing test to turn green. Off unless GOCOMMON_KNOWN_RED=1 (so CI stays
-// green). Run once on the 14.11.2026 tree they FAIL, which is the evidence for
-// the findings.
-
+// recordingWriter counts how often each event id was written. (Release 1 kept
+// the SL-02 test as known-red behind GOCOMMON_KNOWN_RED=1; release 2 fixed it and
+// the test, TestPG_TwoRelaysSendEachRowOnce, runs always.)
 type recordingWriter struct {
 	mu    sync.Mutex
 	sends map[string]int
@@ -347,40 +386,4 @@ func (w *recordingWriter) WriteMessages(ctx context.Context, msgs ...kafka.Messa
 		}
 	}
 	return nil
-}
-
-// SL-02: FetchPending's SELECT ... FOR UPDATE SKIP LOCKED ran through pool.Query
-// outside a transaction, so its row locks were released when the statement
-// ended and claimed nothing: two relays fetched the same rows and both sent them.
-func TestPG_KnownRed_TwoRelaysSendEachRowOnce(t *testing.T) {
-	if os.Getenv("GOCOMMON_KNOWN_RED") != "1" {
-		t.Skip("SL-02 is fixed in go-common release 2; set GOCOMMON_KNOWN_RED=1 to see it fail")
-	}
-	pool, store := migratedDB(t)
-	const rows = 40
-	for i := 0; i < rows; i++ {
-		insertMessage(t, pool, store, newID(), time.Now().UTC().Add(time.Duration(i)*time.Millisecond))
-	}
-	w := &recordingWriter{sends: map[string]int{}, delay: 40 * time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r := &Relay{store: store, writer: w, logger: zap.NewNop(), cfg: RelayConfig{PollInterval: 10 * time.Millisecond, BatchSize: 10}}
-			_ = r.Run(ctx)
-		}()
-	}
-	wg.Wait()
-
-	duplicated := 0
-	for _, n := range w.sends {
-		if n > 1 {
-			duplicated++
-		}
-	}
-	assert.Zero(t, duplicated, fmt.Sprintf("%d of %d rows were sent more than once", duplicated, len(w.sends)))
 }

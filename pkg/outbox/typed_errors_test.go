@@ -43,22 +43,30 @@ func TestStore_FailuresAreTypedWithTheCause(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := store.FetchPending(ctx, 10)
+	_, err := store.PendingTopics(ctx)
 	requireTyped(t, err, outbox.ReasonFetchFailed)
+
+	_, err = store.ForwardTopic(ctx, "user.events", 10, func(context.Context, []*outbox.Message) ([]string, error) {
+		return nil, nil
+	})
+	requireTyped(t, err, outbox.ReasonTxFailed)
+
+	_, err = store.PendingStatsByTopic(ctx)
+	requireTyped(t, err, outbox.ReasonStatsFailed)
 
 	_, _, err = store.PendingStats(ctx)
 	requireTyped(t, err, outbox.ReasonStatsFailed)
-
-	err = store.MarkSent(ctx, "3b4f9c6e-0000-4000-8000-000000000001")
-	requireTyped(t, err, outbox.ReasonMarkFailed)
-
-	err = store.MarkSentBatch(ctx, []string{"3b4f9c6e-0000-4000-8000-000000000001"})
-	requireTyped(t, err, outbox.ReasonMarkFailed)
 
 	_, err = store.DeleteSent(ctx, time.Hour)
 	requireTyped(t, err, outbox.ReasonCleanupFailed)
 
 	_, err = store.DeleteProcessed(ctx, time.Hour, 10)
+	requireTyped(t, err, outbox.ReasonCleanupFailed)
+
+	_, err = store.DeleteProcessedEvents(ctx, time.Hour, 10)
+	requireTyped(t, err, outbox.ReasonCleanupFailed)
+
+	_, err = store.DeleteIdempotencyKeys(ctx, time.Hour, 10)
 	requireTyped(t, err, outbox.ReasonCleanupFailed)
 }
 

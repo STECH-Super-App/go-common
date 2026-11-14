@@ -100,6 +100,24 @@ linters:
           pkg: ^net/http$
           msg: "Use go-common/pkg/egress (HTTPClient / Transport) for outbound HTTP: it routes through the egress proxy and sets a timeout"
 
+        # Consuming Kafka: one dispatcher with the deduplicator, in-place retry,
+        # dead letters and the offset commit (release 2). A hand-rolled reader
+        # loop has none of them; the lazy-open adapter of a service that wraps a
+        # kafka.Reader marks its line //nolint:forbidigo // <reason>.
+        - pattern: ^kafka\.Reader\.(FetchMessage|ReadMessage|CommitMessages)$
+          pkg: ^github\.com/segmentio/kafka-go$
+          msg: "Consume with go-common/pkg/events (NewDispatcher + HandleTx): it owns deduplication, retry, dead letters and the offset commit; a hand-written reader loop loses or repeats messages"
+        # The deduplicator is built by the library; the in-memory one is for tests
+        # (this rule is skipped in _test.go files).
+        - pattern: ^events\.NewMemoryDeduplicator$
+          pkg: ^github\.com/STECH-Super-App/go-common/pkg/events$
+          msg: "events.NewMemoryDeduplicator is for _test.go files; production code uses events.NewPostgresDeduplicator"
+        # The release 1 deduplicator: no transaction for the handler (SL-04), the
+        # bare event id as key (SL-31), and NewDispatcher no longer takes it.
+        - pattern: ^outbox\.NewDeduplicator$
+          pkg: ^github\.com/STECH-Super-App/go-common/pkg/outbox$
+          msg: "Use events.NewPostgresDeduplicator with events.NewDispatcher and events.HandleTx; outbox.Deduplicator gives the handler no transaction"
+
         # gRPC clients: one dial helper with the idle timeout and the default
         # per-call deadline.
         - pattern: ^grpc\.(NewClient|Dial|DialContext)$

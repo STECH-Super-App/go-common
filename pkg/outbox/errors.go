@@ -21,6 +21,10 @@ const (
 	ReasonMarshalFailed  = "COMMON_OUTBOX_MARSHAL_FAILED"
 	ReasonDedupFailed    = "COMMON_OUTBOX_DEDUP_FAILED"
 	ReasonMigrateFailed  = "COMMON_OUTBOX_MIGRATE_FAILED"
+
+	// ReasonEventTooLarge is the one 422 of this package: PublishProto refused an
+	// event that would not fit one Kafka record (see DefaultMaxMessageBytes).
+	ReasonEventTooLarge = "COMMON_OUTBOX_EVENT_TOO_LARGE"
 )
 
 // internalError builds the 500 AppError for a failure inside this package.

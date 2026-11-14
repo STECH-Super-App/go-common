@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Store manages persistence for outbox_messages rows.
-// It separates transactional writes (InsertTx) from non-transactional reads
-// (FetchPending) and deletes (DeleteSent).
+// Store manages persistence for outbox_messages rows: the transactional write
+// (InsertTx), the relay's claim-send-mark transaction (ForwardTopic), the
+// backlog statistics and the reaper's deletes.
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -62,23 +62,150 @@ func (s *Store) InsertTx(ctx context.Context, tx Tx, msg *Message) error {
 	return nil
 }
 
-// FetchPending retrieves up to batchSize unsent messages ordered by creation time.
-// Uses FOR UPDATE SKIP LOCKED for zero-contention concurrent polling.
+// SendFunc forwards one topic's claimed rows, oldest first, and returns the ids
+// that reached the broker. It is called while the claiming transaction is open:
+// ids it returns are marked sent in that same transaction, ids it leaves out
+// stay pending. An error does not undo the ids returned with it: a partial
+// success is still recorded, and the error is passed back to the caller.
+type SendFunc func(ctx context.Context, msgs []*Message) (delivered []string, err error)
+
+// ForwardResult is what ForwardTopic did.
+type ForwardResult struct {
+	// Claimed is how many pending rows of the topic this call locked.
+	Claimed int
+	// Sent is how many of them it marked sent.
+	Sent int
+	// Busy is true when another relay already works the topic: nothing was
+	// claimed, and that is not an error.
+	Busy bool
+}
+
+// PendingTopics lists the topics that have pending rows, the one whose oldest
+// row is oldest first. The relay walks it once per poll.
 //
-// Big O: O(log n) via the partial index idx_outbox_pending.
-func (s *Store) FetchPending(ctx context.Context, batchSize int) ([]*Message, error) {
+// Big O: one pass over the partial index idx_outbox_pending_topic; the pending
+// set is the backlog, so it is small while the relay is healthy.
+func (s *Store) PendingTopics(ctx context.Context) ([]string, error) {
+	const query = `
+		SELECT topic FROM outbox_messages
+		WHERE status = 'pending'
+		GROUP BY topic
+		ORDER BY MIN(created_at), topic`
+
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, internalError(ReasonFetchFailed, "outbox: list pending topics", err)
+	}
+	defer rows.Close()
+
+	var topics []string
+	for rows.Next() {
+		var topic string
+		if err := rows.Scan(&topic); err != nil {
+			return nil, internalError(ReasonFetchFailed, "outbox: scan pending topic", err)
+		}
+		topics = append(topics, topic)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, internalError(ReasonFetchFailed, "outbox: iterate pending topics", err)
+	}
+	return topics, nil
+}
+
+// ForwardTopic claims up to limit pending rows of ONE topic, hands them to send
+// and marks what send delivered, all in a single transaction (SL-02).
+//
+// Why one transaction. The old FetchPending ran its FOR UPDATE SKIP LOCKED
+// outside a transaction, so the row locks ended with the SELECT and claimed
+// nothing: two relays (every rolling deploy) read the same rows and both sent
+// them. Here the locks live until the COMMIT that marks the rows sent. A relay
+// that crashes between the Kafka write and the COMMIT leaves the rows pending
+// and they are sent again; the consumer's deduplicator absorbs the repeat.
+// Nothing ever marks a row sent that Kafka has not acknowledged.
+//
+// Why one topic. A topic that cannot be written (not declared, broker refuses)
+// must hold back only its own rows, in order. A batch over all topics let one
+// such row stall the whole service's outbox (SL-03).
+//
+// Ordering. A transaction-scoped advisory lock keyed on the topic lets exactly
+// one relay work a topic at a time. FOR UPDATE SKIP LOCKED alone would let a
+// second relay take the NEXT rows of the same topic while the first still holds
+// the earlier ones, and send them first: per-key order would break. Another
+// relay on the topic makes this call a no-op (Busy).
+//
+// Marking is a guarded write: only rows still pending, and the count must match.
+func (s *Store) ForwardTopic(ctx context.Context, topic string, limit int, send SendFunc) (ForwardResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ForwardResult{}, internalError(ReasonTxFailed, "outbox: begin forward tx", err)
+	}
+	// Rollback after a successful Commit is a no-op. It runs on a context that
+	// outlives ctx so a cancelled relay still releases the locks.
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var acquired bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`,
+		topicLockKey(topic)).Scan(&acquired); err != nil {
+		return ForwardResult{}, internalError(ReasonFetchFailed, "outbox: lock topic "+topic, err)
+	}
+	if !acquired {
+		return ForwardResult{Busy: true}, nil
+	}
+
+	msgs, err := claimPending(ctx, tx, topic, limit)
+	if err != nil {
+		return ForwardResult{}, err
+	}
+	res := ForwardResult{Claimed: len(msgs)}
+	if len(msgs) == 0 {
+		return res, nil
+	}
+
+	delivered, sendErr := send(ctx, msgs)
+
+	if len(delivered) > 0 {
+		const mark = `
+			UPDATE outbox_messages
+			SET status = 'sent', sent_at = $2
+			WHERE id = ANY($1::uuid[]) AND status = 'pending'`
+		tag, err := tx.Exec(ctx, mark, delivered, time.Now().UTC())
+		if err != nil {
+			return res, internalError(ReasonMarkFailed, fmt.Sprintf("outbox: mark sent (%d ids)", len(delivered)), err)
+		}
+		if tag.RowsAffected() != int64(len(delivered)) {
+			// The rows are locked by this transaction, so this is an invariant
+			// failure, not a race. Roll back: the rows stay pending and are re-sent.
+			return res, internalError(ReasonMarkFailed, fmt.Sprintf(
+				"outbox: marked %d of %d delivered rows; rolling back", tag.RowsAffected(), len(delivered)), nil)
+		}
+		res.Sent = len(delivered)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		res.Sent = 0
+		return res, internalError(ReasonTxFailed, "outbox: commit forward tx", err)
+	}
+	return res, sendErr
+}
+
+// topicLockKey is the text the advisory lock of a topic is derived from.
+func topicLockKey(topic string) string { return "go-common/outbox/" + topic }
+
+// claimPending locks and reads up to limit pending rows of topic, oldest first.
+//
+// Big O: O(log n + limit) via the partial index idx_outbox_pending_topic.
+func claimPending(ctx context.Context, tx pgx.Tx, topic string, limit int) ([]*Message, error) {
 	const query = `
 		SELECT id, aggregate_type, aggregate_id, event_type, topic, key,
 		       payload, headers, status, created_at, sent_at
 		FROM outbox_messages
-		WHERE status = 'pending'
-		ORDER BY created_at ASC
-		LIMIT $1
+		WHERE status = 'pending' AND topic = $1
+		ORDER BY created_at ASC, id ASC
+		LIMIT $2
 		FOR UPDATE SKIP LOCKED`
 
-	rows, err := s.pool.Query(ctx, query, batchSize)
+	rows, err := tx.Query(ctx, query, topic, limit)
 	if err != nil {
-		return nil, internalError(ReasonFetchFailed, "outbox: fetch pending", err)
+		return nil, internalError(ReasonFetchFailed, "outbox: claim pending rows of "+topic, err)
 	}
 	defer rows.Close()
 
@@ -90,12 +217,50 @@ func (s *Store) FetchPending(ctx context.Context, batchSize int) ([]*Message, er
 		}
 		messages = append(messages, msg)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, internalError(ReasonFetchFailed, "outbox: iterate pending rows", err)
+		return nil, internalError(ReasonFetchFailed, "outbox: iterate claimed rows", err)
 	}
-
 	return messages, nil
+}
+
+// TopicStat is the pending backlog of one topic.
+type TopicStat struct {
+	Topic            string
+	Pending          int64
+	OldestAgeSeconds float64
+}
+
+// PendingStatsByTopic returns the pending count and the age of the oldest
+// pending row for every topic that has pending rows. It backs the by-topic
+// gauges, so an alert names the stuck topic.
+//
+// Big O: O(p) over the p pending rows via idx_outbox_pending_topic.
+func (s *Store) PendingStatsByTopic(ctx context.Context) ([]TopicStat, error) {
+	const query = `
+		SELECT topic, COUNT(*),
+		       COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(created_at)))::float8, 0.0)
+		FROM outbox_messages
+		WHERE status = 'pending'
+		GROUP BY topic`
+
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, internalError(ReasonStatsFailed, "outbox: pending stats by topic", err)
+	}
+	defer rows.Close()
+
+	var out []TopicStat
+	for rows.Next() {
+		var st TopicStat
+		if err := rows.Scan(&st.Topic, &st.Pending, &st.OldestAgeSeconds); err != nil {
+			return nil, internalError(ReasonStatsFailed, "outbox: scan topic stats", err)
+		}
+		out = append(out, st)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, internalError(ReasonStatsFailed, "outbox: iterate topic stats", err)
+	}
+	return out, nil
 }
 
 // PendingStats returns the number of pending outbox rows and the age in
@@ -124,44 +289,6 @@ func (s *Store) PendingStats(ctx context.Context) (count int64, oldestAgeSeconds
 	}
 
 	return count, oldestAgeSeconds, nil
-}
-
-// MarkSent updates a message status to 'sent' with a timestamp.
-func (s *Store) MarkSent(ctx context.Context, id string) error {
-	const query = `
-		UPDATE outbox_messages
-		SET status = 'sent', sent_at = $2
-		WHERE id = $1`
-
-	result, err := s.pool.Exec(ctx, query, id, time.Now().UTC())
-	if err != nil {
-		return internalError(ReasonMarkFailed, "outbox: mark sent "+id, err)
-	}
-
-	if result.RowsAffected() == 0 {
-		return internalError(ReasonMarkFailed, "outbox: message "+id+" not found", nil)
-	}
-
-	return nil
-}
-
-// MarkSentBatch updates many messages to 'sent' in a single UPDATE.
-// Used by the relay after a successful batched Kafka write to avoid
-// N round-trips. The same sent_at timestamp is applied to every row.
-func (s *Store) MarkSentBatch(ctx context.Context, ids []string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	const query = `
-		UPDATE outbox_messages
-		SET status = 'sent', sent_at = $2
-		WHERE id = ANY($1::uuid[])`
-
-	if _, err := s.pool.Exec(ctx, query, ids, time.Now().UTC()); err != nil {
-		return internalError(ReasonMarkFailed, fmt.Sprintf("outbox: mark sent batch (%d ids)", len(ids)), err)
-	}
-	return nil
 }
 
 // DeleteSent removes messages older than retention that have been successfully sent.
@@ -213,6 +340,60 @@ func (s *Store) DeleteProcessed(ctx context.Context, retention time.Duration, li
 			return 0, ErrProcessedTableMissing
 		}
 		return 0, internalError(ReasonCleanupFailed, "outbox: delete processed", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// DeleteProcessedEvents removes up to limit claims of the events deduplicator
+// (processed_events) older than retention and returns how many it removed.
+// Like DeleteProcessed it works in bounded batches, so a live consumer's claim
+// INSERT is never queued behind one huge DELETE.
+//
+// Big O: O(limit log n) via idx_processed_events_reaper.
+func (s *Store) DeleteProcessedEvents(ctx context.Context, retention time.Duration, limit int) (int64, error) {
+	const query = `
+		DELETE FROM processed_events
+		WHERE (consumer, event_id) IN (
+			SELECT consumer, event_id FROM processed_events
+			WHERE processed_at < $1
+			ORDER BY processed_at
+			LIMIT $2)`
+
+	tag, err := s.pool.Exec(ctx, query, time.Now().UTC().Add(-retention), limit)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUndefinedTable {
+			return 0, ErrProcessedTableMissing
+		}
+		return 0, internalError(ReasonCleanupFailed, "outbox: delete processed events", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ErrIdempotencyTableMissing is DeleteIdempotencyKeys' answer when the database
+// has no idempotency_keys table (SQLSTATE 42P01); the Reaper stops asking.
+var ErrIdempotencyTableMissing = errors.New("outbox: idempotency_keys does not exist")
+
+// DeleteIdempotencyKeys removes up to limit idempotency keys older than
+// retention (24 h by default) and returns how many it removed.
+//
+// Big O: O(limit log n) via idx_idempotency_keys_reaper.
+func (s *Store) DeleteIdempotencyKeys(ctx context.Context, retention time.Duration, limit int) (int64, error) {
+	const query = `
+		DELETE FROM idempotency_keys
+		WHERE (caller, endpoint, key) IN (
+			SELECT caller, endpoint, key FROM idempotency_keys
+			WHERE created_at < $1
+			ORDER BY created_at
+			LIMIT $2)`
+
+	tag, err := s.pool.Exec(ctx, query, time.Now().UTC().Add(-retention), limit)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUndefinedTable {
+			return 0, ErrIdempotencyTableMissing
+		}
+		return 0, internalError(ReasonCleanupFailed, "outbox: delete idempotency keys", err)
 	}
 	return tag.RowsAffected(), nil
 }

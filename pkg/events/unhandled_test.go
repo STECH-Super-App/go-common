@@ -64,7 +64,7 @@ func TestDispatcher_CountsUnhandledEventType(t *testing.T) {
 		}),
 		Value: []byte(`{}`),
 	}
-	disp := events.NewDispatcher(&fakeReader{msgs: []kafka.Message{msg}}, &fakeWriter{}, events.WithGroup(group))
+	disp := newDisp(&fakeReader{msgs: []kafka.Message{msg}}, &fakeWriter{}, events.WithGroup(group))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error { return nil })
 
 	runFor(disp, 300*time.Millisecond)
@@ -82,7 +82,7 @@ func TestDispatcher_WarnsWhenEventTypeHeaderIsMissing(t *testing.T) {
 		Headers: kafkaHeaders(map[string]string{envelope.HeaderEventID: "e-nohdr"})}
 
 	core, logs := observer.New(zapcore.DebugLevel)
-	disp := events.NewDispatcher(&fakeReader{msgs: []kafka.Message{msg}}, &fakeWriter{},
+	disp := newDisp(&fakeReader{msgs: []kafka.Message{msg}}, &fakeWriter{},
 		events.WithGroup(group), events.WithLogger(zap.New(core)))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error { return nil })
 
@@ -100,7 +100,7 @@ func TestDispatcher_KnownTypeWithoutHandlerStaysQuiet(t *testing.T) {
 	msg := kafka.Message{Topic: "user.events", Value: []byte(`{}`), Headers: kafkaHeaders(map[string]string{
 		envelope.HeaderEventID: "e-q", envelope.HeaderEventType: "events.users.v1.Other"})}
 	core, logs := observer.New(zapcore.DebugLevel)
-	disp := events.NewDispatcher(&fakeReader{msgs: []kafka.Message{msg}}, &fakeWriter{},
+	disp := newDisp(&fakeReader{msgs: []kafka.Message{msg}}, &fakeWriter{},
 		events.WithLogger(zap.New(core)))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error { return nil })
 
@@ -117,7 +117,7 @@ func TestDispatcher_CountsAndLogsCommitFailure(t *testing.T) {
 
 	core, logs := observer.New(zapcore.DebugLevel)
 	reader := &failingCommitReader{msgs: []kafka.Message{userRegisteredMessage(t, "user.events", "e-commit")}}
-	disp := events.NewDispatcher(reader, &fakeWriter{}, events.WithGroup(group), events.WithLogger(zap.New(core)))
+	disp := newDisp(reader, &fakeWriter{}, events.WithGroup(group), events.WithLogger(zap.New(core)))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error { return nil })
 
 	runFor(disp, 300*time.Millisecond)

@@ -2,6 +2,8 @@ package outbox
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/STECH-Super-App/go-common/pkg/envelope"
+	"github.com/STECH-Super-App/go-common/pkg/errors"
 )
 
 // PublishProtoOptions configures a single typed-proto outbox publish.
@@ -102,6 +105,16 @@ func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOp
 		Headers:       headers,
 		Status:        StatusPending,
 		CreatedAt:     time.Now().UTC(),
+	}
+	if size := msg.wireSize(); size > p.maxMessageBytes {
+		// Refused HERE, in the request that built the event: a row bigger than
+		// the broker accepts can never be sent, and (SL-03) used to stall the
+		// whole outbox behind it.
+		return errors.New(http.StatusUnprocessableEntity).
+			Reason(ReasonEventTooLarge).
+			Message(fmt.Sprintf("outbox: %s event is %d bytes, over the %d byte limit", eventType, size, p.maxMessageBytes)).
+			Params(map[string]any{"event_type": eventType, "size": size, "limit": p.maxMessageBytes}).
+			Build()
 	}
 	return p.store.InsertTx(ctx, tx, msg)
 }

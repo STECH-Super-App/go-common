@@ -147,6 +147,59 @@ func TestScan_TheViolationsSampleTripsEveryRule(t *testing.T) {
 	assert.Contains(t, joined, "kafka.Writer literal")
 	assert.Contains(t, joined, "http.Client literal")
 	assert.Contains(t, joined, "client address header")
+	for _, rule := range []string{
+		"Idempotency-Key header literal", "hand-rolled idempotency table",
+		"hand-rolled deduplicator", "hand-rolled outbox access",
+		"in-memory deduplicator in production code",
+	} {
+		assert.Contains(t, joined, rule)
+	}
+}
+
+// The two opt-in rules are not in DefaultRules (a service adds them when its
+// migration is done), and they fire when asked for.
+func TestScan_OptInRulesFireOnTheSampleAndStayOutOfTheDefaults(t *testing.T) {
+	for _, r := range lintguards.DefaultRules() {
+		assert.NotEqual(t, lintguards.LegacyEventHandlers().Name, r.Name)
+		assert.NotEqual(t, lintguards.NoPoolIn("x").Name, r.Name)
+	}
+
+	vs, err := lintguards.Scan("testdata/violations",
+		[]lintguards.Rule{lintguards.LegacyEventHandlers(), lintguards.NoPoolIn("viol")}, nil)
+	require.NoError(t, err)
+	var names []string
+	for _, v := range vs {
+		names = append(names, v.Rule)
+	}
+	assert.Contains(t, names, "legacy event handler form")
+	assert.Contains(t, names, "pool in an event-handler package")
+
+	// OnlyUnder: the same rule scoped to another directory finds nothing.
+	vs, err = lintguards.Scan("testdata/violations", []lintguards.Rule{lintguards.NoPoolIn("internal/kafka/")}, nil)
+	require.NoError(t, err)
+	assert.Empty(t, vs)
+}
+
+func TestScan_ReleaseTwoRulesAreQuietOnLegitimateCode(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "internal/ok.go", `package internal
+
+import (
+	"github.com/STECH-Super-App/go-common/pkg/events"
+	"github.com/STECH-Super-App/go-common/pkg/idempotency"
+)
+
+// events.NewPostgresDeduplicator and idempotency.Post are the way.
+var _ = events.NewPostgresDeduplicator
+var _ = idempotency.Post
+
+func use() {
+	_ = "SELECT id FROM orders"
+	_ = "Content-Type"
+	_ = "processed" // not a dedup table
+}
+`)
+	assert.Empty(t, scan(t, root, nil))
 }
 
 // The AST rule bans naming each client-address header; the list lives here

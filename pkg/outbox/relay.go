@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -14,33 +15,59 @@ import (
 // RelayConfig tunes the polling relay behavior.
 type RelayConfig struct {
 	PollInterval time.Duration // How often to poll for pending messages (default: 1s)
-	BatchSize    int           // Max messages per poll cycle (default: 100)
+	BatchSize    int           // Max messages per TOPIC per poll cycle (default: 100)
 
-	// ShutdownFlushTimeout bounds how long an already-fetched batch may keep
+	// ShutdownFlushTimeout bounds how long an already-claimed batch may keep
 	// writing to Kafka and marking itself sent after the relay's context is
 	// cancelled (default: DefaultShutdownFlushTimeout). Zero or negative means
 	// the default, so a hand-built RelayConfig cannot turn it into "abandon
 	// every in-flight batch".
 	ShutdownFlushTimeout time.Duration
+
+	// SendTimeout bounds one topic's Kafka write while its rows are locked
+	// (default: DefaultSendTimeout). A write that outlasts it fails, the
+	// transaction rolls back and the rows are sent again on a later poll: a hung
+	// broker connection can never hold a topic's rows hostage.
+	SendTimeout time.Duration
+
+	// TopicConcurrency is how many topics the relay works at once, each on its
+	// own pooled connection while it writes (default: DefaultTopicConcurrency).
+	// It is what lets healthy topics keep flowing while a stuck one waits out
+	// its Kafka timeouts.
+	TopicConcurrency int
 }
 
-// Relay defaults. A zero or negative PollInterval or BatchSize means the
-// default: BatchSize 0 used to be LIMIT 0 plus a `continue` without sleeping, a
-// hot loop against Postgres that forwarded nothing (SL-15).
+// Relay defaults. A zero or negative value means the default: BatchSize 0 used
+// to be LIMIT 0 plus a `continue` without sleeping, a hot loop against Postgres
+// that forwarded nothing (SL-15).
 const (
 	DefaultPollInterval = time.Second
 	DefaultBatchSize    = 100
 
 	// DefaultShutdownFlushTimeout is RelayConfig.ShutdownFlushTimeout's default.
 	DefaultShutdownFlushTimeout = 5 * time.Second
+
+	// DefaultSendTimeout is RelayConfig.SendTimeout's default. The Kafka writer
+	// retries five times with up to one second between attempts, so a healthy
+	// broker answers or refuses well inside it.
+	DefaultSendTimeout = 30 * time.Second
+
+	// DefaultTopicConcurrency is RelayConfig.TopicConcurrency's default.
+	DefaultTopicConcurrency = 4
+
+	// stuckTopicLogEvery is how often the relay repeats the Error line for a
+	// topic that keeps failing; in between it logs at Debug. A stuck topic is
+	// retried every poll, and a line per second is noise, not signal: the
+	// by-topic backlog gauges are what alerts.
+	stuckTopicLogEvery = 30 * time.Second
 )
 
 // relayStore is the slice of *Store the relay actually uses. It exists so the
 // poll loop — and the metric wiring hanging off its outcomes — can be unit
 // tested without Postgres. *Store satisfies it.
 type relayStore interface {
-	FetchPending(ctx context.Context, batchSize int) ([]*Message, error)
-	MarkSentBatch(ctx context.Context, ids []string) error
+	PendingTopics(ctx context.Context) ([]string, error)
+	ForwardTopic(ctx context.Context, topic string, limit int, send SendFunc) (ForwardResult, error)
 }
 
 // relayWriter is the slice of *kafka.Writer the relay actually uses, for the
@@ -49,8 +76,13 @@ type relayWriter interface {
 	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
 }
 
-// Relay polls the outbox_messages table and forwards pending messages to Kafka.
-// It uses SELECT … FOR UPDATE SKIP LOCKED for zero-contention concurrent access.
+// Relay forwards pending outbox_messages rows to Kafka, one topic at a time.
+//
+// Each topic is one transaction: claim its oldest rows (FOR UPDATE SKIP LOCKED),
+// write them to Kafka, mark what was acknowledged, commit (Store.ForwardTopic).
+// Two relays never send the same rows; a crash before the commit re-sends, and
+// the consumer's deduplicator absorbs the repeat. A topic that cannot be written
+// waits, in order, while the other topics keep flowing.
 //
 // TODO: CDC (Debezium) relay for real-time propagation.
 type Relay struct {
@@ -58,6 +90,9 @@ type Relay struct {
 	writer relayWriter
 	logger *zap.Logger
 	cfg    RelayConfig
+
+	logMu      sync.Mutex
+	lastLogged map[string]time.Time
 }
 
 // NewRelay creates a new polling relay. The concrete parameter types are kept
@@ -78,12 +113,14 @@ func NewRelay(store *Store, writer *kafka.Writer, logger *zap.Logger, cfg RelayC
 }
 
 // Run starts the relay loop. Blocks until ctx is cancelled.
-// When a full batch is fetched, it immediately polls again to drain backlogs.
-// When fewer messages are returned, it sleeps for PollInterval before the next poll.
+// When a topic returned a full batch it immediately polls again to drain the
+// backlog; otherwise it sleeps for PollInterval before the next poll.
 func (r *Relay) Run(ctx context.Context) error {
 	r.logger.Info("outbox relay started",
 		zap.Duration("poll_interval", r.pollInterval()),
 		zap.Int("batch_size", r.batchSize()),
+		zap.Int("topic_concurrency", r.topicConcurrency()),
+		zap.Duration("send_timeout", r.sendTimeout()),
 		zap.Duration("shutdown_flush_timeout", r.shutdownFlushTimeout()),
 	)
 
@@ -100,17 +137,17 @@ func (r *Relay) Run(ctx context.Context) error {
 		default:
 		}
 
-		processed, err := r.pollAndForward(ctx)
-		if err != nil {
+		res := r.poll(ctx)
+		if res.failed {
 			recordRelayError()
-			r.logger.Error("outbox relay poll error", zap.Error(err))
 		} else {
 			// Error-free means successful, whether or not any row was found.
-			recordRelaySuccess(processed)
+			recordRelaySuccess(0)
 		}
+		recordRelayed(res.sent)
 
-		// If we got a full batch, there might be more — poll immediately.
-		if processed >= r.batchSize() {
+		// A topic gave a full batch and wrote it cleanly: more may be waiting.
+		if res.more {
 			continue
 		}
 
@@ -123,117 +160,157 @@ func (r *Relay) Run(ctx context.Context) error {
 	}
 }
 
-// pollAndForward fetches pending messages, writes them to Kafka in a single
-// batched call, and marks them all sent in a single UPDATE.
+// pollResult is the outcome of one poll over every pending topic.
+type pollResult struct {
+	sent   int  // rows marked sent across all topics
+	failed bool // the topic list, a claim, a write or a mark failed
+	more   bool // a topic returned a full batch and wrote it cleanly
+}
+
+// poll works every pending topic once, up to TopicConcurrency at a time.
 //
-// Calling kafka.Writer.WriteMessages once per message blocks each call by the
-// writer's BatchTimeout (1s default), which caps throughput at ~1 msg/s
-// regardless of the configured BatchSize. Sending the whole slice in one call
-// lets kafka-go batch them naturally and returns sub-second per poll for any
-// realistic batch.
-//
-// FetchPending runs on ctx, so no new batch is taken once the relay is
-// cancelled. Everything after it runs on flushCtx: a batch that was already
-// fetched is written AND marked sent even if a shutdown arrives mid-batch —
-// abandoning it there would leave rows Kafka already holds pending, to be
-// re-published on the next start.
-//
-// Returns the number of messages successfully processed.
-func (r *Relay) pollAndForward(ctx context.Context) (int, error) {
-	messages, err := r.store.FetchPending(ctx, r.batchSize())
+// The topic list is read on ctx, so no new work starts once the relay is
+// cancelled. A topic already started is finished on a flush context: its rows
+// are written AND marked sent even if a shutdown arrives mid-batch — abandoning
+// it there would leave rows Kafka already holds pending, to be re-published on
+// the next start.
+func (r *Relay) poll(ctx context.Context) pollResult {
+	topics, err := r.store.PendingTopics(ctx)
 	if err != nil {
-		return 0, err
-	}
-	if len(messages) == 0 {
-		return 0, nil
+		if ctx.Err() == nil {
+			r.logger.Error("outbox relay: list pending topics failed", zap.Error(err))
+		}
+		return pollResult{failed: ctx.Err() == nil}
 	}
 
+	var (
+		mu  sync.Mutex
+		out pollResult
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, r.topicConcurrency())
+	)
+	for _, topic := range topics {
+		if ctx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(topic string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			res, err := r.forwardTopic(ctx, topic)
+
+			mu.Lock()
+			defer mu.Unlock()
+			out.sent += res.Sent
+			if err != nil {
+				out.failed = true
+			} else if res.Claimed >= r.batchSize() && res.Sent == res.Claimed {
+				out.more = true
+			}
+		}(topic)
+	}
+	wg.Wait()
+	return out
+}
+
+// forwardTopic claims, writes and marks one topic's rows, and accounts for the
+// outcome. The error is returned only so poll can see the poll was not clean.
+func (r *Relay) forwardTopic(ctx context.Context, topic string) (ForwardResult, error) {
 	flushCtx, release := r.flushContext(ctx)
 	defer release()
 
-	kafkaMsgs := make([]kafka.Message, len(messages))
-	ids := make([]string, len(messages))
-	for i, msg := range messages {
-		kafkaMsgs[i] = toKafkaMessage(msg)
-		ids[i] = msg.ID
+	res, err := r.store.ForwardTopic(flushCtx, topic, r.batchSize(), r.sendFunc())
+	if res.Sent > 0 {
+		recordTopicRelayed(topic, res.Sent)
+		r.logger.Debug("outbox relay: forwarded messages",
+			zap.String("topic", topic), zap.Int("count", res.Sent))
 	}
+	if err != nil {
+		recordTopicError(topic)
+		r.logFailure(topic, res, err)
+	}
+	return res, err
+}
 
-	if err := r.writer.WriteMessages(flushCtx, kafkaMsgs...); err != nil {
-		// kafka-go returns either a single error (whole batch failed,
-		// e.g., broker down) or kafka.WriteErrors with one entry per
-		// message (partial failure). Mark only the entries that
-		// succeeded; the rest stay pending and retry on the next poll.
-		var werrs kafka.WriteErrors
-		if errors.As(err, &werrs) {
-			succeededIDs := make([]string, 0, len(messages))
-			failed := 0
-			for i, werr := range werrs {
-				if werr == nil {
-					succeededIDs = append(succeededIDs, ids[i])
-					continue
-				}
-				failed++
-				r.logger.Error("outbox relay: kafka write failed",
-					zap.String("message_id", messages[i].ID),
-					zap.String("event_type", messages[i].EventType),
-					zap.String("topic", messages[i].Topic),
-					zap.Error(werr),
-				)
-			}
-			if len(succeededIDs) == 0 {
-				// EVERY message in the batch failed. Propagate the error
-				// instead of reporting an error-free poll: returning nil here
-				// would refresh outbox_last_success_timestamp_seconds and leave
-				// outbox_relay_errors_total flat while zero messages were
-				// delivered — a wedged relay that looks perfectly healthy on
-				// every panel. That is exactly the shape a missing Kafka topic
-				// produces (Critical Rule 13 — Kafka topic naming and
-				// provisioning), which is a live condition in prod.
-				//
-				// Return semantics for the caller are unchanged: the rows stay
-				// pending and the next poll retries them, as before.
-				return 0, err
-			}
-			if failed > 0 {
-				// Partial delivery. The succeeded half is real progress and is
-				// recorded by the caller off the nil error; the failed half is
-				// a genuine error and must move the error counter, or a relay
-				// losing a steady fraction of every batch reports as clean.
-				recordRelayError()
-			}
-			if err := r.store.MarkSentBatch(flushCtx, succeededIDs); err != nil {
-				r.logger.Error("outbox relay: mark sent batch failed",
-					zap.Int("count", len(succeededIDs)),
-					zap.Error(err),
-				)
-				return 0, err
-			}
-			r.logger.Debug("outbox relay: partial forward",
-				zap.Int("succeeded", len(succeededIDs)),
-				zap.Int("failed", failed),
-			)
-			return len(succeededIDs), nil
+// sendFunc writes one topic's claimed rows to Kafka and says which ones the
+// broker acknowledged.
+func (r *Relay) sendFunc() SendFunc {
+	return func(ctx context.Context, msgs []*Message) ([]string, error) {
+		sendCtx, cancel := context.WithTimeout(ctx, r.sendTimeout())
+		defer cancel()
+
+		kafkaMsgs := make([]kafka.Message, len(msgs))
+		for i, msg := range msgs {
+			kafkaMsgs[i] = toKafkaMessage(msg)
 		}
-
-		r.logger.Error("outbox relay: kafka batch write failed",
-			zap.Int("batch_size", len(messages)),
-			zap.Error(err),
-		)
-		return 0, err
+		err := r.writer.WriteMessages(sendCtx, kafkaMsgs...)
+		return deliveredIDs(msgs, err), err
 	}
+}
 
-	if err := r.store.MarkSentBatch(flushCtx, ids); err != nil {
-		r.logger.Error("outbox relay: mark sent batch failed",
-			zap.Int("count", len(ids)),
-			zap.Error(err),
-		)
-		return 0, err
+// deliveredIDs says which rows of msgs a WriteMessages result acknowledged.
+//
+// kafka-go returns nil (all written), kafka.WriteErrors with one entry per
+// message (a partial failure: a partition without a leader, a message the
+// broker refused) or one error for the whole call (broker down). A row counts
+// as delivered when its entry is nil AND no earlier row with the same key
+// failed: marking a later event of an aggregate sent past a failed earlier one
+// would let the earlier one be re-sent AFTER it. The failed row and everything
+// behind it for that key stay pending, in order.
+func deliveredIDs(msgs []*Message, err error) []string {
+	if err == nil {
+		ids := make([]string, len(msgs))
+		for i, m := range msgs {
+			ids[i] = m.ID
+		}
+		return ids
 	}
+	var werrs kafka.WriteErrors
+	if !errors.As(err, &werrs) || len(werrs) != len(msgs) {
+		return nil
+	}
+	blocked := make(map[string]struct{})
+	ids := make([]string, 0, len(msgs))
+	for i, werr := range werrs {
+		if werr != nil {
+			blocked[msgs[i].Key] = struct{}{}
+			continue
+		}
+		if _, held := blocked[msgs[i].Key]; held {
+			continue
+		}
+		ids = append(ids, msgs[i].ID)
+	}
+	return ids
+}
 
-	r.logger.Debug("outbox relay: forwarded messages",
-		zap.Int("count", len(messages)),
-	)
-	return len(messages), nil
+// logFailure reports a topic that could not be forwarded: the first time and
+// then every stuckTopicLogEvery, so a topic that stays stuck does not write a
+// line per poll.
+func (r *Relay) logFailure(topic string, res ForwardResult, err error) {
+	r.logMu.Lock()
+	if r.lastLogged == nil {
+		r.lastLogged = make(map[string]time.Time)
+	}
+	last, seen := r.lastLogged[topic]
+	loud := !seen || time.Since(last) >= stuckTopicLogEvery
+	if loud {
+		r.lastLogged[topic] = time.Now()
+	}
+	r.logMu.Unlock()
+
+	fields := []zap.Field{
+		zap.String("topic", topic),
+		zap.Int("claimed", res.Claimed),
+		zap.Int("sent", res.Sent),
+		zap.Error(err),
+	}
+	if loud {
+		r.logger.Error("outbox relay: topic could not be forwarded; its rows wait in order", fields...)
+		return
+	}
+	r.logger.Debug("outbox relay: topic still failing", fields...)
 }
 
 // pollInterval and batchSize apply the defaults for non-positive config values.
@@ -242,6 +319,20 @@ func (r *Relay) pollInterval() time.Duration {
 		return r.cfg.PollInterval
 	}
 	return DefaultPollInterval
+}
+
+func (r *Relay) sendTimeout() time.Duration {
+	if r.cfg.SendTimeout > 0 {
+		return r.cfg.SendTimeout
+	}
+	return DefaultSendTimeout
+}
+
+func (r *Relay) topicConcurrency() int {
+	if r.cfg.TopicConcurrency > 0 {
+		return r.cfg.TopicConcurrency
+	}
+	return DefaultTopicConcurrency
 }
 
 func (r *Relay) batchSize() int {

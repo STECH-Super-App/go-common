@@ -3,17 +3,18 @@ package events_test
 import (
 	"context"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 
 	usersv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/users/v1"
 	"github.com/STECH-Super-App/go-common/pkg/envelope"
+	commonerrors "github.com/STECH-Super-App/go-common/pkg/errors"
 	"github.com/STECH-Super-App/go-common/pkg/events"
 )
 
@@ -85,37 +86,102 @@ func offsetMessage(t *testing.T, offset int64) kafka.Message {
 	}
 }
 
-// SL-00 / SL-16: the existing failure-path tests feed ONE message, so they
-// cannot see the loss. kafka-go commits a partition by position (offset+1):
-// when message 0's dead-letter write fails, the dispatcher logs "leaving offset
-// uncommitted" and moves on, and the NEXT successful commit — message 1's —
-// commits past message 0. Message 0 is gone, with lag 0 and no counter moving.
+// SL-00 / SL-16: the single-message failure-path tests cannot see the loss.
+// kafka-go commits a partition by position (offset+1): when message 0's
+// dead-letter write failed, the release 1 dispatcher logged "leaving offset
+// uncommitted" and moved on, and the NEXT successful commit — message 1's —
+// committed past message 0. Message 0 was gone, with lag 0 and no counter
+// moving (on that tree this test failed with "Should be empty, but was [1]").
 //
-// Known-red until release 2 (stop on a failed dead-letter write, owner ruling
-// 13.11.2026). Off unless GOCOMMON_KNOWN_RED=1 so CI stays green; run on the
-// 14.11.2026 tree it FAILS, which is the evidence for the finding.
-func TestDispatcher_KnownRed_FailedDeadLetterWriteMustNotBeCommittedPast(t *testing.T) {
-	if os.Getenv("GOCOMMON_KNOWN_RED") != "1" {
-		t.Skip("SL-00 is fixed in go-common release 2; set GOCOMMON_KNOWN_RED=1 to see it fail")
-	}
-
+// Since release 2 (owner ruling 13.11.2026, reversing go-common#38) the
+// dispatcher STOPS: it commits nothing, fetches nothing more, and Run returns an
+// error that makes the process exit non-zero.
+func TestDispatcher_FailedDeadLetterWriteStopsTheConsumerAndCommitsNothing(t *testing.T) {
 	reader := &offsetReader{msgs: []kafka.Message{offsetMessage(t, 0), offsetMessage(t, 1)}}
 	// Message 0's handler fails and so does its dead-letter write; message 1's
-	// handler succeeds.
-	var n int
-	disp := events.NewDispatcher(reader, &failFirstWriter{})
+	// handler would succeed — if it were ever fetched.
+	var handled []int
+	disp := newDisp(reader, &failFirstWriter{}, events.WithRetryWindow(time.Millisecond))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
-		n++
-		if n == 1 {
+		handled = append(handled, len(handled))
+		if len(handled) == 1 {
 			return errors.New("transient")
 		}
 		return nil
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	_ = disp.Run(ctx)
+	// A live context: Run must stop by itself, not because of a cancel.
+	err := runToReturn(t, disp)
 
-	assert.Empty(t, reader.offsets(),
-		"nothing may be committed once message 0's dead-letter write failed: any later commit marks message 0 consumed")
+	require.ErrorIs(t, err, events.ErrDeadLetterWriteFailed)
+	var ae *commonerrors.AppError
+	require.True(t, errors.As(err, &ae), "a typed error, got %T", err)
+	assert.Equal(t, events.ReasonDeadLetterWriteFailed, ae.Reason)
+	assert.Empty(t, reader.offsets(), "nothing may be committed once message 0's dead-letter write failed")
+	reader.mu.Lock()
+	fetched := reader.i
+	reader.mu.Unlock()
+	assert.Equal(t, 1, fetched, "message 1 is never fetched: its commit would consume message 0")
+	assert.Len(t, handled, 1)
+
+	// The stop is permanent.
+	again := disp.Run(context.Background())
+	require.ErrorIs(t, again, events.ErrDeadLetterWriteFailed)
+	reader.mu.Lock()
+	assert.Equal(t, 1, reader.i, "a second Run fetches nothing")
+	reader.mu.Unlock()
+}
+
+// The legacy retry tier's write failing is the same fault.
+func TestDispatcher_FailedRetryTierWriteAlsoStops(t *testing.T) {
+	reader := &offsetReader{msgs: []kafka.Message{offsetMessage(t, 0), offsetMessage(t, 1)}}
+	disp := newDisp(reader, &fakeWriter{}, events.WithRetry(&failFirstWriter{}))
+	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error { return errors.New("transient") })
+
+	err := runToReturn(t, disp)
+
+	require.ErrorIs(t, err, events.ErrDeadLetterWriteFailed)
+	assert.Empty(t, reader.offsets())
+}
+
+// Worker is what makes the stop LOUD: the error reaches pkg/lifecycle, which
+// exits the process non-zero, whatever the state of the shutdown.
+func TestDispatcherWorker_MapsTheStopsForLifecycle(t *testing.T) {
+	deadLetterFails := func() *events.Dispatcher {
+		r := &offsetReader{msgs: []kafka.Message{offsetMessage(t, 0)}}
+		d := newDisp(r, &failFirstWriter{}, events.WithRetryWindow(time.Millisecond))
+		events.Handle(d, func(context.Context, *usersv1.UserRegistered) error { return errors.New("x") })
+		return d
+	}
+	leaves := func() *events.Dispatcher {
+		r := &offsetReader{msgs: []kafka.Message{offsetMessage(t, 0)}}
+		d := newDisp(r, &fakeWriter{})
+		events.Handle(d, func(context.Context, *usersv1.UserRegistered) error { return leaveAtShutdown() })
+		return d
+	}
+	running := make(chan struct{})
+	stopping := make(chan struct{})
+	close(stopping)
+
+	t.Run("a failed dead-letter write is an error even while the process is running", func(t *testing.T) {
+		err := deadLetterFails().Worker(running)(context.Background())
+		require.ErrorIs(t, err, events.ErrDeadLetterWriteFailed)
+	})
+	t.Run("and even during shutdown", func(t *testing.T) {
+		err := deadLetterFails().Worker(stopping)(context.Background())
+		require.ErrorIs(t, err, events.ErrDeadLetterWriteFailed)
+	})
+	t.Run("a handler that left a message is an error while running", func(t *testing.T) {
+		err := leaves().Worker(running)(context.Background())
+		require.ErrorIs(t, err, events.ErrLeaveUncommitted)
+	})
+	t.Run("and a clean stop once the process is stopping", func(t *testing.T) {
+		assert.NoError(t, leaves().Worker(stopping)(context.Background()))
+	})
+	t.Run("a cancelled context is the cancel", func(t *testing.T) {
+		d := newDisp(&offsetReader{}, &fakeWriter{})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		assert.ErrorIs(t, d.Worker(running)(ctx), context.Canceled)
+	})
 }

@@ -19,12 +19,39 @@ type MessageInserter interface {
 // The defaultTopic is applied when PublishProtoOptions.Topic is empty,
 // keeping Kafka routing out of the application layer (infrastructure concern).
 type Publisher struct {
-	store        MessageInserter
-	defaultTopic string
+	store           MessageInserter
+	defaultTopic    string
+	maxMessageBytes int
+}
+
+// DefaultMaxMessageBytes is the largest event PublishProto accepts: key, payload
+// and headers together. Kafka's default record limit (message.max.bytes) and
+// kafka-go's writer batch limit are both 1 MiB; this stays well under so the
+// record framing and the growth of the payload when Postgres stores it as jsonb
+// (it adds a space after every colon and comma) cannot push a row that passed
+// the check over the broker's limit.
+const DefaultMaxMessageBytes = 900_000
+
+// PublisherOption tunes a Publisher.
+type PublisherOption func(*Publisher)
+
+// WithMaxMessageBytes sets the size limit PublishProto enforces (default
+// DefaultMaxMessageBytes). Non-positive keeps the default. Raising it above the
+// broker's limit only moves the failure from the business request to the relay.
+func WithMaxMessageBytes(n int) PublisherOption {
+	return func(p *Publisher) {
+		if n > 0 {
+			p.maxMessageBytes = n
+		}
+	}
 }
 
 // NewPublisher creates a new transactional event publisher.
 // defaultTopic is the Kafka destination for all messages unless overridden per-call.
-func NewPublisher(store MessageInserter, defaultTopic string) *Publisher {
-	return &Publisher{store: store, defaultTopic: defaultTopic}
+func NewPublisher(store MessageInserter, defaultTopic string, opts ...PublisherOption) *Publisher {
+	p := &Publisher{store: store, defaultTopic: defaultTopic, maxMessageBytes: DefaultMaxMessageBytes}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
 }

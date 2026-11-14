@@ -27,7 +27,7 @@ var (
 
 	retriedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "events_consumer_retried_total",
-		Help: "Messages forwarded to the retry topic with an incremented retry count.",
+		Help: "Messages forwarded to the legacy retry topic (WithRetry) with an incremented retry count.",
 	}, []string{"topic", "group"})
 
 	deadLetteredTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -57,15 +57,24 @@ var (
 	}, []string{"topic", "group"})
 
 	// failurePathErrorsTotal is the scariest path in the pipeline: the DLQ or
-	// retry write ITSELF failed, so this message's offset was not committed.
-	// Today the dispatcher then fetches the next message, and kafka-go commits
-	// by position: the next successful commit on the partition commits PAST this
-	// message, which is then lost (SL-00; release 2 stops the consumer instead).
-	// That is why it is its own family rather than a label on another — any
-	// increase is a lost or about-to-be-lost message.
+	// retry write ITSELF failed. Since release 2 the dispatcher then STOPS
+	// without committing (Run returns ErrDeadLetterWriteFailed and the process
+	// exits non-zero), so the message is redelivered after the restart and
+	// nothing is lost. Before it, the dispatcher went on to the next message and
+	// the next commit moved the offset past the failed one (SL-00). Any increase
+	// is a consumer that just stopped: alert on it, and on the restart.
 	failurePathErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "events_consumer_failurepath_errors_total",
-		Help: "Failed DLQ/retry writes. The message was not forwarded and its offset was not committed, but the next successful commit on the partition commits past it: the message is lost.",
+		Help: "Failed DLQ/retry writes. The consumer stopped without committing the message and exits non-zero, so Kafka redelivers it after the restart.",
+	}, []string{"topic", "group"})
+
+	// inPlaceRetriesTotal counts the attempts that failed with a retryable error
+	// and were scheduled for another try. A steady trickle is a flaky
+	// dependency; a message that exhausts them ends as
+	// events_consumer_dead_lettered_total{reason="max_retries"}.
+	inPlaceRetriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "events_consumer_inplace_retries_total",
+		Help: "Failed handler attempts that were scheduled for another in-place attempt.",
 	}, []string{"topic", "group"})
 )
 
@@ -77,6 +86,7 @@ func init() {
 		deadLetteredTotal,
 		dedupHitsTotal,
 		failurePathErrorsTotal,
+		inPlaceRetriesTotal,
 		unhandledTotal,
 		commitErrorsTotal,
 	)

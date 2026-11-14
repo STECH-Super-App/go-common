@@ -20,24 +20,28 @@ import (
 
 type countingRelayStore struct {
 	mu        sync.Mutex
-	fetches   int
+	lists     int
 	lastBatch int
 }
 
-func (s *countingRelayStore) FetchPending(_ context.Context, batchSize int) ([]*Message, error) {
+func (s *countingRelayStore) PendingTopics(context.Context) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.fetches++
-	s.lastBatch = batchSize
-	return nil, nil
+	s.lists++
+	return []string{"user.events"}, nil
 }
 
-func (s *countingRelayStore) MarkSentBatch(context.Context, []string) error { return nil }
+func (s *countingRelayStore) ForwardTopic(_ context.Context, _ string, limit int, _ SendFunc) (ForwardResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastBatch = limit
+	return ForwardResult{}, nil
+}
 
 func (s *countingRelayStore) snapshot() (int, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.fetches, s.lastBatch
+	return s.lists, s.lastBatch
 }
 
 type noopRelayWriter struct{}
