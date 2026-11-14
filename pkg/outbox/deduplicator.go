@@ -10,6 +10,14 @@ import (
 )
 
 // Deduplicator tracks processed event IDs to guarantee idempotent consumption.
+//
+// DEPRECATED (release 2): events.NewDispatcher no longer accepts this type; use
+// events.NewPostgresDeduplicator with events.HandleTx, which gives the handler
+// the claim's transaction (SL-04) and keys the claim by consumer (SL-31). Kept
+// for one release so code that calls Process directly still compiles; the strict
+// lint config bans NewDeduplicator. Not marked with the Go "Deprecated:"
+// convention so staticcheck does not fail every service's lint at once.
+//
 // The outbox pattern provides at-least-once delivery, which means consumers
 // may receive the same message more than once. This component solves that by
 // recording each processed event_id in a Postgres table.
@@ -60,7 +68,7 @@ func (d *Deduplicator) Process(ctx context.Context, eventID string, fn func() er
 	return RunInTx(ctx, d.pool, func(tx Tx) error {
 		pgxTx, ok := TxAsPgx(tx)
 		if !ok {
-			return fmt.Errorf("outbox dedup: expected pgx.Tx, got %T", tx)
+			return internalError(ReasonTxInvalid, fmt.Sprintf("outbox dedup: expected pgx.Tx, got %T", tx), nil)
 		}
 		return d.processInTx(ctx, pgxTx, eventID, fn)
 	})
@@ -100,21 +108,23 @@ func (d *Deduplicator) claim(ctx context.Context, tx pgx.Tx, eventID string) (bo
 
 	tag, err := tx.Exec(ctx, query, eventID, time.Now().UTC())
 	if err != nil {
-		return false, fmt.Errorf("outbox dedup: claim event: %w", err)
+		return false, internalError(ReasonDedupFailed, "outbox dedup: claim event", err)
 	}
 
 	return tag.RowsAffected() == 1, nil
 }
 
-// CleanupProcessed deletes records older than retention to prevent table bloat.
-// Called automatically by the Reaper if the table exists.
+// CleanupProcessed deletes records older than retention in ONE statement.
+// The Reaper does not call it: it runs Store.DeleteProcessed in bounded
+// batches, which does not hold a long delete against live claim INSERTs. Keep
+// this for a one-off manual purge.
 func (d *Deduplicator) CleanupProcessed(ctx context.Context, retention time.Duration) (int64, error) {
 	const query = `DELETE FROM processed_outbox_messages WHERE processed_at < $1`
 
 	cutoff := time.Now().UTC().Add(-retention)
 	result, err := d.pool.Exec(ctx, query, cutoff)
 	if err != nil {
-		return 0, fmt.Errorf("outbox dedup: cleanup: %w", err)
+		return 0, internalError(ReasonCleanupFailed, "outbox dedup: cleanup", err)
 	}
 
 	return result.RowsAffected(), nil

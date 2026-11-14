@@ -14,6 +14,9 @@ type Config struct {
 	// Zero means DefaultMetricsInterval — a hand-built Config must not be able
 	// to panic the ticker.
 	MetricsInterval time.Duration
+	// MaxMessageBytes is the size limit PublishProto enforces per event. Zero
+	// means DefaultMaxMessageBytes.
+	MaxMessageBytes int
 }
 
 // DefaultConfig returns production-ready defaults, overridable via environment variables.
@@ -23,21 +26,34 @@ type Config struct {
 //	OUTBOX_POLL_INTERVAL  - Relay polling frequency     (default: "1s")
 //	OUTBOX_BATCH_SIZE     - Messages per poll cycle     (default: 100)
 //	OUTBOX_SHUTDOWN_FLUSH_TIMEOUT - In-flight batch flush after cancel (default: "5s")
+//	OUTBOX_SEND_TIMEOUT   - One topic's Kafka write     (default: "30s")
+//	OUTBOX_TOPIC_CONCURRENCY - Topics forwarded at once (default: 4)
+//	OUTBOX_MAX_MESSAGE_BYTES - Largest event PublishProto accepts (default: 900000)
 //	OUTBOX_REAPER_INTERVAL - Cleanup schedule           (default: "5m")
 //	OUTBOX_RETENTION      - Sent message retention      (default: "72h")
+//	OUTBOX_PROCESSED_RETENTION - Deduplicator claim retention (default: "720h")
+//	OUTBOX_IDEMPOTENCY_RETENTION - Idempotency key retention (default: "24h")
+//	OUTBOX_PROCESSED_BATCH_SIZE - Claims deleted per statement (default: 5000)
 //	OUTBOX_METRICS_INTERVAL - Backlog gauge sampling    (default: "15s")
 func DefaultConfig() *Config {
 	return &Config{
 		Relay: RelayConfig{
-			PollInterval: config.GetEnvDuration("OUTBOX_POLL_INTERVAL", 1*time.Second),
-			BatchSize:    config.GetEnvInt("OUTBOX_BATCH_SIZE", 100),
+			PollInterval: config.GetEnvDuration("OUTBOX_POLL_INTERVAL", DefaultPollInterval),
+			BatchSize:    config.GetEnvInt("OUTBOX_BATCH_SIZE", DefaultBatchSize),
 			ShutdownFlushTimeout: config.GetEnvDuration(
 				"OUTBOX_SHUTDOWN_FLUSH_TIMEOUT", DefaultShutdownFlushTimeout),
+			SendTimeout:      config.GetEnvDuration("OUTBOX_SEND_TIMEOUT", DefaultSendTimeout),
+			TopicConcurrency: config.GetEnvInt("OUTBOX_TOPIC_CONCURRENCY", DefaultTopicConcurrency),
 		},
 		Reaper: ReaperConfig{
-			Interval:  config.GetEnvDuration("OUTBOX_REAPER_INTERVAL", 5*time.Minute),
-			Retention: config.GetEnvDuration("OUTBOX_RETENTION", 72*time.Hour),
+			Interval:           config.GetEnvDuration("OUTBOX_REAPER_INTERVAL", DefaultReaperInterval),
+			Retention:          config.GetEnvDuration("OUTBOX_RETENTION", DefaultRetention),
+			ProcessedRetention: config.GetEnvDuration("OUTBOX_PROCESSED_RETENTION", DefaultProcessedRetention),
+			ProcessedBatchSize: config.GetEnvInt("OUTBOX_PROCESSED_BATCH_SIZE", DefaultProcessedBatchSize),
+			IdempotencyRetention: config.GetEnvDuration(
+				"OUTBOX_IDEMPOTENCY_RETENTION", DefaultIdempotencyRetention),
 		},
 		MetricsInterval: config.GetEnvDuration("OUTBOX_METRICS_INTERVAL", DefaultMetricsInterval),
+		MaxMessageBytes: config.GetEnvInt("OUTBOX_MAX_MESSAGE_BYTES", DefaultMaxMessageBytes),
 	}
 }

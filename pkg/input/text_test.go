@@ -50,21 +50,34 @@ func TestControlCharacters_OnlySingleLineRefusesContentWhitespace(t *testing.T) 
 }
 
 func TestControlCharacters_SingleLineRefusesBidiAndSeparators(t *testing.T) {
-	cases := map[string]rune{
-		"U+200E LEFT-TO-RIGHT MARK":      0x200E,
-		"U+200F RIGHT-TO-LEFT MARK":      0x200F,
-		"U+202A LEFT-TO-RIGHT EMBEDDING": 0x202A,
-		"U+202E RIGHT-TO-LEFT OVERRIDE":  0x202E,
-		"U+2066 LEFT-TO-RIGHT ISOLATE":   0x2066,
-		"U+2069 POP DIRECTIONAL ISOLATE": 0x2069,
-		"U+2028 LINE SEPARATOR":          0x2028,
-		"U+2029 PARAGRAPH SEPARATOR":     0x2029,
+	// Line refuses every one of these. Body takes the separators and the
+	// direction marks as before; the pairing controls (embeddings, overrides,
+	// isolates) it takes only in matched pairs — a lone one is refused (SL-19,
+	// see TestBody_RefusesUnbalancedBidiControls). That is the one place Body
+	// departs from sale-service's ControlCharacters::found, which the rest of
+	// this file ports.
+	cases := map[string]struct {
+		r         rune
+		bodyTakes bool
+	}{
+		"U+200E LEFT-TO-RIGHT MARK":      {0x200E, true},
+		"U+200F RIGHT-TO-LEFT MARK":      {0x200F, true},
+		"U+202A LEFT-TO-RIGHT EMBEDDING": {0x202A, false},
+		"U+202E RIGHT-TO-LEFT OVERRIDE":  {0x202E, false},
+		"U+2066 LEFT-TO-RIGHT ISOLATE":   {0x2066, false},
+		"U+2069 POP DIRECTIONAL ISOLATE": {0x2069, false},
+		"U+2028 LINE SEPARATOR":          {0x2028, true},
+		"U+2029 PARAGRAPH SEPARATOR":     {0x2029, true},
 	}
-	for name, r := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			v := "Мой фильтр" + string(r) + "2026"
+			v := "Мой фильтр" + string(tc.r) + "2026"
 			assertReason(t, "Line", lineF(v), input.ReasonTextInvalidCharacters)
-			assertAccepted(t, "Body", v, v, true)
+			if tc.bodyTakes {
+				assertAccepted(t, "Body", v, v, true)
+			} else {
+				assertReason(t, "Body", bodyF(v), input.ReasonTextInvalidCharacters)
+			}
 		})
 	}
 }
@@ -95,7 +108,9 @@ func TestControlCharacters_MalformedUTF8RefusedByBothShapes(t *testing.T) {
 
 // Exhaustive pin of the character rule over every code point: an interior
 // rune is refused by Line iff it is Cc or in SINGLE_LINE_DENIED, and by Body
-// iff it is Cc other than TAB/LF/CR. Anything wider (e.g. matching all of Cf)
+// iff it is Cc other than TAB/LF/CR or a lone bidi embedding/override/isolate
+// control (SL-19: Body takes those only in matched pairs, so as the lone interior
+// rune this test uses they are refused). Anything wider (e.g. matching all of Cf)
 // or narrower fails here.
 func TestCharacterRule_ExhaustiveOverAllCodePoints(t *testing.T) {
 	denied := map[rune]bool{0x200E: true, 0x200F: true, 0x2028: true, 0x2029: true}
@@ -117,11 +132,17 @@ func TestCharacterRule_ExhaustiveOverAllCodePoints(t *testing.T) {
 		if _, f := input.Line(v, 10); (f != nil) != wantLine {
 			t.Fatalf("Line U+%04X: refused=%v, want %v", r, f != nil, wantLine)
 		}
-		wantBody := isCc && r != '\t' && r != '\n' && r != '\r'
+		wantBody := (isCc && r != '\t' && r != '\n' && r != '\r') || isPairingBidiControl(r)
 		if _, f := input.Body(v, 10); (f != nil) != wantBody {
 			t.Fatalf("Body U+%04X: refused=%v, want %v", r, f != nil, wantBody)
 		}
 	}
+}
+
+// isPairingBidiControl: the bidi controls that must be closed — LRE, RLE, PDF,
+// LRO, RLO and LRI, RLI, FSI, PDI. LRM and RLM are marks and stand alone.
+func isPairingBidiControl(r rune) bool {
+	return r >= 0x202A && r <= 0x202E || r >= 0x2066 && r <= 0x2069
 }
 
 func TestText_TrimsEdges(t *testing.T) {

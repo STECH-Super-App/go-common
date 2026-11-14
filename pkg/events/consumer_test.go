@@ -90,7 +90,7 @@ func TestDispatcher_routesToHandler(t *testing.T) {
 	var gotName string
 	handlerCh := make(chan struct{}, 1)
 
-	disp := events.NewDispatcher(reader, dlq)
+	disp := newDisp(reader, dlq)
 	events.Handle(disp, func(_ context.Context, e *usersv1.UserRegistered) error {
 		gotName = e.Name
 		handlerCh <- struct{}{}
@@ -126,7 +126,7 @@ func TestDispatcher_unknownEventType_skipsNoDLQ(t *testing.T) {
 	dlq := &fakeWriter{}
 
 	invoked := false
-	disp := events.NewDispatcher(reader, dlq)
+	disp := newDisp(reader, dlq)
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		invoked = true
 		return nil
@@ -169,7 +169,7 @@ func TestDispatcher_poisonPill_goesStraightToDLQ(t *testing.T) {
 	reader := &fakeReader{msgs: []kafka.Message{msg}}
 	dlq := &fakeWriter{}
 
-	disp := events.NewDispatcher(reader, dlq)
+	disp := newDisp(reader, dlq)
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		return fmt.Errorf("bad: %w", events.ErrPoisonPill)
 	})
@@ -198,7 +198,7 @@ func TestDispatcher_unmarshalError_goesToDLQ(t *testing.T) {
 	reader := &fakeReader{msgs: []kafka.Message{msg}}
 	dlq := &fakeWriter{}
 
-	disp := events.NewDispatcher(reader, dlq)
+	disp := newDisp(reader, dlq)
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		t.Fatal("handler must not be invoked for unmarshal failures")
 		return nil
@@ -229,7 +229,7 @@ func TestDispatcher_handlerPanic_goesToDLQ(t *testing.T) {
 	reader := &fakeReader{msgs: []kafka.Message{msg}}
 	dlq := &fakeWriter{}
 
-	disp := events.NewDispatcher(reader, dlq)
+	disp := newDisp(reader, dlq)
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		panic("boom")
 	})
@@ -262,7 +262,7 @@ func TestDispatcher_maxRetries_goesToDLQ(t *testing.T) {
 	reader := &fakeReader{msgs: []kafka.Message{msg}}
 	dlq := &fakeWriter{}
 
-	disp := events.NewDispatcher(reader, dlq, events.WithMaxRetries(3))
+	disp := newDisp(reader, dlq, events.WithMaxRetries(3))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		return errors.New("transient failure")
 	})
@@ -296,7 +296,7 @@ func TestDispatcher_retryTopic_forwardsAndIncrementsCount(t *testing.T) {
 	dlq := &fakeWriter{}
 	retry := &fakeWriter{}
 
-	disp := events.NewDispatcher(reader, dlq,
+	disp := newDisp(reader, dlq,
 		events.WithRetry(retry),
 		events.WithMaxRetries(3))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
@@ -320,35 +320,6 @@ func TestDispatcher_retryTopic_forwardsAndIncrementsCount(t *testing.T) {
 }
 
 // --- B9: dedup skip on duplicate event_id ---
-//
-// fakeDedup mirrors the production outbox.Deduplicator.Process contract:
-// check-and-record-and-run in one atomic unit. If the id was already seen,
-// fn is NOT called and Process returns nil. If fn errors, the id is NOT
-// recorded (so a retry will see it as unprocessed).
-type fakeDedup struct {
-	processed map[string]bool
-	mu        sync.Mutex
-}
-
-func newFakeDedup() *fakeDedup { return &fakeDedup{processed: map[string]bool{}} }
-
-func (d *fakeDedup) Process(_ context.Context, id string, fn func() error) error {
-	d.mu.Lock()
-	if d.processed[id] {
-		d.mu.Unlock()
-		return nil
-	}
-	d.mu.Unlock()
-
-	if err := fn(); err != nil {
-		return err
-	}
-
-	d.mu.Lock()
-	d.processed[id] = true
-	d.mu.Unlock()
-	return nil
-}
 
 func TestDispatcher_dedup_skipsDuplicate(t *testing.T) {
 	payload, _ := protojson.Marshal(&usersv1.UserRegistered{EventId: "e1", UserId: "u1"})
@@ -361,10 +332,9 @@ func TestDispatcher_dedup_skipsDuplicate(t *testing.T) {
 	}
 	reader := &fakeReader{msgs: []kafka.Message{msg, msg}}
 	dlq := &fakeWriter{}
-	dedup := newFakeDedup()
 
 	var calls int
-	disp := events.NewDispatcher(reader, dlq, events.WithDedup(dedup))
+	disp := newDisp(reader, dlq)
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		calls++
 		return nil
@@ -377,4 +347,16 @@ func TestDispatcher_dedup_skipsDuplicate(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("handler invoked %d times, want 1 (dedup)", calls)
 	}
+}
+
+// newDisp is events.NewDispatcher with an in-memory deduplicator and a retry
+// window short enough for a unit test: a failing handler is retried for ~50 ms
+// instead of the production two minutes.
+func newDisp(reader events.Reader, dlq events.Writer, opts ...events.DispatcherOption) *events.Dispatcher {
+	return newDispWith(events.NewMemoryDeduplicator(), reader, dlq, opts...)
+}
+
+func newDispWith(dedup events.Deduplicator, reader events.Reader, dlq events.Writer, opts ...events.DispatcherOption) *events.Dispatcher {
+	fast := []events.DispatcherOption{events.WithGroup("test-group"), events.WithRetryWindow(50 * time.Millisecond), events.WithRetryBackoff(5*time.Millisecond, 10*time.Millisecond)}
+	return events.NewDispatcher(reader, dlq, dedup, append(fast, opts...)...)
 }

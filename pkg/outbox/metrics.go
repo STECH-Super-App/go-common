@@ -48,13 +48,56 @@ var (
 
 	relayErrors = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "outbox_relay_errors_total",
-		Help: "Relay poll cycles that ended in an error.",
+		Help: "Relay attempts that ended in an error: a topic forward (claim, Kafka write or mark) or the topic list.",
 	})
 
 	reapedEvents = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "outbox_reaped_events_total",
 		Help: "Sent outbox rows deleted by the reaper after the retention window.",
 	})
+
+	// The by-topic families (release 2, SL-03). A topic that cannot be written
+	// holds back only its own rows, so the unlabelled gauges above — a total and
+	// a global oldest age — cannot say WHICH topic is stuck. These can, and an
+	// alert on outbox_topic_oldest_pending_age_seconds names it. The topic set is
+	// the service's declared topics (dozens at most), never user data. The
+	// unlabelled families stay as they are: the fleet's existing alert and the
+	// sale-service relay's panel read them.
+	topicPendingMessages = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "outbox_topic_pending_messages",
+		Help: "Number of outbox_messages rows in status='pending', by destination topic; 0 once a topic has drained.",
+	}, []string{"topic"})
+
+	topicOldestPendingAge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "outbox_topic_oldest_pending_age_seconds",
+		Help: "Age in seconds of the oldest pending outbox row of a topic; 0 once the topic has drained. A growing value is a topic the relay cannot write.",
+	}, []string{"topic"})
+
+	topicRelayedEvents = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "outbox_topic_relayed_events_total",
+		Help: "Outbox rows forwarded to Kafka and marked sent, by topic.",
+	}, []string{"topic"})
+
+	topicRelayErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "outbox_topic_relay_errors_total",
+		Help: "Relay attempts on a topic that ended in an error (claim, Kafka write or mark), by topic.",
+	}, []string{"topic"})
+
+	// A relay that finds a topic held by another relay's transaction skips it.
+	// That is normal for a moment (a rolling deploy); a counter that keeps
+	// growing for one topic is a holder that never finishes: a hung relay or an
+	// abandoned connection.
+	topicBusy = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "outbox_topic_busy_total",
+		Help: "Relay attempts on a topic skipped because another relay's transaction holds it, by topic. Growing without end means a holder that never finishes.",
+	}, []string{"topic"})
+
+	// kafka-go refused a message for its size: the row can never be sent and
+	// holds its topic (in order) until someone removes it. The log line names it.
+	topicMessageTooLarge = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "outbox_topic_message_too_large_total",
+		Help: "Kafka writes refused with MessageTooLargeError, by topic: a stuck row bigger than the writer's BatchBytes. Any increase needs a person.",
+	}, []string{"topic"})
 )
 
 func init() {
@@ -65,6 +108,12 @@ func init() {
 		relayedEvents,
 		relayErrors,
 		reapedEvents,
+		topicPendingMessages,
+		topicOldestPendingAge,
+		topicRelayedEvents,
+		topicRelayErrors,
+		topicBusy,
+		topicMessageTooLarge,
 	)
 }
 
@@ -81,8 +130,32 @@ func recordRelaySuccess(processed int) {
 	lastSuccessTimestamp.SetToCurrentTime()
 }
 
+// recordRelayed counts rows marked sent by a poll, whether or not the poll was
+// clean: delivered rows are progress even when another topic failed.
+func recordRelayed(n int) {
+	if n > 0 {
+		relayedEvents.Add(float64(n))
+	}
+}
+
 func recordRelayError() {
 	relayErrors.Inc()
+}
+
+func recordTopicRelayed(topic string, n int) {
+	topicRelayedEvents.WithLabelValues(topic).Add(float64(n))
+}
+
+func recordTopicError(topic string) {
+	topicRelayErrors.WithLabelValues(topic).Inc()
+}
+
+func recordTopicBusy(topic string) {
+	topicBusy.WithLabelValues(topic).Inc()
+}
+
+func recordTopicMessageTooLarge(topic string) {
+	topicMessageTooLarge.WithLabelValues(topic).Inc()
 }
 
 func recordReaped(deleted int64) {
@@ -100,11 +173,21 @@ func recordReaped(deleted int64) {
 // all. Production wiring passes Store.PendingStats.
 type statsQueryFn func(ctx context.Context) (pendingCount int64, oldestPendingAgeSeconds float64, err error)
 
-// sampler periodically publishes the two outbox gauges.
+// topicStatsQueryFn returns the pending backlog of every topic that has one.
+type topicStatsQueryFn func(ctx context.Context) ([]TopicStat, error)
+
+// sampler periodically publishes the outbox backlog gauges: the two totals and,
+// when byTopic is set, the pair per topic.
 type sampler struct {
 	query    statsQueryFn
+	byTopic  topicStatsQueryFn
 	interval time.Duration
 	logger   *zap.Logger
+
+	// seen is every topic a by-topic gauge was ever set for. A topic that has
+	// drained is absent from the next query, and a gauge left at its last value
+	// would read as a stuck topic forever: it is set to 0 instead.
+	seen map[string]struct{}
 }
 
 func newSampler(query statsQueryFn, interval time.Duration, logger *zap.Logger) *sampler {
@@ -117,7 +200,13 @@ func newSampler(query statsQueryFn, interval time.Duration, logger *zap.Logger) 
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &sampler{query: query, interval: interval, logger: logger}
+	return &sampler{query: query, interval: interval, logger: logger, seen: make(map[string]struct{})}
+}
+
+// withTopics makes the sampler publish the by-topic gauges too.
+func (s *sampler) withTopics(q topicStatsQueryFn) *sampler {
+	s.byTopic = q
+	return s
 }
 
 // run samples immediately, then on every tick until ctx is cancelled.
@@ -155,4 +244,32 @@ func (s *sampler) collect(ctx context.Context) {
 
 	pendingMessages.Set(float64(pending))
 	oldestPendingAge.Set(oldestAge)
+
+	s.collectTopics(ctx)
+}
+
+// collectTopics updates the by-topic gauges. Like collect it leaves them
+// untouched on a query error.
+func (s *sampler) collectTopics(ctx context.Context) {
+	if s.byTopic == nil {
+		return
+	}
+	stats, err := s.byTopic(ctx)
+	if err != nil {
+		s.logger.Warn("outbox metrics: pending stats by topic query failed", zap.Error(err))
+		return
+	}
+	now := make(map[string]struct{}, len(stats))
+	for _, st := range stats {
+		now[st.Topic] = struct{}{}
+		s.seen[st.Topic] = struct{}{}
+		topicPendingMessages.WithLabelValues(st.Topic).Set(float64(st.Pending))
+		topicOldestPendingAge.WithLabelValues(st.Topic).Set(st.OldestAgeSeconds)
+	}
+	for topic := range s.seen {
+		if _, pending := now[topic]; !pending {
+			topicPendingMessages.WithLabelValues(topic).Set(0)
+			topicOldestPendingAge.WithLabelValues(topic).Set(0)
+		}
+	}
 }

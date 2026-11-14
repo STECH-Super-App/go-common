@@ -2,6 +2,333 @@
 
 ## [Unreleased]
 
+### Release 2 — outbox, consumer and idempotency rework (audit-fix campaign wave 4)
+
+Fixes SL-00, SL-02, SL-03, SL-04, SL-11 (and with them SL-09's second half, SL-28, SL-31; B-04, NOTIF-02, ORD-04, B-09, TO-L3, MED-05 for the library part) and adds `pkg/idempotency` (spec §3.2). Spec: `docs/superpowers/specs/2026-11-14-audit-fix-campaign-design.md` §3.1, §3.2, §3.4. Not in this release: SL-10 (a per-aggregate sequence column — "no new columns" was the owner's rule for the relay), SL-P5.
+
+#### What changed, in one paragraph
+
+The relay claims, sends and marks **one topic per transaction** (a stuck topic waits in order, the others flow). `PublishProto` refuses an event over the Kafka record limit. `events.NewDispatcher` **requires** a `Deduplicator` that only the library can build, and handlers get the dedup transaction as an argument (`HandleTx`), so an event's effect and its "processed" mark are one atomic commit. One exported function, `events.Classify`, decides what a failed message deserves: dead-letter at once only for decode failures, `ErrPoisonPill` and validation (400/422/`input.Failure`); everything else is retried in place for about two minutes, then dead-lettered. **A failed dead-letter write now stops the consumer** (it used to lose the message: this **reverses go-common#38**). `pkg/idempotency` is the one REST idempotency.
+
+**Two start-up panics are new, both loud and both at construction** (a service that still wires the old way fails at boot, not in production): `events.NewDispatcher` without a consumer group (neither `WithGroup` nor a reader that exposes its `GroupID`), and `outbox.New` / `outbox.NewRelay` with a writer that does not partition by key (a hand-built `kafka.Writer` without `Balancer: &kafka.Hash{}`). `kafkawriter.NewProducer` / `NewTopicWriter` and a `kafka.Reader` with a `GroupID` need no change.
+
+#### UPGRADING — release 2 (steps for a service agent, in order)
+
+**0. Know what you are touching.** Per Go service: `grep -rn "events.NewDispatcher\|events.WithDedup\|events.Handle\|outbox.NewDeduplicator\|NewDeduplicator\|FetchPending\|Idempotency-Key\|idempotency" --include=*.go .`
+
+**1. Bump go-common.** `go get github.com/STECH-Super-App/go-common@<release 2 sha>`; `go mod tidy`. Expect compile errors in exactly these places:
+
+| Compile error | Cause | Fix |
+|---|---|---|
+| `not enough arguments in call to events.NewDispatcher` | the deduplicator is now a required 3rd argument | step 3 |
+| `undefined: events.WithDedup` | removed | step 3 |
+| `cannot use … as events.Deduplicator … unexported method` | `events.Deduplicator` is sealed; `*outbox.Deduplicator` and hand-written fakes no longer satisfy it | step 3; fakes in tests become `events.NewMemoryDeduplicator()` |
+| `undefined: (*outbox.Store).FetchPending / MarkSent / MarkSentBatch` | removed (a mark outside the claim's transaction is SL-02) | nobody outside go-common should call them; if you do, use `outbox.New(...).Run` |
+
+And two **start-up panics** (no compile error): `events.NewDispatcher: no consumer group` → step 3; `COMMON_KAFKA_WRITER_UNSAFE … Balancer is …: a domain event must stay on the partition of its key` from `outbox.New` / `outbox.NewRelay` → build the writer with `kafkawriter.NewProducer(brokers)` (it sets `&kafka.Hash{}`), or add `Balancer: &kafka.Hash{}` to a hand-built one.
+
+**2. Migrations.** Nothing to add if `outbox.Migrate(url)` already runs on every boot (it must). **Its position relative to the service's own migrations does not matter** — either order is safe, tested both ways (chat-service runs it *before* its own migrations, auth-service before its own `Up`, the others after): every statement that could meet an object the service's own migration created (its copy of `outbox_messages` and its two indexes) is `IF NOT EXISTS`, and go-common's migrations 001 and 002 were given the missing `IF NOT EXISTS` on their indexes for this (a database that already recorded them is unaffected). It now also creates, in the same goose table `goose_db_version_outbox` (migrations 005–007):
+- `processed_events` + `idx_processed_events_reaper` (the consumer deduplicator);
+- **`common_idempotency_keys`** + `common_idempotency_keys_pkey`, `common_idempotency_keys_resource_both_or_none`, `idx_common_idempotency_keys_reaper` (REST idempotency). The `common_` prefix is the point: order-, seo- and machinery-service already own an `idempotency_keys` table of another shape, and the library never touches it. **No other name the library creates collides with a service's** (checked against every migration and runtime DDL of the 15 services: `processed_events` exists only here — chat-service's table is `conversation_processed_events`; the index and constraint names above and `idx_outbox_pending_topic`, `idx_outbox_pending`, `idx_outbox_reaper`, `idx_processed_outbox_reaper`, `idx_processed_events_reaper` appear in no Go service's migration except chat's and auth's own `IF NOT EXISTS` copies of the first outbox pair; sale-service's Laravel outbox tables use the same index names in databases that never run `outbox.Migrate`);
+- `idx_outbox_pending_topic`, built **`CONCURRENTLY`** (migration 007 is `-- +goose NO TRANSACTION`): it does not block the service's writes however large `outbox_messages` is. It waits for the transactions open at its start, so the first boot after the bump can take as long as the longest running transaction.
+
+`outbox.Migrate` holds a Postgres advisory lock (polled, never blocking) while it runs, so pods that boot together apply the migrations once and the others wait; an interrupted concurrent build leaves an INVALID index that the next `Migrate` drops and rebuilds. A **consumer-only** service calls `outbox.Migrate` too (the empty `outbox_messages` table is harmless). After it, call `dedup.Ready(ctx)` once at start-up and treat an error as fatal (see step 3): without the table every message would dead-letter after two minutes.
+
+**3. Consumers: the deduplicator and the handler form.**
+
+*Wiring.*
+```go
+// BEFORE
+dedup := outbox.NewDeduplicator(pool)
+disp := events.NewDispatcher(reader, dlq, events.WithGroup(group), events.WithLogger(log), events.WithDedup(dedup))
+events.Handle(disp, h.onUserDeleted)
+app.Worker("user-events", func(ctx context.Context) error { err := disp.Run(ctx); /* ErrLeaveUncommitted mapping */ return err })
+
+// AFTER
+dedup := events.NewPostgresDeduplicator(pool)
+if err := dedup.Ready(ctx); err != nil { log.Fatal(...) } // after outbox.Migrate
+disp := events.NewDispatcher(reader, dlq, dedup, events.WithGroup(group), events.WithLogger(log))
+events.HandleTx(disp, h.onUserDeleted)
+app.Worker("user-events", disp.Worker(app.Stopping())) // replaces any hand-written ErrLeaveUncommitted mapping
+```
+- Constructors that took `dedup events.Deduplicator` keep the parameter type; only the value changes (`events.NewPostgresDeduplicator(pool)`).
+- A consumer that had **no** dedup (notification-service's admission consumer, crm-sync-service) now passes one. notification-service: its admission transaction claimed the event id itself — convert that handler to `HandleTx` and **delete its own claim** (a second claim would conflict). crm-sync-service: gets a small Postgres database (owner decision): DSN in config, `outbox.Migrate`, `events.NewPostgresDeduplicator`, and the reaper as a worker (see the next bullet).
+- One dedup value per service is fine; the claim is keyed `(group, event_id)`. **The group is required.** `NewDispatcher` takes it from the reader when the reader exposes its `GroupID` (a `*kafka.Reader` built with one: nothing to add), else you must pass `events.WithGroup(<the reader's GroupID>)` verbatim — otherwise it **panics** at construction (release 2's first cut defaulted to `"unknown"`, which made two consumers of one database share claims and drop each other's events). A wrapper type around the reader that hides `Config()` needs `WithGroup`; a unit test's fake reader needs `WithGroup("test")`. An explicit `WithGroup` wins over the reader's. A typed-nil deduplicator (`(*events.PostgresDeduplicator)(nil)`) panics too.
+- **Every service that consumes without running `outbox.New(...).Run` needs the reaper as a worker** (a consumer-only service is not only crm-sync-service): `reaper := outbox.NewReaper(outbox.NewStore(pool), log, outbox.DefaultConfig().Reaper); app.Worker("reaper", reaper.Run)`. Without it `processed_events` grows by a row per consumed event for ever. A service that runs `outbox.New(...).Run` already has it.
+- `WithRetry` and `WithMaxRetries` still compile and keep the old retry-**tier** behaviour. To adopt in-place retry (recommended) delete `WithRetry` and the retry topic's reader, writer and Kafka topic declarations.
+
+*Converting a handler (the transaction form).* The dispatcher opens the transaction; you write through it and pass it down. A write through the pool is a second transaction and is NOT covered.
+```go
+// BEFORE: handler + service each open their own transaction
+events.Handle(disp, func(ctx context.Context, e *userv1.UserDeleted) error {
+    return svc.AnonymiseUser(ctx, e.UserId)            // svc does tx.RunInTx(...) inside
+})
+func (s *Service) AnonymiseUser(ctx context.Context, id string) error {
+    return s.tx.RunInTx(ctx, func(tx outbox.Tx) error {
+        if err := s.repo.WithTx(tx).Anonymise(ctx, id); err != nil { return err }
+        return s.pub.PublishProto(ctx, tx, opts)
+    })
+}
+
+// AFTER: the dispatcher's transaction is the only one
+events.HandleTx(disp, func(ctx context.Context, tx events.Tx, e *userv1.UserDeleted) error {
+    return svc.AnonymiseUser(ctx, tx, e.UserId)
+})
+func (s *Service) AnonymiseUser(ctx context.Context, tx events.Tx, id string) error {  // events.Tx = pgx.Tx, assignable to outbox.Tx
+    if err := s.repo.WithTx(tx).Anonymise(ctx, id); err != nil { return err }
+    return s.pub.PublishProto(ctx, tx, opts)           // the event commits with the handler
+}
+```
+If the same service method is also called from an HTTP handler, split it: `AnonymiseUser(ctx, id)` opens a transaction and calls `AnonymiseUserTx(ctx, tx, id)`; the Kafka handler calls the `…Tx` one. A handler may convert one at a time: `Handle` and `HandleTx` coexist on one dispatcher, and the old form still deduplicates (non-atomically, as before). A non-Postgres effect (an HTTP call, a push) is not atomic either way: keep it idempotent. A handler that returns an error rolls the claim back with its writes, so the retry starts clean.
+
+*Which handler form — a decision table.* The transaction form is for handlers that only touch the database. A handler that first does **slow work that is not a database write** — media tools, an HTTP call with rate-gate waits — must not do it inside `HandleTx`: the dispatcher opened the transaction before calling it, so the transaction sits open and idle for the whole wait, pinning a pooled connection and holding back vacuum (media-service raised its per-message timeout and pool for exactly this; crm-sync-service built a process-wide gate so only one message holds a transaction). Use `HandlePrepared`:
+
+| the handler… | form |
+|---|---|
+| reads and writes the database, publishes outbox events | `HandleTx` |
+| does slow external work, **then** writes | `HandlePrepared` (slow part in `prepare`, writes in `apply`) |
+| does slow I/O inside a transaction | never |
+
+```go
+// BEFORE (media-service's video worker): ffmpeg runs for minutes inside the dispatcher's transaction
+events.HandleTx(disp, func(ctx context.Context, tx events.Tx, e *mediav1.FileUploaded) error {
+    return processVideo(ctx, tx, log, storage, processor, repo, meta, e) // read object, ffprobe, ffmpeg, write thumbnail, THEN UPDATE rows via tx
+})
+disp := events.NewDispatcher(reader, dlq, dedup, events.WithMessageTimeout(videoMessageTimeout+videoMessageSlack), ...)
+
+// AFTER: the tools run with no transaction; only the row writes hold one, for milliseconds
+events.HandlePrepared(disp,
+    func(ctx context.Context, e *mediav1.FileUploaded) (videoResult, error) {
+        return probeAndThumbnail(ctx, storage, processor, e) // read object, ffprobe, ffmpeg, write the thumbnail OBJECT under a deterministic key
+    },
+    func(ctx context.Context, tx events.Tx, e *mediav1.FileUploaded, r videoResult) error {
+        return writeVideoRows(ctx, tx, repo, meta, e, r)     // the UPDATE + the processed mark: one short transaction
+    })
+disp := events.NewDispatcher(reader, dlq, dedup, events.WithPrepareTimeout(videoMessageTimeout), ...) // or EVENTS_PREPARE_TIMEOUT; apply keeps its 30 s
+```
+`HandlePrepared` keeps everything `HandleTx` guarantees; the **one new obligation is that `prepare` is idempotent**: it runs again after a failed `apply`, a failed commit or a crash, and a duplicate delivered at the same moment runs it in two pods (one applies). Nothing caches `prepare`'s result across attempts. Overwriting an object under a deterministic key (the thumbnail) is the right shape. A redelivery of an already-processed event skips `prepare` entirely. Timeouts: `EVENTS_PREPARE_TIMEOUT` (**10 min**; `WithPrepareTimeout`) bounds the read-only check and `prepare`, `EVENTS_APPLY_TIMEOUT` (**30 s**; `WithApplyTimeout`) bounds the transaction (claim, `apply`, commit) and starts afresh when `prepare` ends. `EVENTS_MESSAGE_TIMEOUT` (60 s) is unchanged and still bounds a `HandleTx` attempt — as a bound on an open transaction, which is why it stays short. **The retry window now runs from the first failure** (it ran from the first attempt): a `prepare` that takes minutes and then fails still gets its in-place retries instead of being dead-lettered at once; for a handler that fails fast nothing changes.
+
+*Handler errors — what to return.* Use `events.Classify(err)` in your handler tests. **Behaviour change you will see in tests:** an error that is not a decode failure, an `ErrPoisonPill` or a validation failure (`*errors.AppError` 400/422, `*input.Failure`) is no longer dead-lettered at once; it is retried in place for `EVENTS_RETRY_WINDOW` (2 min) first. Tests that fed a handler an arbitrary error and expected a dead letter must either return a validation/poison error, or build the dispatcher with `events.WithRetryWindow(50*time.Millisecond), events.WithRetryBackoff(5*time.Millisecond, 10*time.Millisecond)`. Review your handlers' errors against the table: a 404/409/503 that is **final** (the event can never succeed) must wrap `events.ErrPoisonPill`; one that is a race or an outage needs nothing. Remove hand-written "pause and return `ErrLeaveUncommitted` on a Postgres outage" code unless it is needed for something else: the in-place retry covers it, and a shutdown during a retry leaves the message uncommitted by itself.
+
+*Dead-letter write failure.* Nothing to write: `disp.Worker(app.Stopping())` returns the error, `lifecycle` exits non-zero, Kubernetes restarts the pod, Kafka redelivers. **Every consumer's `<topic>.dlq.<group>` topic must exist before this release runs** (it already had to: Critical Rule 13); a missing tier now restarts the pod in a loop instead of silently losing the message — that is the intent. Do not add a retry-after-restart wrapper.
+
+*Unit tests.* `events.NewDispatcher(reader, dlq, events.NewMemoryDeduplicator(), opts...)`. The in-memory deduplicator gives handlers a **nil** `events.Tx`; a handler test that needs a real transaction uses a Postgres test database (`outbox.Migrate` + `events.NewPostgresDeduplicator`). Delete hand-written dedup fakes (the interface is sealed). Every dispatcher a test builds needs `events.WithGroup(...)` unless its fake reader exposes a `GroupID`.
+
+*A reader closed while the process runs.* `disp.Worker(...)` returns an error wrapping `events.ErrReaderClosed` (500 `COMMON_EVENTS_READER_CLOSED`) when the reader is closed (EOF) and the process is not stopping — a dead consumer restarts the pod instead of leaving it alive. `Run` itself still returns `nil` on a closed reader.
+
+**4. Producers.** No code change when the writer comes from `kafkawriter.NewProducer` (see the balancer panic in step 1). `PublishProto` now returns a typed **422 `COMMON_OUTBOX_EVENT_TOO_LARGE`** for an event over `OUTBOX_MAX_MESSAGE_BYTES` (900000), measured exactly as it will be sent (payload as Postgres' `jsonb::text`, key and headers): the request that built it fails (it is a typed AppError for the response envelope), and nothing enters the outbox. The relay is replaced under the same `outbox.New(...).Run`: no wiring change. A service that wraps `PublishProto` against the in-memory `outbox.TestStore` still gets the cheap compact-size check only.
+
+*Connection pool arithmetic.* The relay writes up to **R = min(`OUTBOX_TOPIC_CONCURRENCY`, max(1, MaxConns / 4))** topics at once, each holding one pooled connection (an open transaction) for the length of its Kafka write — up to `OUTBOX_SEND_TIMEOUT` (30 s) when the broker hangs. It logs once at Warn when the pool caps it. Size the pool so that
+
+> **MaxConns ≥ R + D + 2 + P**, with R ≤ MaxConns / 4
+
+where D is the number of dispatchers in the process (each holds one connection while it handles a message), 2 is the reaper and the metrics sampler (brief, one each), and P is the request path's peak concurrent DB work. The relay never takes more than a quarter of the pool, so a Kafka outage leaves at least 3/4 of it to D and P; to run all 4 default topic slots the pool needs **MaxConns ≥ 16**. pgx's default when `MaxConns` is unset is `max(4, number of CPUs)`: a small pod with the default gets R = 1, which is correct for a quiet service and slow for one with many busy topics — raise `MaxConns` (not `OUTBOX_TOPIC_CONCURRENCY`) when `outbox_topic_oldest_pending_age_seconds` grows on healthy topics.
+
+**5. REST idempotency (every endpoint that has its own idempotency today).**
+```go
+// BEFORE: a middleware wraps the route; a table with an in_progress state; the response body is stored and replayed
+g.POST("/requests", h.Create, orderapi.IdempotencyMiddleware(repo, ttl, tenantKeyFn))
+
+// AFTER
+idempotency.Post(g, "/requests", h.Create)       // registers Require() in front of the handler and tags the route
+
+func (h *Handler) Create(c echo.Context) error {
+    claim, err := idempotency.ClaimFor(c, callerUserID.String())   // caller = verified token, never the body
+    if err != nil { return response.JSONError(c, err) }
+    order, err := h.svc.Create(c.Request().Context(), claim, cmd)  // the create method REQUIRES the claim
+    ...
+}
+func (s *Service) Create(ctx context.Context, claim idempotency.Claim, cmd Cmd) (*Order, error) {
+    var out *Order
+    err := s.tx.RunInTx(ctx, func(tx outbox.Tx) error {
+        pgxTx, _ := outbox.TxAsPgx(tx)
+        outcome, err := claim.Run(ctx, pgxTx, func(ctx context.Context) (idempotency.Resource, error) {
+            o, err := s.createOrder(ctx, tx, cmd)        // the real work, in tx
+            if err != nil { return idempotency.Resource{}, err }
+            out = o
+            return idempotency.Resource{Type: "order", ID: o.ID.String()}, nil
+        })
+        if err != nil { return err }
+        if outcome.Replayed {                              // the first result: load the record, then the NORMAL permission check
+            out, err = s.getForCaller(ctx, tx, outcome.Resource.ID, cmd.Caller)
+        }
+        return err
+    })
+    return out, err
+}
+```
+- Delete the service's idempotency middleware, repository, the "in progress"/TTL/`Release`/`Complete` code and the stored response bodies. **The service's own `idempotency_keys` table (order-, seo-, machinery-service) stays exactly as it is** — `outbox.Migrate` creates `common_idempotency_keys` beside it and never touches it — **until every endpoint that used it has moved to `pkg/idempotency`**; then drop it in its own, later migration (a **new** file), once the release is live and the 24 h of keys left in it are over. Until then the file that still reads it is listed in the `lintguards` exempt map with that reason (the `HandRolledIdempotencyTables` rule flags a table called `idempotency_*`). machinery-service: its runtime `EnsureSchema` keeps creating its table until the last endpoint has moved; then delete the call and drop the table in a migration. The library's table is `common_idempotency_keys`.
+- Same key + same body → the replay path above; same key + different body → 409 `COMMON_IDEMPOTENCY_KEY_REUSED` (order-service's `ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH`, machinery's equivalents are replaced); a missing header → 400 `COMMON_IDEMPOTENCY_KEY_REQUIRED` (was `ORDER_IDEMPOTENCY_KEY_REQUIRED`); malformed → 400 `COMMON_IDEMPOTENCY_KEY_INVALID`. **i18n-catalog needs en/ru texts for the eight new `COMMON_IDEMPOTENCY_*` Reasons (`_KEY_REQUIRED`, `_KEY_INVALID`, `_KEY_REUSED`, `_BODY_UNREADABLE`, `_BODY_TOO_LARGE`, `_ROUTE_UNGUARDED`, `_RECORD_INCOMPLETE`, `_FAILED` — the last three are 500s that normally never reach a client) and `COMMON_OUTBOX_EVENT_TOO_LARGE`, `COMMON_EVENTS_*`** — and the frontend's error map is told the old per-service Reasons are gone.
+- A replay **no longer returns the original response bytes**: it returns the current state of the record the first request created, to a caller who passes the permission check. Clients that compared the two see the live record.
+- Keep the 2xx-only behaviour: a failed first request leaves no key, so its retry is a first request (the old code needed `Release` for that).
+- One test per service: `idempotency.CheckRoutes(t, newRouter(t), exempt)` — every POST/PUT/PATCH/DELETE route is registered through `idempotency.Post/Put/Patch/Delete/Add` or listed in `exempt` with a reason (admin force-expire endpoints, webhooks with their own dedup, …). **That proves registration, not use.** Add the second test, `idempotency.CheckRoutesRun(t, newRouter(t), func(method, path string) idempotency.RouteRun {…})`: it drives each idempotent route once with the request you build for it and fails when the handler answered 2xx without running a `Claim` (or skip a route with a reason that is logged). At run time the same condition is observed — `idempotency_unclaimed_responses_total{route}` and an Error log; the success itself is never turned into a failure.
+- Behind a key, an endpoint that has a natural unique constraint (a favourite, a follow) can keep the constraint; use the key for the endpoints that create a record per request.
+
+*Optional keys, large bodies, multipart (decision table).* **Required is the default for every new endpoint.** The other modes exist for endpoints that already have shipped clients:
+
+| the route… | registrar | notes |
+|---|---|---|
+| is new, or its clients can be changed | `idempotency.Post/Put/Patch/Delete/Add` | a missing key is 400 `COMMON_IDEMPOTENCY_KEY_REQUIRED` |
+| has shipped web/mobile clients that send **no** key (the old middleware made it optional) | `idempotency.PostOptional/PutOptional/PatchOptional/DeleteOptional/AddOptional` | an absent (or empty) header runs the request once with **no idempotency** (no key row; `ClaimFor` returns a keyless claim, `claim.Keyless()`; the body is not read or capped); a present header is enforced exactly as on a required route. Counted per route in `idempotency_keyless_requests_total{route}` — flip the route to required when it stays flat. List it in `idempotency.CheckOptionalRoutes(t, router, map[string]string{"POST /machinery": "<why>"})` |
+| takes an upload (a body over 1 MiB, e.g. photos up to 10 MiB) | `idempotency.With(idempotency.WithMaxBody(10<<20)).Post(...)` | the cap is per route, default 1 MiB, at most `MaxBodyLimit` (64 MiB; larger panics). The body is held in memory **once** (chunked, hashed while read): the peak is the cap × concurrent keyed uploads on that route. No disk spooling. Raise `httpserver`'s body limit for the group too |
+| takes a multipart form that clients retry | `idempotency.With(idempotency.WithMaxBody(...), idempotency.WithMultipartHash()).Post(...)` | without it a retry with a new multipart boundary hashes differently → 409 `COMMON_IDEMPOTENCY_KEY_REUSED`. With it the hash covers each part's name, file name, content type and content hash, boundary ignored (opt-in) |
+
+Options combine in `With(...)`; `Optional()` is an option too (`With(Optional(), WithMaxBody(...)).Post`). A keyless request is never hashed, so it is not capped by the idempotency layer. In a test, `CheckRoutesRun` drives an optional route twice (with a key, then without; `build` is called twice and must return a request that can succeed twice), and `CheckRoutes` counts optional routes as guarded. machinery-service's `POST /machinery` and `POST /machinery/:id/operators` are the first optional routes; its photo upload should be `With(WithMaxBody(10<<20), WithMultipartHash())`.
+
+**6. Guards (when the service switches the strict lint on; per service).** Makefile `LINTER_CONFIG_URL` → `.golangci.strict.yml` (if not already), and in the service's one `lintguards` test:
+```go
+lintguards.Run(t, "../..", append(lintguards.DefaultRules(),
+    lintguards.LegacyEventHandlers(),                              // once every handler is HandleTx
+    lintguards.NoPoolIn("internal/infrastructure/kafka/"),         // the packages holding event handlers
+), exempt)
+```
+New findings to fix or exempt (with a reason): a `kafka.Reader` read loop (`FetchMessage`/`ReadMessage`/`CommitMessages` on a `*kafka.Reader`; an adapter that wraps a reader, like crm-sync's lazy reader, marks the line `//nolint:forbidigo // <reason>`); `events.NewMemoryDeduplicator` or `outbox.NewDeduplicator` in non-test code; the literal `"Idempotency-Key"` **as the key of a header access** (`r.Header.Get("Idempotency-Key")`, `.Values/.Set/…`, `.Header[...]` — a CORS allow-list entry, a config default or an error's field name is not a hit; to name the header use the constant `idempotency.Header`); SQL naming a table `idempotency_*` or `common_idempotency_keys`, `processed_events`, `processed_outbox_messages`, `outbox_messages` **as a whole identifier after `FROM`/`INTO`/`UPDATE`/`JOIN`/`TABLE`/`TRUNCATE`** (columns such as `orders.idempotency_key` and longer names such as `conversation_processed_events` are not hits). `DefaultRules()` gained five rules, so a service that already runs the guard test may see these; a service's own old `idempotency_keys` table is exempted by file, with a reason, until it is dropped. **`lintguards.Scan` now fails when its root holds no non-test `.go` file**: a guard test with a wrong relative path was green for ever.
+
+**7. Alerts and dashboards (infrastructure repo, by hand).** New: `outbox_topic_oldest_pending_age_seconds{topic}` and `outbox_topic_pending_messages{topic}` (alert on the age; it names the stuck topic); `events_consumer_inplace_retries_total`; `events_consumer_dead_lettered_total{reason="max_retries"}` now means "two minutes of retries failed" (alert on any increase); `events_consumer_failurepath_errors_total` now means "the consumer stopped and the pod restarts" (alert on any increase and on the restart). `outbox_topic_pending_messages` saturates at 10 000 per topic (the age gauge is exact). Also new: `outbox_topic_busy_total{topic}` (a topic skipped because another relay holds it; growing without end = a hung holder; a Warn line after 2 × `OUTBOX_SEND_TIMEOUT`), `outbox_topic_message_too_large_total{topic}` (kafka-go refused a row for its size: any increase needs a person, the Error log names the `event_id`), `idempotency_unclaimed_responses_total{route}` (a 2xx on an idempotent route whose handler never ran a Claim: any increase is a bug), `idempotency_keyless_requests_total{route}` (calls to an OPTIONAL route without a key: not a bug; flat means the route can become required). Changed: `outbox_relay_errors_total` now counts failed forwards (per topic attempt) and list failures rather than whole polls; `outbox_last_success_timestamp_seconds` stops refreshing while ANY topic is failing, so the existing "relay stalled" alert also fires for one stuck topic. Unchanged names: `outbox_pending_messages`, `outbox_oldest_pending_age_seconds`.
+
+**8. Environment keys (all optional).** `OUTBOX_TOPIC_CONCURRENCY` (4, capped to a quarter of the pool), `OUTBOX_SEND_TIMEOUT` (30s), `OUTBOX_MAX_MESSAGE_BYTES` (900000), `OUTBOX_IDEMPOTENCY_RETENTION` (24h), `EVENTS_RETRY_WINDOW` (2m), `EVENTS_RETRY_INITIAL_BACKOFF` (500ms), `EVENTS_RETRY_MAX_BACKOFF` (15s), `EVENTS_MESSAGE_TIMEOUT` (60s, `HandleTx` attempts), `EVENTS_PREPARE_TIMEOUT` (10m) and `EVENTS_APPLY_TIMEOUT` (30s) (`HandlePrepared`). Existing `OUTBOX_*` keys are unchanged; `OUTBOX_BATCH_SIZE` now means rows **per topic** per poll.
+
+**9. PHP consumers (sale-service) follow the same table by hand:** dead-letter at once when the message cannot be decoded, is marked poison, fails validation (400/422), **or the handler throws an uncaught exception (the PHP twin of `ClassPanic`, reason `handler_panic`, no retry)**; everything else (including 404, 409, 503, timeouts) is retried with backoff for about two minutes, then dead-lettered with an alert; a failed dead-letter write stops the consumer non-zero. `events.Classify` is the reference.
+
+**10. E-mail (`input.Email`, rule «B», owner decision 14.11.2026, SL-19).** UPGRADING: **no code change is needed** unless a service compares, looks up or indexes an e-mail address without going through `input.Email` first. Every address stored today is ASCII and keeps its meaning (a test replays release 1's own rule over thousands of addresses). What changes is that a Cyrillic domain such as `ivan@почта.рф` is now accepted and **stored as its punycode form** `ivan@xn--80a1acny.xn--p1ai`, so every place that takes a typed address must run it through `input.Email` before it compares it to a stored one, uses it as a lookup key or a unique index value, or hands it on. `input.EmailDisplay(stored)` turns a stored address back into what a person typed, for display only. Details in the next section. Grep: `grep -rniE "lower\(.*email|email.*(unique|=\s*\$)|strings\.ToLower\(.*[Ee]mail|\bemail\b.*(Trim|TrimSpace)" --include=*.go --include=*.sql .`.
+
+#### Input — e-mail rule «B»: Cyrillic domains only (owner decision 14.11.2026, SL-19)
+
+`input.Email` accepts an internationalised domain, in Cyrillic only, and stores ONE canonical form:
+
+| address | verdict |
+|---|---|
+| `ivan@mail.ru` | accepted |
+| `ivan@почта.рф` | accepted, stored `ivan@xn--80a1acny.xn--p1ai` |
+| `ivan@xn--80a1acny.xn--p1ai` (also `XN--80A1ACNY.XN--P1AI`) | accepted, **the same stored value** |
+| `ivan@почта.ru`, `ivan@mail.рф` | accepted: every label is single-script (the DNS allows both) |
+| `иван@почта.рф`, `ivаn@mail.ru` | refused: the local part is ASCII only |
+| `ivan@mаil.ru`, `ivan@почtа.рф` | refused: a label mixing Latin and Cyrillic |
+| Greek, Armenian, Han, accented-Latin domains (`münchen.de`) and their `xn--` forms | refused: Cyrillic is the only non-ASCII script |
+| `ivan@xn--garbage.ru`, `ivan@-почта.рф`, `ivan@почта..рф`, `ivan@почта.рф.`, `ivan@почта`, a label over 63 octets as an A-label | refused |
+| zero-width, bidi or soft-hyphen characters in either part | refused (as before) |
+
+Each label is validated with `golang.org/x/net/idna` (Registration profile, now a direct dependency of go-common; the version was already in `go.mod`) and a single-script rule: all letters ASCII, or all Cyrillic; digits and hyphen with either. The value is NFC-normalised first.
+
+**Stored form: the A-label (punycode) form, lower-cased domain, local part unchanged.** It is always ASCII, so uniqueness is a byte comparison (the Unicode and the punycode spelling of one mailbox collide by construction) and every SMTP library and provider takes it as is. The 254 / 253 / 63 caps and `maxRunes` are measured on the stored form. Local-part CASE IS STILL KEPT (unchanged since release 1): compare lower-cased values where identity matters.
+
+`input.EmailDisplay(stored) string` converts a stored address back to Unicode for showing to a person (display only: never store, compare or send to it). Only Cyrillic labels are shown in Unicode; a domain with any other `xn--` label is returned as stored, so a look-alike A-label is never rendered as the domain it imitates.
+
+Reasons are unchanged: `COMMON_EMAIL_INVALID`, `COMMON_TEXT_TOO_LONG {max}`.
+
+⚠ **Narrowing:** a label that begins `xn--` is now decoded, so `a@xn--garbage.com`, which release 1 accepted as typed, is refused. No real address is affected (an A-label is only ever produced from a Unicode label).
+
+#### Events — a handler panic is dead-lettered at once (owner decision 14.11.2026)
+
+A recovered panic in `Handle`, `HandleTx` or either phase of `HandlePrepared` is a fourth dead-letter-at-once class, **`events.ClassPanic`** (`DeadLetterNow()` is true), with DLQ reason `handler_panic`. Release 2 as first written retried a panic in place for the whole retry window (two minutes by default) and the partition waited; a panic is a bug, the same message meets it on every attempt, so it is no longer retried at all: not in place, and not through the legacy retry tier (`WithRetry`). The stack goes to the log (Error line `handler panicked; dead-lettering the message without a retry`, field `stack`), the handler's transaction is rolled back and its connection released before the dead-letter write, and the offset is committed only after that write succeeded — a failed write still stops the consumer (`ErrDeadLetterWriteFailed`). `events_consumer_dead_lettered_total{reason="handler_panic"}` counts it; it is never counted as an in-place retry. `Classify` documents the class in its table so PHP's hand-written copy mirrors it; a handler cannot return it (only the dispatcher builds it, from a panic it recovered). UPGRADING: no code change; a service whose DLQ alert expected `handler_panic` only after `max_retries`-length delays now sees it at once.
+
+#### Rollout across the fleet: is old/new side by side safe?
+
+There is no required fleet-wide order: each service moves as one deploy (its relay, its dispatchers and its `outbox.Migrate` ship together), and a producer's and a consumer's versions do not depend on each other (the wire format and the envelope are unchanged). Exactly what happens while an old and a new pod of the **same service** run together during a rolling deploy:
+
+- **Migrations** (005–007) are additive (two new tables, one index built concurrently): old pods never read them, and the service's own `idempotency_keys` table is not touched. `outbox.Migrate` runs at the new pod's boot, before its dispatchers start (`dedup.Ready` enforces it), under an advisory lock, so a rolling deploy's two pods do not race. Nothing to run by hand. Rollback: the tables stay, ignored.
+- **Old relay + new relay on one database.** Not worse than today's old + old: the old relay's `FetchPending` takes no lock, so for a short window both can send the same rows (the consumer's deduplicator absorbs it) and, for one key, two relays can interleave. (A kafka-go write that timed out can also still land after the new relay re-sends it: the deduplicator absorbs that too.) The new relay's row locks make an old relay's `SKIP LOCKED` skip rows the new one holds, and an old relay's mark waits for the new one's commit, so no row is lost or left sent-but-pending. Two NEW relays never duplicate or interleave a topic.
+- **Old consumer + new consumer in one group.** The new deduplicator also treats an event recorded in the old `processed_outbox_messages` table as processed, so a message the OLD pod handled and Kafka redelivers to a NEW pod is not run twice. The reverse (new pod handled it, an old pod receives the redelivery) can run the handler once more: it needs a rebalance between the handler's commit and the offset commit of one in-flight message, i.e. at most one repeat per partition at the moment of a handover, and only during the overlap. Handlers must already tolerate a repeat (they did).
+- **A new consumer without the table** dead-letters every message after two minutes: this is what `dedup.Ready` at start-up prevents. **A new consumer without its `<topic>.dlq.<group>` topic** restarts in a loop on the first dead letter (by design; it used to lose the message): the tier must be declared and applied first (Critical Rule 13: topics first, then env, then Deployment).
+- **Rollback to release 1:** safe for the tables (old code ignores them). Claims written by the new deduplicator are unknown to the old one, so redelivered in-flight messages may run once more; idempotency keys are ignored by old code, which has its own table.
+- **crm-sync-service** needs its database (secret, DSN, `outbox.Migrate`) before it can run this release: order = database and secret, then the deploy.
+- **Connections:** a new relay holds up to min(`OUTBOX_TOPIC_CONCURRENCY`, a quarter of the pool) connections while it writes; each dispatcher holds one per message in flight (one, as before). The formula is in step 4. SL-10 (order by app-clock `created_at` of the rows visible at claim time, no per-aggregate sequence) is unchanged and honest in the README.
+
+#### Added (release 2)
+- `pkg/outbox`: `Store.InsertTxLimited` (exact size check), `TopicBacklogCountCap`, metrics `outbox_topic_busy_total`, `outbox_topic_message_too_large_total`, `Store.ForwardTopic`, `SendFunc`, `ForwardResult`, `Store.PendingTopics`, `Store.PendingStatsByTopic`, `TopicStat`, `Store.DeleteProcessedEvents`, `Store.DeleteIdempotencyKeys`, `ErrIdempotencyTableMissing`, `RelayConfig.SendTimeout` / `TopicConcurrency` (`DefaultSendTimeout`, `DefaultTopicConcurrency`), `Config.MaxMessageBytes`, `DefaultMaxMessageBytes`, `WithMaxMessageBytes`, `PublisherOption`, `ReasonEventTooLarge`, `ReaperConfig.IdempotencyRetention`, `DefaultIdempotencyRetention`; migrations `005_create_processed_events`, `006_create_common_idempotency_keys` (table `common_idempotency_keys`), `007_outbox_pending_by_topic` (concurrent); metrics `outbox_topic_pending_messages`, `outbox_topic_oldest_pending_age_seconds`, `outbox_topic_relayed_events_total`, `outbox_topic_relay_errors_total`.
+- `pkg/events`: `NewPostgresDeduplicator`, `(*PostgresDeduplicator).Ready`, `NewMemoryDeduplicator`, the sealed `Deduplicator`, `Tx`, `HandleTx`, `Classify`, `Class` (`ClassDecode`, `ClassPoisonPill`, `ClassValidation`, `ClassPanic`, `ClassRetryable`, `DeadLetterNow`), `(*Dispatcher).Worker`, `ErrReaderClosed`, `ReasonReaderClosed`, `HandlePrepared`, `WithPrepareTimeout`, `WithApplyTimeout`, `DefaultPrepareTimeout`, `DefaultApplyTimeout`, `WithRetryWindow`, `WithRetryBackoff`, `WithMessageTimeout`, `ErrDeadLetterWriteFailed`, `ReasonDeadLetterWriteFailed`, `ReasonDedupFailed`, `ReasonMessageTimeout`, the `Default*` constants, metric `events_consumer_inplace_retries_total`, DLQ reason `validation`.
+- `pkg/input`: `EmailDisplay` (rule «B»); `Email` accepts Cyrillic domains and stores the A-label form (see "Input — e-mail rule «B»").
+- `pkg/idempotency`: the whole package (`ParseKey`, `KeyFromRequest`, `Key`, `Request`, `Claim`, `NewClaim`, `ClaimFromRequest`, `(Claim).Run`, `Resource`, `Outcome`, `Require`, `ClaimFor`, `Add`/`Post`/`Put`/`Patch`/`Delete`, `Registrar`, `WriteRoutesWithout`, `CheckRoutes`, `Routes`, `RouteRun`, `CheckRoutesRun`, `IsKeyReused`, `Reason*`; the options `Option`, `Optional`, `WithMaxBody`, `WithMultipartHash`, `MaxBodyLimit`; `With`/`Mount`; `AddOptional`/`PostOptional`/`PutOptional`/`PatchOptional`/`DeleteOptional`; `Claim.Keyless`; `Mode`, `RequiredRoutes`, `OptionalRoutes`, `CheckOptionalRoutes`; metrics `idempotency_unclaimed_responses_total`, `idempotency_keyless_requests_total`).
+- `pkg/kafkawriter`: `CheckProducer`, `MustCheckProducer` (key-hashing balancer required for domain-event producers).
+- `pkg/lintguards`: `Rule.Contains` / `SQLTables` / `HeaderKeys` / `Selector` / `OnlyUnder`; `IdempotencyKeyHeaderLiterals`, `HandRolledIdempotencyTables`, `HandRolledDeduplicator`, `HandRolledOutbox`, `MemoryDeduplicator` (in `DefaultRules`), `LegacyEventHandlers`, `NoPoolIn` (opt-in). `.golangci.strict.yml`: `kafka.Reader.FetchMessage/ReadMessage/CommitMessages`, `events.NewMemoryDeduplicator`, `outbox.NewDeduplicator`; `scripts/check-guards.sh` proves each fires.
+- `pkg/trustedheaders`: `ClientAddress()` (and so `StripAtEdge()`) gains `X-Original-Forwarded-For`, the name ingress-nginx gives a client's own `X-Forwarded-For` when it does not trust it; the gateway strips it with the rest. `lintguards.ClientAddressHeaderLiterals` bans naming it.
+
+#### Changed (release 2)
+- `events.NewDispatcher(reader, dlq, dedup, opts...)`: `dedup` is required (typed nils refused), and so is a consumer group (the reader's `GroupID` or `WithGroup`; `GroupUnknown` is no longer applied).
+- `outbox.New` / `outbox.NewRelay` use `kafkawriter.CheckProducer`: a writer without a key-hashing balancer panics.
+- `outbox.Migrate` serialises pods with an advisory lock; migrations 001 and 002 gained `IF NOT EXISTS` on their indexes.
+- The relay has no poll barrier: every topic is forwarded on its own clock with its own backoff, in chunks that each fit one kafka-go batch (see the README); topic concurrency is capped to a quarter of the pool.
+- `PendingTopics` is a loose index scan; `PendingStatsByTopic` counts at most `TopicBacklogCountCap` per topic.
+- `lintguards`: the table rules match whole identifiers in statement position and the Idempotency-Key rule matches header accesses, not the word; `Scan` fails on a root with no `.go` file.
+- `events.Handle` is the legacy handler form (still deduplicated; no transaction). Documented DEPRECATED in prose, not with the Go marker (staticcheck's SA1019 would fail every service's lint at once).
+- Failure handling: see "What changed" and `Classify`. `WithRetry` (retry tier) and `WithMaxRetries` still work and are DEPRECATED in prose.
+- The dedup claim is per `(group, event_id)` in `processed_events`; the Reaper deletes it with `OUTBOX_PROCESSED_RETENTION`.
+- `outbox_last_success_timestamp_seconds`: refreshed only by a poll in which every topic succeeded.
+- `OUTBOX_BATCH_SIZE`: rows per topic per poll.
+- The README sections for outbox and events are rewritten (they described removed functions and an "exactly-once" deduplicator: SL-28).
+
+#### Removed (release 2)
+- `events.WithDedup`; the old `events.Deduplicator` interface shape (`Process(ctx, id, fn)`); `outbox.Store.FetchPending`, `MarkSent`, `MarkSentBatch`.
+- **The go-common#38 behaviour** (SL-00): a failed dead-letter write is no longer logged and survived; the dispatcher stops. The log line `failure-path write failed; leaving offset uncommitted for redelivery` is gone; `events_consumer_failurepath_errors_total` now counts a consumer stop, not a lost message.
+- The `GOCOMMON_KNOWN_RED` gate: its two tests (SL-02, SL-00) are ordinary tests now.
+- Deprecated but kept: `outbox.Deduplicator`, `outbox.NewDeduplicator` (banned by the strict lint; `events.NewDispatcher` does not accept it), `Deduplicator.CleanupProcessed`.
+
+### Wave 3 — trusted client address, trace hygiene, chat_read removal (audit-fix campaign)
+
+**UPGRADING.** Roll **api-gateway first**: it must write `X-Client-IP` (`clientip.Set`), strip `trustedheaders.StripAtEdge()` and use `middleware.WithUntrustedParent()` before any service takes this version, because:
+1. `middleware.ClientMiddleware` reads the address from `X-Client-IP` only. It used to fall back to `X-Real-IP`, `X-Forwarded-For`, then the TCP peer; with no valid `X-Client-IP` it now answers 400 `COMMON_CLIENT_INFO_INVALID`.
+2. ⚠ **BREAKING (SL-25):** `auth.Claims.ChatRead`, `auth.ChatReadContext` / `ChatReadMembership`, `ValidateChatReadContext`, `FormatChatReadContext`, `ParseChatReadContext`, `(*ChatReadContext).Membership`, `ValidateChatAccessTokenSize`, `HeaderChatReadContext`, `MaxChatReadContextBytes`, `MaxAuthorizationHeaderBytes`, `MaxChatReadMemberships`, `ChatReadReady/NotReady`, `ChatGrant*`, `ChatRole*`, `ChatTenant*`, `ReasonChatReadContextInvalid` are **removed**. Kept: `HeaderActingTenantID`, `ParseActingTenantID`, `ReasonActingTenantInvalid`. Old tokens that still carry a `chat_read` claim keep decoding (the unknown key is ignored).
+3. Baggage is no longer propagated: `tracing.Init` installs the trace-context propagator only; `outbox.PublishProto` writes `traceparent`/`tracestate` only and drops a caller-supplied `baggage` header; `middleware.Tracing` and the `events` consumer read trace context only.
+
+### Added (wave 3)
+- `pkg/clientip` — `Header`, `MetadataKey`, `MaxLen`, `Parse`, `FromHeader`, `FromRequest`, `FromEcho`, `Set` (gateway only), `NewContext`, `FromContext`, `Middleware`, `UnaryClientInterceptor`, `StreamClientInterceptor`, `UnaryServerInterceptor`, `StreamServerInterceptor` (GW-04, GW-07, ID-24).
+- `pkg/trustedheaders` — `GatewayAsserted`, `ClientAddress`, `TraceContext`, `Retired`, `StripAtEdge`, `Strip`; a test that fails when a new `Header*` constant in `pkg/auth` / `pkg/authz` is not classified.
+- `middleware.Tracing(opts ...TracingOption)` and `middleware.WithUntrustedParent()` (SL-24): the gateway starts a new root and links the caller's span instead of obeying its sampled flag.
+- `.golangci.strict.yml`: `http.Request.RemoteAddr`, `auth.HeaderRealIP`, `auth.HeaderForwardedFor` and `clientip.Set` are banned outside the helper; `lintguards.ClientAddressHeaderLiterals` also bans `X-Forwarded-Port` / `X-Forwarded-Prefix`. `scripts/check-guards.sh` proves the three new rules fire.
+- `httpserver.New` installs `clientip.Middleware`.
+
+### Changed (wave 3)
+- `middleware.ClientMiddleware`: address from `X-Client-IP` only (see UPGRADING).
+- `tracing.Init`: no Baggage in the global propagator (SL-24).
+
+### Removed (wave 3)
+- The `chat_read` claim and everything around it (SL-25), see UPGRADING 2.
+
+### UPGRADING — release 1 (audit-fix campaign, 14.11.2026)
+
+Release 1 is additive except for ONE intentional break (SL-01). Fleet checklist, per Go service, in this order:
+
+1. **Writers (breaking, do first).** Every `*kafka.Writer` handed to `outbox.New`, `outbox.NewRelay`, `events.NewDispatcher` (the DLQ writer) or `events.WithRetry` must be safe, or the service **panics at start-up** with `COMMON_KAFKA_WRITER_UNSAFE`. Replace each hand-built writer: `kafkawriter.NewProducer(brokers)` for the outbox, `kafkawriter.NewTopicWriter(brokers, events.DLQName(...))` / `events.RetryName(...)` for the tiers (`WithCompression(kafka.Snappy)` where the old one set it). `grep -rn "kafka.Writer{" --include=*.go .` lists the sites; a writer with no `RequiredAcks` was `RequireNone`. Expected offenders: tenant-, user-, media-, notification-, organisation-, auth- and chat-service, and every DLQ writer that sets only the retry triple (order-service's `reviewEventsDLQ`, `partsEventsDLQ`).
+2. **`config.GetEnv` empty = unset.** `GetEnv("X", "default")` now returns the default when `X` is set but empty. `grep -rn "GetEnv(" --include=*.go .`: any call that relied on `X=` (empty) to override a non-empty default must switch to `os.LookupEnv`. Typed getters now also write one JSON warn line to stderr for a set-but-unparseable value; nothing else changes.
+3. **Removed:** `middleware.CORS` and `middleware.Logger` (no callers in the fleet — `grep` to confirm). `Logger` users move to `RequestLogger`.
+4. **Behaviour changes to look for in tests:** `input.ParsePage` refuses a page > 10000 (`ParsePageMax` states another bound); `input.Email` refuses non-ASCII / non-dot-atom local parts, numeric TLDs and over-long parts; `input.Body` refuses unbalanced bidi controls; `input` text trim keeps emoji tag sequences and Arabic number signs; `Metrics()` labels any non-standard request method `OTHER`; `response.JSONError` returns 422 for an `*input.Failure`, the `*echo.HTTPError` status for bind/router errors and a `COMMON_INTERNAL` Reason for an untyped error (a service test asserting an empty Reason on a bare 500 changes); `pgerr.InvalidInput` now also claims `22003`, `22007`, `22008`, `54000` (those were 500s); `lifecycle` stops servers at `budget − reserve`, so a closer that used to be skipped behind a stuck handler now runs; `FormatTenantMemberships` omits an entry with a separator in its id or role.
+5. **Typed outbox/db errors:** `outbox` and `db` now return `*errors.AppError` (500, `COMMON_OUTBOX_*` / `COMMON_DB_*`) with the driver error as `Unwrap()` — `errors.As(err, &pgconn.PgError)` still works. A caller that compared error TEXT must use `errors.Is/As`.
+6. **Adopt when convenient (no break):** `httpserver.New`, `grpcopts.NewClient` / `DefaultCallTimeoutFromEnv`, `health.RegisterReadiness(e, app.Stopping())` (point the readiness probe at `/readyz`, keep liveness on `/health`), `authz.ParseTenantMembershipsStrict`, `authz.FormatRolesCSV`, `input.ParsePageMax`. Dedup claims are now reaped (`OUTBOX_PROCESSED_RETENTION`, default 720 h, must exceed topic retention + DLQ replay window).
+7. **Switch the guards on (wave 2, per service):** Makefile `LINTER_CONFIG_URL` → `.golangci.strict.yml`, add one `lintguards.Run` test, fix or `//nolint:forbidigo // reason` each hit. Until then nothing changes.
+8. Add `RequiredAcks` (and the Balancer) to Critical Rule 5 in the dev-setup CLAUDE.md, and the `c.JSON` note: the base file's `^c\.JSON$` forbidigo pattern never matched a call.
+
+### Added (release 1)
+- `pkg/kafkawriter` — **the one Kafka writer constructor** (SL-01): `NewProducer`, `NewTopicWriter`, `WithCompression`, `WithTransport`, `Check`, `MustCheck`, `ReasonUnsafeWriter`, consts `MaxAttempts`, `BackoffFloor`, `BackoffCeiling`. `outbox.New`, `outbox.NewRelay` and `events.NewDispatcher` (DLQ and `WithRetry` writers) panic on an `Async` or `RequireNone` `*kafka.Writer`.
+- `pkg/httpserver` — `New(Config) *echo.Echo`: body limit (default 1 MiB), `ReadHeaderTimeout`/`ReadTimeout`/`IdleTimeout`/`MaxHeaderBytes`, no default `WriteTimeout` (SSE), `ExtractIPDirect`, the standard error handler, `Tracing → requestid → RequestLogger → Metrics → Locale → body limit → panic recovery`. Not forced on any service yet.
+- `pkg/grpcopts` — `UnaryTimeoutInterceptor`, `DefaultCallTimeout`, `DefaultCallTimeoutFromEnv` (`GRPC_CLIENT_CALL_TIMEOUT`, default 10 s, applies only to a context with no deadline), `NewClient`, `ReasonDialFailed` (SL-30).
+- `pkg/health` — `RegisterReadiness(e, stopping)`: `/readyz`, 503 `COMMON_SHUTTING_DOWN` once `App.Stopping()` closes (SL-30).
+- `pkg/lifecycle` — `WithWorkerReserve`, `DefaultWorkerReserve` (SL-05).
+- `pkg/events` — `events_consumer_unhandled_total{topic,group}` and `events_consumer_commit_errors_total{topic,group}`; a missing `event_type` header is a Warn (SL-08).
+- `pkg/outbox` — reaper deletes old processed claims in bounded batches: `Store.DeleteProcessed`, `ErrProcessedTableMissing`, `ReaperConfig.ProcessedRetention` / `ProcessedBatchSize`, `OUTBOX_PROCESSED_RETENTION`, `OUTBOX_PROCESSED_BATCH_SIZE` (SL-09); `DefaultPollInterval`, `DefaultBatchSize`, `DefaultReaperInterval`, `DefaultRetention`, `DefaultProcessedRetention`, `DefaultProcessedBatchSize` (SL-15); `Reason*` constants of the typed errors (SL-26).
+- `pkg/i18n` — `Placeholders(s) ([]string, error)`: the placeholder names of a template from its parse tree (SL-07).
+- `pkg/input` — `ParsePageMax`, `DefaultMaxPage` (SL-20).
+- `pkg/authz` — `ParseTenantMembershipsStrict`, `ReasonTenantMembershipsInvalid`, `FormatRolesCSV` (SL-29).
+- `pkg/metrics` — `MethodLabel` (SL-06).
+- `pkg/db` — `RedisConfig.TLS/DialTimeout/ReadTimeout/WriteTimeout`; `ReasonConfigInvalid`, `ReasonUnavailable` (SL-22, SL-26).
+- `pkg/config` — `SetInvalidHandler`, `InvalidHandler` (SL-23).
+- `pkg/egress` — `ReasonTimeoutInvalid` (SL-32).
+- `pkg/response` — `COMMON_INTERNAL`, `COMMON_BAD_REQUEST`, `COMMON_NOT_FOUND`, `COMMON_METHOD_NOT_ALLOWED`, `COMMON_REQUEST_TOO_LARGE`, `COMMON_UNSUPPORTED_MEDIA_TYPE`, `COMMON_TOO_MANY_REQUESTS` Reasons need `en`/`ru` texts in i18n-catalog (SL-14).
+- `pkg/lintguards` + `.golangci.strict.yml` + `scripts/check-guards.sh` — the mechanical guards of spec §3.4 (see README).
+- Tests: Postgres integration tests for the outbox Store, migrations, Deduplicator and Reaper (`GOCOMMON_TEST_POSTGRES_URL`, CI service container; `REQUIRE_DB=1` fails instead of skipping), plus two known-red tests for release 2 (`GOCOMMON_KNOWN_RED=1`: SL-02 two relays send a row twice, SL-00 a failed DLQ write is committed past) (SL-16). CI now takes its Go version from `go.mod` and lints with the strict config.
+
+### Changed (release 1)
+- ⚠ **BREAKING (SL-01):** see UPGRADING step 1.
+- `config.GetEnv`: an empty variable counts as absent (SL-23). `db.PostgresConfig`: a zero field no longer overrides the URL / pgx default (SL-22). `egress`: the transport is built from a literal, no longer cloned from `http.DefaultTransport`; `HTTPClient` refuses a non-positive timeout and shares one transport per configuration (SL-32).
+- `outbox`: a non-positive relay/reaper config value means its default (SL-15); all errors are typed (SL-26). `db`: errors are typed (SL-26).
+- `i18n`: an overlay value is parsed at load; one that does not parse or reads an undeclared name (any action form) is rejected; `Resolve` falls through to the next layer on a render error (SL-07). `notifyrender.ValidateBundle` uses the parse tree, so an undeclared name inside `{{if}}`/`{{- -}}`/a pipeline now fails i18n-catalog CI.
+- `response.JSONError`: renders `*input.Failure`, `*echo.HTTPError`, `*http.MaxBytesError`; clamps an invalid status code; `COMMON_INTERNAL` fallback (SL-14).
+- `input`: see UPGRADING step 4 (SL-17, SL-18, SL-19, SL-20). `pgerr`: four more SQLSTATEs (SL-21). `middleware.Metrics`: method label clamped (SL-06). `lifecycle`: server phase capped at `budget − reserve` (SL-05). `authz.FormatTenantMemberships` omits entries with a separator (SL-29).
+- Docs: README and `.agentrules` describe the outbox/deduplicator as they are (SL-28); the failure-path metric Help and comments say a failed DLQ write loses the message once a later offset commits (SL-00).
+
+### Removed (release 1)
+- `middleware.CORS`, `middleware.Logger` (SL-27). The phone-number log line of `RegistrationAuthMiddleware` (SL-12).
+
+
 ### Removed
 - `pkg/notifyoutbox` + `pkg/notifyrender` — **retire chat appeal notices 177/178.** The `gen-go-lib` pin moves to `a0ada6865496` (proto-contracts `4db5cf0` removed `NotificationType` 177/178 and envelope arms 197/198, `SendChatAppealOpened`/`Closed`). `notifyoutbox` no longer treats them as messenger notices and drops the `appeal_kind` check; `notifyrender` drops the `chat_appeal_opened`/`chat_appeal_closed` names, params, English baselines and extract arms. 176 `CHAT_SECTION_CLOSED` is unchanged. ⚠ Breaking for consumers: they cannot compile against this release while still referencing the removed enum values or arms, so move together with the `gen-go-lib` bump; i18n-catalog may drop the `chat_appeal_*` overlay keys.
 

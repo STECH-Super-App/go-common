@@ -34,3 +34,19 @@ type Message struct {
 	CreatedAt     time.Time
 	SentAt        *time.Time
 }
+
+// nonPayloadSize is the part of the Kafka record's size that does not depend on
+// how Postgres stores the payload: the key and every header key and value.
+func (m *Message) nonPayloadSize() int {
+	n := len(m.Key)
+	for k, v := range m.Headers {
+		n += len(k) + len(v)
+	}
+	return n
+}
+
+// compactWireSize is the Kafka record's size with the payload as handed in
+// (compact JSON). Postgres' jsonb::text is never smaller, so this is a lower
+// bound: over the limit here means over the limit when sent. The exact check is
+// Store.InsertTxLimited.
+func (m *Message) compactWireSize() int { return m.nonPayloadSize() + len(m.Payload) }

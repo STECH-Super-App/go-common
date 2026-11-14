@@ -1,6 +1,7 @@
 package notifyrender
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -12,6 +13,12 @@ func typeKeyForTest() map[notificationv1.NotificationType]string { return typeKe
 
 // extractPlaceholders returns the {{.field}} names referenced in s, in match
 // order (duplicates preserved — callers only test membership).
+//
+// It is deliberately the bare-print pattern: the guard tests below ask "is this
+// value printed unguarded?", which a parse-tree walk (every reference, guards
+// included) would answer wrongly. The load-time validators use i18n.Placeholders.
+var placeholderRe = regexp.MustCompile(`{{\s*\.(\w+)\s*}}`)
+
 func extractPlaceholders(s string) []string {
 	var out []string
 	for _, m := range placeholderRe.FindAllStringSubmatch(s, -1) {

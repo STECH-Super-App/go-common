@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,4 +59,44 @@ func TestClaimsDecodeLegacyTenantsWithoutAt(t *testing.T) {
 	require.Len(t, out.Tenants, 1)
 	assert.Zero(t, out.Tenants[0].At)
 	assert.Empty(t, out.TenantsReadonly)
+}
+
+// SL-25: the chat_read claim is gone from Claims. A token minted before it was
+// retired may still carry one — valid, malformed or enormous — and must keep
+// decoding: the unknown claim is ignored, never a reason to refuse the login of
+// someone whose token is still within its lifetime.
+func TestClaimsIgnoreRetiredChatReadClaim(t *testing.T) {
+	const prefix = `{"sub":"user","roles":["user"],"tns":[{"id":"12345678-1234-1234-1234-123456789abc","r":"ADMIN"}]`
+	huge := strings.Repeat(`{"id":"12345678-1234-1234-1234-123456789abc","r":"MANAGER"},`, 2000)
+
+	for name, claim := range map[string]string{
+		"absent":              prefix + `}`,
+		"null":                prefix + `,"chat_read":null}`,
+		"valid":               prefix + `,"chat_read":{"s":"READY","m":[]}}`,
+		"unknown field":       prefix + `,"chat_read":{"s":"READY","m":[],"future":1}}`,
+		"duplicate key":       prefix + `,"chat_read":{"s":"READY","s":"NOT_READY","m":[]}}`,
+		"wrong type":          prefix + `,"chat_read":"nonsense"}`,
+		"over the old 64 KiB": prefix + `,"chat_read":{"s":"READY","m":[` + huge + `{}]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var c Claims
+			if err := json.Unmarshal([]byte(claim), &c); err != nil {
+				t.Fatalf("a retired chat_read claim must not fail decoding: %v", err)
+			}
+			if c.UserID != "user" || len(c.Tenants) != 1 || c.Tenants[0].R != "ADMIN" {
+				t.Fatalf("the rest of the claims changed: %+v", c)
+			}
+		})
+	}
+}
+
+// A newly minted token no longer has the field to carry one.
+func TestClaimsMarshalHasNoChatRead(t *testing.T) {
+	b, err := json.Marshal(Claims{UserID: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "chat_read") {
+		t.Fatalf("unexpected chat_read in %s", b)
+	}
 }

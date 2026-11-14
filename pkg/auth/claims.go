@@ -25,16 +25,21 @@ type TenantClaim struct {
 }
 
 // Claims represents the custom claims in a JWT token.
+//
+// There is no chat_read claim any more (SL-25): it grew with a person's
+// relationships and pushed the web cookie past 4,096 bytes (Critical Rule 20).
+// A token minted before its removal may still carry one; encoding/json ignores
+// the unknown key, so such a token keeps decoding (TestClaimsIgnoreRetiredChatReadClaim).
+// Do not give the decoder DisallowUnknownFields.
 type Claims struct {
-	UserID        string           `json:"sub"`
-	Roles         []string         `json:"roles"`
-	Name          string           `json:"name"`
-	Type          string           `json:"type"`
-	Tenants       []TenantClaim    `json:"tns,omitempty"`
-	ChatRead      *ChatReadContext `json:"chat_read,omitempty"`
-	Avatar        string           `json:"avatar,omitempty"`
-	Email         string           `json:"email,omitempty"`
-	EmailVerified bool             `json:"email_verified,omitempty"`
+	UserID        string        `json:"sub"`
+	Roles         []string      `json:"roles"`
+	Name          string        `json:"name"`
+	Type          string        `json:"type"`
+	Tenants       []TenantClaim `json:"tns,omitempty"`
+	Avatar        string        `json:"avatar,omitempty"`
+	Email         string        `json:"email,omitempty"`
+	EmailVerified bool          `json:"email_verified,omitempty"`
 
 	// TenantsReadonly holds the caller's read-only memberships — seats in
 	// SUSPENDED tenants. Tenants stays active-only (every non-chat consumer

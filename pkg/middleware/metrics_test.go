@@ -182,3 +182,35 @@ func TestMetrics_BuiltTwiceDoesNotPanic(t *testing.T) {
 		}
 	})
 }
+
+// SL-06: the method was the raw request method. net/http accepts any token as
+// a method and Echo runs Use middleware for unmatched requests too, so a client
+// sending AAAA, AAAB, ... minted one 13-series histogram per name, unboundedly.
+func TestMetrics_ArbitraryMethodIsClampedToOther(t *testing.T) {
+	e := echo.New()
+	e.Use(middleware.Metrics())
+	e.GET("/ping", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
+
+	other := map[string]string{"method": "OTHER", "route": "unmatched", "status_class": "4xx"}
+	before := histCount(t, httpDurationFamily, other)
+
+	for _, m := range []string{"AAAA", "AAAB", "sl06-random-method"} {
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, httptest.NewRequest(m, "/anything", nil))
+	}
+
+	assert.Equal(t, before+3, histCount(t, httpDurationFamily, other))
+	for _, m := range []string{"AAAA", "AAAB", "sl06-random-method"} {
+		assert.Zero(t, histCount(t, httpDurationFamily,
+			map[string]string{"method": m, "route": "unmatched", "status_class": "4xx"}),
+			"a client-chosen method must never become a label value")
+	}
+}
+
+func TestMetrics_StandardMethodsKeepTheirLabel(t *testing.T) {
+	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"} {
+		assert.Equal(t, m, metrics.MethodLabel(m))
+	}
+	assert.Equal(t, "OTHER", metrics.MethodLabel("get"), "methods are case-sensitive; lower case is not a standard verb")
+	assert.Equal(t, "OTHER", metrics.MethodLabel(""))
+}

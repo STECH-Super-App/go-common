@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/STECH-Super-App/go-common/pkg/input"
@@ -17,7 +18,10 @@ import (
 )
 
 func TestInvalidInput_RecognisedSQLStates(t *testing.T) {
-	for _, code := range []string{"22021", "22P05", "22001", "22P02"} {
+	// 22003, 22007, 22008 and 54000 joined in SL-21: a price of 1e15 kopecks
+	// into numeric(12,2), a date outside timestamptz's range, and a value too
+	// large for an index row were all surfacing as 500s with no backstop alert.
+	for _, code := range []string{"22021", "22P05", "22001", "22P02", "22003", "22007", "22008", "54000"} {
 		t.Run(code, func(t *testing.T) {
 			before := testutil.ToFloat64(backstopTotal.WithLabelValues(code))
 			pgErr := &pgconn.PgError{Code: code, TableName: "listings", ColumnName: "title", Message: "boom"}
@@ -47,12 +51,28 @@ func TestInvalidInput_RecognisedSQLStates(t *testing.T) {
 	}
 }
 
+// SL-21: the series for the new SQLSTATEs exist at 0 from the first scrape, so
+// increase() has a baseline and the very first hit is visible to the alert.
+func TestPrecreateSeries_CoversEveryRecognisedStateAndEncode(t *testing.T) {
+	vec := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "x_total"}, []string{"sqlstate"})
+	precreateSeries(vec)
+
+	want := len(backstopCodes) + 1 // + "encode"
+	if got := testutil.CollectAndCount(vec); got != want {
+		t.Fatalf("pre-created %d series, want %d", got, want)
+	}
+	for _, code := range []string{"22003", "22007", "22008", "54000", "encode"} {
+		if v := testutil.ToFloat64(vec.WithLabelValues(code)); v != 0 {
+			t.Errorf("series %s starts at %v", code, v)
+		}
+	}
+}
+
 func TestInvalidInput_IgnoresOtherErrors(t *testing.T) {
 	for name, err := range map[string]error{
 		"nil":                    nil,
 		"unique violation":       &pgconn.PgError{Code: "23505"},
 		"fk violation":           &pgconn.PgError{Code: "23503"},
-		"numeric overflow":       &pgconn.PgError{Code: "22003"}, // server-side arithmetic, not an input encode
 		"no rows":                pgx.ErrNoRows,
 		"plain":                  errors.New("connection refused"),
 		"scan range (no encode)": errors.New("can't scan into dest[0]: 2147483648 is greater than maximum value for int32"),

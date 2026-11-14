@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"regexp"
 	"sort"
 	"strings"
 
 	notificationv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/notification/v1"
-)
 
-var placeholderRe = regexp.MustCompile(`{{\s*\.(\w+)\s*}}`)
+	"github.com/STECH-Super-App/go-common/pkg/i18n"
+)
 
 type section struct {
 	Title string `json:"title"`
@@ -58,9 +57,23 @@ func consistencyCheck(sections map[string]section, byName map[string]notificatio
 			problems = append(problems, fmt.Sprintf("section %q has no matching NotificationType", name))
 			continue
 		}
+		// The parse tree, not a pattern: a name inside {{if}}, {{- -}}, a
+		// pipeline or {{index . "x"}} is just as much a parameter (SL-07).
 		used := map[string]bool{}
-		for _, m := range placeholderRe.FindAllStringSubmatch(sec.Title+" "+sec.Body, -1) {
-			used[m[1]] = true
+		parseFailed := false
+		for field, text := range map[string]string{"title": sec.Title, "body": sec.Body} {
+			names, err := i18n.Placeholders(text)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("section %q: %s is not a valid template: %v", name, field, err))
+				parseFailed = true
+				continue
+			}
+			for _, n := range names {
+				used[n] = true
+			}
+		}
+		if parseFailed {
+			continue
 		}
 		allowed := map[string]bool{}
 		for _, p := range allowedParams(t) {
