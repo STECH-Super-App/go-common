@@ -178,18 +178,14 @@ func TestDispatcher_LeaveUncommittedAgainstTheFailurePath(t *testing.T) {
 			wantReason: "poison_pill",
 		},
 		{
-			name:      "a panic wrapping the sentinel is a handler panic: retried, then dead-lettered and committed",
-			panicWith: fmt.Errorf("x: %w", events.ErrLeaveUncommitted),
-			// No retry tier: a panic is retried in place like any other
-			// unclassified error, then dead-lettered as handler_panic.
+			name:       "a panic wrapping the sentinel is a handler panic: dead-lettered at once and committed",
+			panicWith:  fmt.Errorf("x: %w", events.ErrLeaveUncommitted),
 			wantDLQ:    1,
 			wantReason: "handler_panic",
 		},
 		{
-			name:      "a bare panic with the sentinel is a handler panic: retried, then dead-lettered and committed",
-			panicWith: events.ErrLeaveUncommitted,
-			// No retry tier: a panic is retried in place like any other
-			// unclassified error, then dead-lettered as handler_panic.
+			name:       "a bare panic with the sentinel is a handler panic: dead-lettered at once and committed",
+			panicWith:  events.ErrLeaveUncommitted,
 			wantDLQ:    1,
 			wantReason: "handler_panic",
 		},

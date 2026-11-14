@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"reflect"
+	"runtime/debug"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -251,7 +252,8 @@ func WithGroup(id string) DispatcherOption {
 //     deduplicator's claims, and a shared default would let two dispatchers
 //     swallow each other's events.
 //   - A failed message is retried in place (see Classify) and then written to
-//     dlq; if THAT write fails the dispatcher stops (Run returns an error
+//     dlq; a handler panic is not retried at all (ClassPanic: written to dlq at
+//     once, reason handler_panic, stack in the log); if THAT write fails the dispatcher stops (Run returns an error
 //     wrapping ErrDeadLetterWriteFailed) without committing — it never moves
 //     on and loses the message.
 //   - A handler's ErrLeaveUncommitted also stops Run, without any write.
@@ -459,6 +461,23 @@ var (
 	errUnmarshal = errors.New("unmarshal")
 	errPanic     = errors.New("panic")
 )
+
+// panicError is what a recovered handler panic becomes: an error of class
+// ClassPanic (it wraps errPanic) that keeps the stack of the panic, which the
+// dispatcher logs when it dead-letters the message. The panic VALUE is only
+// formatted into the message, never wrapped: a handler that panics with an
+// error wrapping ErrPoisonPill or ErrLeaveUncommitted is still a panic.
+type panicError struct {
+	value any
+	stack []byte
+}
+
+func newPanicError(value any) *panicError {
+	return &panicError{value: value, stack: debug.Stack()}
+}
+
+func (p *panicError) Error() string { return fmt.Sprintf("%v: %v", errPanic, p.value) }
+func (p *panicError) Unwrap() error { return errPanic }
 
 // dlqReason categorizes a dead letter for the x-dlq-reason header and the
 // events_consumer_dead_lettered_total{reason} label.
@@ -731,8 +750,11 @@ func (d *Dispatcher) handleOne(ctx context.Context, stop <-chan struct{}, msg ka
 		}
 
 		class := Classify(err)
+		if class == ClassPanic {
+			logPanic(msgLog, msg, err)
+		}
 		if class.DeadLetterNow() {
-			return d.deadLetter(ctx, msg, msgLog, err, reasonOf(class, err))
+			return d.deadLetter(ctx, msg, msgLog, err, reasonOf(class))
 		}
 
 		// Retryable. The legacy tier, when configured, takes the message off
@@ -748,7 +770,7 @@ func (d *Dispatcher) handleOne(ctx context.Context, stop <-chan struct{}, msg ka
 				zap.Duration("window", d.retryWindow),
 				zap.String("group", d.group),
 				zap.Error(err))
-			return d.deadLetter(ctx, msg, msgLog, err, reasonOf(class, err))
+			return d.deadLetter(ctx, msg, msgLog, err, reasonOf(class))
 		}
 		inPlaceRetriesTotal.WithLabelValues(msg.Topic, d.group).Inc()
 		msgLog.Warn("handler failed; retrying in place",
@@ -765,6 +787,22 @@ func (d *Dispatcher) handleOne(ctx context.Context, stop <-chan struct{}, msg ka
 			return d.leftUncommitted(msg, errors.New("shutdown during in-place retry"))
 		}
 	}
+}
+
+// logPanic logs a recovered handler panic with the stack captured where it
+// happened: the dead letter carries only the message of the panic, so the log is
+// the one place the stack is kept.
+func logPanic(msgLog *zap.Logger, msg kafka.Message, err error) {
+	fields := []zap.Field{
+		zap.Int("partition", msg.Partition),
+		zap.Int64("offset", msg.Offset),
+		zap.Error(err),
+	}
+	var pe *panicError
+	if errors.As(err, &pe) {
+		fields = append(fields, zap.ByteString("stack", pe.stack))
+	}
+	msgLog.Error("handler panicked; dead-lettering the message without a retry", fields...)
 }
 
 // attempt runs the handler once — inside the deduplicator's unit and under the
@@ -827,7 +865,7 @@ func timedOut(ctx context.Context, err error, phase, name string, limit time.Dur
 }
 
 // reasonOf maps a classified failure to its x-dlq-reason.
-func reasonOf(class Class, err error) dlqReason {
+func reasonOf(class Class) dlqReason {
 	switch class {
 	case ClassDecode:
 		return reasonUnmarshal
@@ -835,10 +873,9 @@ func reasonOf(class Class, err error) dlqReason {
 		return reasonPoisonPill
 	case ClassValidation:
 		return reasonValidation
+	case ClassPanic:
+		return reasonHandlerPanic
 	default:
-		if errors.Is(err, errPanic) {
-			return reasonHandlerPanic
-		}
 		return reasonMaxRetries
 	}
 }
@@ -893,7 +930,7 @@ func (d *Dispatcher) deadLetter(ctx context.Context, msg kafka.Message, msgLog *
 func (d *Dispatcher) retryTier(ctx context.Context, msg kafka.Message, h envelope.Headers, msgLog *zap.Logger, cause error) error {
 	retryCount := h.RetryCount()
 	if retryCount >= d.maxRetries {
-		return d.deadLetter(ctx, msg, msgLog, cause, reasonOf(ClassRetryable, cause))
+		return d.deadLetter(ctx, msg, msgLog, cause, reasonOf(ClassRetryable))
 	}
 	next := kafkaCloneWithHeader(msg, envelope.HeaderRetryCount, fmt.Sprintf("%d", retryCount+1))
 	if werr := d.retry.WriteMessages(ctx, next); werr != nil {
@@ -968,7 +1005,7 @@ func (d *Dispatcher) startConsumerSpan(
 func (d *Dispatcher) safelyPrepare(ctx context.Context, prepare prepareFn, raw []byte) (apply func(context.Context, Tx) error, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			apply, err = nil, fmt.Errorf("%w: %v", errPanic, r)
+			apply, err = nil, newPanicError(r)
 		}
 	}()
 	return prepare(ctx, raw)
@@ -979,7 +1016,7 @@ func (d *Dispatcher) safelyPrepare(ctx context.Context, prepare prepareFn, raw [
 func safelyApply(ctx context.Context, apply func(context.Context, Tx) error, tx Tx) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%w: %v", errPanic, r)
+			err = newPanicError(r)
 		}
 	}()
 	return apply(ctx, tx)
@@ -988,7 +1025,7 @@ func safelyApply(ctx context.Context, apply func(context.Context, Tx) error, tx 
 func (d *Dispatcher) safelyInvoke(ctx context.Context, h handlerFn, tx Tx, raw []byte, hdr envelope.Headers) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%w: %v", errPanic, r)
+			err = newPanicError(r)
 		}
 	}()
 	return h(ctx, tx, raw, hdr)

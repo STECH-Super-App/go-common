@@ -42,6 +42,10 @@ func TestClassify(t *testing.T) {
 		{"validation: input.Failure", inputFailure, events.ClassValidation, true},
 		{"validation: input.Failure, wrapped", fmt.Errorf("name: %w", inputFailure), events.ClassValidation, true},
 
+		// a recovered handler panic is not a handler's return value: the dispatcher
+		// builds it (see TestClassify_PanicIsDeadLetteredAtOnce), so the table
+		// here has no row for it.
+
 		// retried in place, whatever they are
 		{"404 (the parent row is not there yet)", appErr(http.StatusNotFound), events.ClassRetryable, false},
 		{"409 (a race)", appErr(http.StatusConflict), events.ClassRetryable, false},

@@ -375,8 +375,8 @@ func TestPGPrepared_CancelDuringPrepareStillFinishesTheMessage(t *testing.T) {
 	assert.NoError(t, commits[0])
 }
 
-// A panic in either phase is recovered, retried and finally dead-lettered with
-// the panic reason; a panic in apply takes its transaction with it.
+// A panic in either phase is recovered and dead-lettered at once with the panic
+// reason — no retry; a panic in apply takes its transaction with it.
 func TestPGPrepared_PanicInPrepareIsRecoveredAndDeadLettered(t *testing.T) {
 	pool := migratedPool(t)
 	reader := &greedyReader{msgs: []kafka.Message{userRegisteredMsg(t, "e-panic-prepare")}}
@@ -392,7 +392,7 @@ func TestPGPrepared_PanicInPrepareIsRecoveredAndDeadLettered(t *testing.T) {
 
 	require.ErrorIs(t, runOne(t, disp, reader), context.Canceled)
 
-	assert.GreaterOrEqual(t, prepares.Load(), int32(1))
+	assert.Equal(t, int32(1), prepares.Load(), "a panic is not retried")
 	require.Len(t, dlq.captured(), 1)
 	assert.Equal(t, "handler_panic", string(findTestHeader(dlq.captured()[0], "x-dlq-reason")))
 	assert.Zero(t, count(t, pool, "processed_events"))

@@ -241,6 +241,7 @@ func TestEmail(t *testing.T) {
 		"user@example.com":            "user@example.com",
 		"  User.Name@Example.COM  ":   "User.Name@example.com",
 		"a+tag@sub-domain.example.ru": "a+tag@sub-domain.example.ru",
+		"user@пример.рф":              "user@xn--e1afmkfd.xn--p1ai", // Cyrillic domain: stored as its A-label (rule «B», 14.11.2026)
 	}
 	for raw, want := range ok {
 		got, f := input.Email(raw, 254)
@@ -265,7 +266,6 @@ func TestEmail(t *testing.T) {
 		"user@exam ple.com",
 		"us\x00er@example.com",
 		"us\u200Ber@example.com",
-		"user@пример.рф",
 		"имя@example.com", // non-ASCII local part: refused since SL-18
 		"\xffuser@example.com",
 	}

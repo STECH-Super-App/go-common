@@ -11,7 +11,7 @@ import (
 // Class says what the dispatcher does with a failed message.
 type Class string
 
-// The classes. The first three are the ONLY ways to be dead-lettered at once;
+// The classes. The first four are the ONLY ways to be dead-lettered at once;
 // everything else is ClassRetryable.
 const (
 	// ClassDecode: the payload cannot be decoded into the handler's proto
@@ -22,9 +22,16 @@ const (
 	// ClassValidation: the event is invalid. An *errors.AppError with HTTP
 	// status 400 or 422, or an *input.Failure anywhere in the chain.
 	ClassValidation Class = "validation"
+	// ClassPanic: the handler panicked (in Handle, HandleTx, or either phase of
+	// HandlePrepared) and the dispatcher recovered it. A panic is a bug in the
+	// handler, and the same message meets the same bug on every attempt, so it is
+	// dead-lettered at once with reason handler_panic, never retried — not in
+	// place, and not through the legacy retry tier. The stack goes to the log; the
+	// transaction is rolled back first.
+	ClassPanic Class = "panic"
 	// ClassRetryable: anything else, whatever it is — a 404 (the parent row
-	// is not there YET), a 409, a 503, a timeout, a failed query, a panic, an
-	// error nobody classified. Retried in place with backoff until the retry
+	// is not there YET), a 409, a 503, a timeout, a failed query, an error
+	// nobody classified. Retried in place with backoff until the retry
 	// window (two minutes by default) is spent, then dead-lettered with an
 	// error log and events_consumer_dead_lettered_total{reason="max_retries"}.
 	ClassRetryable Class = "retryable"
@@ -42,11 +49,17 @@ func (c Class) DeadLetterNow() bool { return c != ClassRetryable }
 //	err                                                   class
 //	----------------------------------------------------  --------------
 //	the payload did not decode                            ClassDecode
+//	the handler panicked (recovered by the dispatcher)    ClassPanic
 //	wraps ErrPoisonPill                                   ClassPoisonPill
 //	*errors.AppError with status 400 or 422, or           ClassValidation
 //	  an *input.Failure
 //	anything else (404, 409, 5xx, timeouts, unknown)      ClassRetryable
 //
+// ClassPanic is not a class a handler can return: only the dispatcher produces
+// it, from a panic it recovered, so a service's own tests never see it from
+// Classify. It is in the table because the consumers that follow the table by
+// hand (sale-service's PHP consumers) must treat an uncaught exception of their
+// handler the same way: dead-letter at once, reason handler_panic.
 // A 404 or 409 is retryable ON PURPOSE: it is usually an ordering race (the
 // event arrived before the row it refers to) that the next attempt resolves, and
 // dead-lettering it turns every short outage into manual replays. A handler that
@@ -59,6 +72,8 @@ func Classify(err error) Class {
 	switch {
 	case errors.Is(err, errUnmarshal):
 		return ClassDecode
+	case errors.Is(err, errPanic):
+		return ClassPanic
 	case errors.Is(err, ErrPoisonPill):
 		return ClassPoisonPill
 	case isValidation(err):

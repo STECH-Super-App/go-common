@@ -15,14 +15,29 @@ func TestClassify_DecodeFailure(t *testing.T) {
 	err := fmt.Errorf("%w: invalid character", errUnmarshal)
 	assert.Equal(t, ClassDecode, Classify(err))
 	assert.True(t, Classify(err).DeadLetterNow())
-	assert.Equal(t, reasonUnmarshal, reasonOf(ClassDecode, err))
+	assert.Equal(t, reasonUnmarshal, reasonOf(ClassDecode))
 }
 
-func TestClassify_PanicIsRetryableButKeepsItsDeadLetterReason(t *testing.T) {
-	err := fmt.Errorf("%w: nil pointer", errPanic)
-	assert.Equal(t, ClassRetryable, Classify(err))
-	assert.Equal(t, reasonHandlerPanic, reasonOf(ClassRetryable, err))
-	assert.Equal(t, reasonMaxRetries, reasonOf(ClassRetryable, fmt.Errorf("db down")))
+// A recovered panic is its own class and dead-letters at once, whatever its
+// value is or wraps (owner decision 14.11.2026).
+func TestClassify_PanicIsDeadLetteredAtOnce(t *testing.T) {
+	for name, value := range map[string]any{
+		"a string":                  "nil pointer",
+		"an error":                  fmt.Errorf("db down"),
+		"an error wrapping a pill":  fmt.Errorf("x: %w", ErrPoisonPill),
+		"the leave-uncommitted one": ErrLeaveUncommitted,
+		"nil":                       nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := newPanicError(value)
+			assert.Equal(t, ClassPanic, Classify(err))
+			assert.Equal(t, ClassPanic, Classify(fmt.Errorf("apply: %w", err)), "wrapped")
+			assert.True(t, Classify(err).DeadLetterNow())
+			assert.Equal(t, reasonHandlerPanic, reasonOf(ClassPanic))
+			assert.NotEmpty(t, err.stack, "the stack is kept for the log")
+		})
+	}
+	assert.Equal(t, reasonMaxRetries, reasonOf(ClassRetryable))
 }
 
 func TestRetryDelay_DoublesCapsAndJitters(t *testing.T) {
