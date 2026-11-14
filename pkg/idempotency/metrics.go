@@ -16,14 +16,31 @@ var unclaimedResponses = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help: "2xx answers on an idempotent route whose handler never ran an idempotency Claim, by route. Any increase means a retry with the same key would repeat the work.",
 }, []string{"route"})
 
+// keylessRequests counts calls to a route registered as Optional that carried no
+// Idempotency-Key (see Optional). Its rate going to zero is the signal that the
+// shipped clients have caught up and the route can be made required.
+var keylessRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "idempotency_keyless_requests_total",
+	Help: "Calls to an optional idempotent route without an Idempotency-Key, by route. When it stays flat, make the route required.",
+}, []string{"route"})
+
 func init() {
-	metrics.Registry.MustRegister(unclaimedResponses)
+	metrics.Registry.MustRegister(unclaimedResponses, keylessRequests)
 }
 
 // unclaimedCount reads one route's series.
 func unclaimedCount(route string) float64 {
 	m := &dto.Metric{}
 	if err := unclaimedResponses.WithLabelValues(route).Write(m); err != nil {
+		return 0
+	}
+	return m.GetCounter().GetValue()
+}
+
+// keylessCount reads one route's keyless series.
+func keylessCount(route string) float64 {
+	m := &dto.Metric{}
+	if err := keylessRequests.WithLabelValues(route).Write(m); err != nil {
 		return 0
 	}
 	return m.GetCounter().GetValue()

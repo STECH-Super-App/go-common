@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"io"
 	"net/http"
 	"regexp"
 	"sync/atomic"
@@ -22,14 +21,17 @@ const Header = "Idempotency-Key"
 // MaxKeyLen is the longest key accepted, in characters.
 const MaxKeyLen = 128
 
-// MaxBodyBytes is the largest request body ClaimFromRequest and Require read to
-// hash it. The server's own body limit (httpserver) is lower or equal.
+// MaxBodyBytes is the default cap on a keyed request's body, which
+// ClaimFromRequest and Require read to hash it. A route raises it with
+// WithMaxBody (up to MaxBodyLimit). The server's own body limit (httpserver)
+// applies first.
 const MaxBodyBytes = 1 << 20
 
 // Reasons of the typed errors this package returns (Critical Rule 7). They need
 // en/ru texts in i18n-catalog like every COMMON_ reason.
 const (
-	// ReasonKeyRequired (400): a write request without the header.
+	// ReasonKeyRequired (400): a write request without the header, on a route that
+	// does not take Optional.
 	ReasonKeyRequired = "COMMON_IDEMPOTENCY_KEY_REQUIRED"
 	// ReasonKeyInvalid (400): the key is empty after trimming, longer than
 	// MaxKeyLen or has a character outside the allowed set.
@@ -39,7 +41,8 @@ const (
 	ReasonKeyReused = "COMMON_IDEMPOTENCY_KEY_REUSED"
 	// ReasonBodyUnreadable (400): the body could not be read to hash it.
 	ReasonBodyUnreadable = "COMMON_IDEMPOTENCY_BODY_UNREADABLE"
-	// ReasonBodyTooLarge (413): the body is over MaxBodyBytes.
+	// ReasonBodyTooLarge (413): the body is over the route's cap (MaxBodyBytes, or
+	// WithMaxBody).
 	ReasonBodyTooLarge = "COMMON_IDEMPOTENCY_BODY_TOO_LARGE"
 	// ReasonRouteUnguarded (500): ClaimFor ran on a route that was not registered
 	// through Add / Require. A programmer error.
@@ -116,6 +119,9 @@ type Claim struct {
 	endpoint string
 	hash     [sha256.Size]byte
 	valid    bool
+	// keyless is a claim of an Optional route called with no key: Run only runs
+	// the work.
+	keyless bool
 	// ran is the request's "a claim was run" flag, shared by every copy of the
 	// Claim ClaimFor built (nil for NewClaim: no Require middleware is watching).
 	ran *atomic.Bool
@@ -129,49 +135,47 @@ func NewClaim(key Key, req Request) (Claim, error) {
 	if req.Caller == "" || len(req.Caller) > 128 || req.Endpoint == "" || len(req.Endpoint) > 256 {
 		return Claim{}, internal(ReasonFailed, "idempotency: Caller (1-128) and Endpoint (1-256) are required", nil)
 	}
-	h := sha256.New()
-	h.Write([]byte(req.Target))
-	h.Write([]byte{0})
-	h.Write(req.Body)
-	var sum [sha256.Size]byte
-	copy(sum[:], h.Sum(nil))
-	return Claim{key: key, caller: req.Caller, endpoint: req.Endpoint, hash: sum, valid: true}, nil
+	return Claim{key: key, caller: req.Caller, endpoint: req.Endpoint, hash: rawHash(req.Target, req.Body), valid: true}, nil
+}
+
+// newKeylessClaim is the claim of an Optional route called with no key.
+func newKeylessClaim(caller, endpoint string, ran *atomic.Bool) (Claim, error) {
+	if caller == "" || len(caller) > 128 || endpoint == "" || len(endpoint) > 256 {
+		return Claim{}, internal(ReasonFailed, "idempotency: Caller (1-128) and Endpoint (1-256) are required", nil)
+	}
+	return Claim{caller: caller, endpoint: endpoint, valid: true, keyless: true, ran: ran}, nil
 }
 
 // ClaimFromRequest reads the header and the body of r (restoring the body for
 // the handler) and builds the Claim. Prefer Require + ClaimFor in an Echo
-// service; this is for a non-Echo handler.
-func ClaimFromRequest(r *http.Request, caller, endpoint string) (Claim, error) {
+// service; this is for a non-Echo handler. Options: Optional (an absent header
+// gives a keyless Claim), WithMaxBody, WithMultipartHash.
+func ClaimFromRequest(r *http.Request, caller, endpoint string, opts ...Option) (Claim, error) {
+	cfg := newConfig(opts)
+	if cfg.optional && r.Header.Get(Header) == "" {
+		return newKeylessClaim(caller, endpoint, nil)
+	}
 	key, err := KeyFromRequest(r)
 	if err != nil {
 		return Claim{}, err
 	}
-	body, err := readAndRestoreBody(r)
+	target := r.Method + " " + r.URL.RequestURI()
+	hash, err := hashRequestBody(r, target, cfg.maxBody, cfg.multipart)
 	if err != nil {
 		return Claim{}, err
 	}
-	return NewClaim(key, Request{Caller: caller, Endpoint: endpoint, Target: r.Method + " " + r.URL.RequestURI(), Body: body})
-}
-
-func readAndRestoreBody(r *http.Request) ([]byte, error) {
-	if r.Body == nil || r.Body == http.NoBody {
-		return nil, nil
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBodyBytes+1))
-	if err != nil {
-		return nil, commonerrors.New(http.StatusBadRequest).
-			Reason(ReasonBodyUnreadable).Message("the request body could not be read").Cause(err).Build()
-	}
-	if len(body) > MaxBodyBytes {
-		return nil, commonerrors.New(http.StatusRequestEntityTooLarge).
-			Reason(ReasonBodyTooLarge).Message("the request body is too large").Build()
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	return body, nil
+	c, err := NewClaim(key, Request{Caller: caller, Endpoint: endpoint, Target: target})
+	c.hash = hash
+	return c, err
 }
 
 // Valid reports whether c came from NewClaim / ClaimFor (the zero Claim did not).
 func (c Claim) Valid() bool { return c.valid }
+
+// Keyless reports whether c is the claim of an Optional route called with no
+// Idempotency-Key: Run will run the work and nothing else, and a repeat of the
+// request is NOT recognised.
+func (c Claim) Keyless() bool { return c.keyless }
 
 // Resource names the record a request created.
 type Resource struct {
@@ -208,6 +212,10 @@ type Outcome struct {
 // had inserted: the caller must roll tx back (RunInTx does), and a caller that
 // commits anyway still leaves the key free instead of stranded for 24 hours.
 //
+// A keyless Claim (Optional route, no header) skips all of that: Run runs work in
+// tx and returns its Resource as it is — which may be empty; there is no key row
+// to complete — and the work's error as it is.
+//
 // Run assumes READ COMMITTED, Postgres' default and what every service uses.
 func (c Claim) Run(ctx context.Context, tx pgx.Tx, work func(ctx context.Context) (Resource, error)) (Outcome, error) {
 	if !c.valid {
@@ -218,6 +226,13 @@ func (c Claim) Run(ctx context.Context, tx pgx.Tx, work func(ctx context.Context
 	}
 	if c.ran != nil {
 		c.ran.Store(true) // Require sees that this request really went through its key
+	}
+	if c.keyless {
+		res, err := work(ctx)
+		if err != nil {
+			return Outcome{}, err
+		}
+		return Outcome{Resource: res}, nil
 	}
 
 	// Three rounds at most: a conflicting row can be reaped between the INSERT

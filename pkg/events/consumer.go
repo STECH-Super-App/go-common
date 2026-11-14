@@ -38,7 +38,7 @@ type Writer interface {
 
 // Dispatcher consumes events, routes them to typed handlers, and manages
 // deduplication, in-place retry and the dead-letter tier. Construct with
-// NewDispatcher, register handlers with HandleTx (or the legacy Handle), then
+// NewDispatcher, register handlers with HandleTx or HandlePrepared (or the legacy Handle), then
 // call Run(ctx) — or Worker, which maps the outcomes for pkg/lifecycle.
 type Dispatcher struct {
 	reader Reader
@@ -49,13 +49,17 @@ type Dispatcher struct {
 	maxRetries int // legacy tier budget (WithMaxRetries); ignored without WithRetry
 
 	// In-place retry: a retryable failure is attempted again after a growing,
-	// jittered delay until retryWindow has passed since the first attempt.
+	// jittered delay until retryWindow has passed since the first failure.
 	retryWindow  time.Duration
 	retryInitial time.Duration
 	retryMax     time.Duration
-	// messageTimeout bounds ONE attempt of ONE message: the handler and its
-	// transaction.
+	// messageTimeout bounds ONE attempt of ONE message in the transaction form:
+	// the handler and its transaction.
 	messageTimeout time.Duration
+	// prepareTimeout and applyTimeout bound the two phases of ONE attempt of a
+	// HandlePrepared message (see DefaultPrepareTimeout).
+	prepareTimeout time.Duration
+	applyTimeout   time.Duration
 
 	log *zap.Logger
 	// logProvided records whether WithLogger supplied a real logger. It gates
@@ -64,7 +68,7 @@ type Dispatcher struct {
 	// handler log line, shadowing the process-logger fallback.
 	logProvided bool
 	group       string
-	handlers    map[string]handlerFn
+	handlers    map[string]registeredHandler
 	// left is set once Run has stopped on a message it did not consume (a
 	// handler's ErrLeaveUncommitted, or a failed dead-letter write). From then
 	// on Run returns it without fetching: the reader has already moved past that
@@ -85,7 +89,8 @@ const GroupUnknown = "unknown"
 // pkg/config and the default used).
 const (
 	// DefaultRetryWindow (EVENTS_RETRY_WINDOW) is how long a retryable failure
-	// is retried in place before the message is dead-lettered: long enough to
+	// is retried in place, counted from the first failure, before the message is
+	// dead-lettered: long enough to
 	// ride out a pod restart or a database failover, short enough that a message
 	// that can never succeed does not block its partition for long.
 	DefaultRetryWindow = 2 * time.Minute
@@ -99,6 +104,17 @@ const (
 	// a dead dependency fails (and is retried) instead of pinning a pooled
 	// connection and the partition for ever.
 	DefaultMessageTimeout = time.Minute
+	// DefaultPrepareTimeout (EVENTS_PREPARE_TIMEOUT) bounds the prepare phase of a
+	// HandlePrepared handler: no transaction and no pooled connection is held
+	// while it runs, so it may be long — media work such as a video transcode, a
+	// rate-limited call to a third party. It also covers the "already processed?"
+	// check before it.
+	DefaultPrepareTimeout = 10 * time.Minute
+	// DefaultApplyTimeout (EVENTS_APPLY_TIMEOUT) bounds the apply phase of a
+	// HandlePrepared handler: the claim, apply's writes and the commit, one
+	// transaction. It is short on purpose — a hung transaction is cut early —
+	// and starts afresh when prepare ends, so a slow prepare never starves it.
+	DefaultApplyTimeout = 30 * time.Second
 )
 
 // tracerName identifies the instrumentation library in consumer spans.
@@ -159,6 +175,28 @@ func WithMessageTimeout(limit time.Duration) DispatcherOption {
 	return func(d *Dispatcher) {
 		if limit > 0 {
 			d.messageTimeout = limit
+		}
+	}
+}
+
+// WithPrepareTimeout sets the time limit of the prepare phase of a
+// HandlePrepared handler (default DefaultPrepareTimeout). Non-positive keeps the
+// default. It does not apply to HandleTx handlers (WithMessageTimeout does).
+func WithPrepareTimeout(limit time.Duration) DispatcherOption {
+	return func(d *Dispatcher) {
+		if limit > 0 {
+			d.prepareTimeout = limit
+		}
+	}
+}
+
+// WithApplyTimeout sets the time limit of the apply phase of a HandlePrepared
+// handler — its transaction (default DefaultApplyTimeout). Non-positive keeps the
+// default. It does not apply to HandleTx handlers.
+func WithApplyTimeout(limit time.Duration) DispatcherOption {
+	return func(d *Dispatcher) {
+		if limit > 0 {
+			d.applyTimeout = limit
 		}
 	}
 }
@@ -230,8 +268,10 @@ func NewDispatcher(reader Reader, dlq Writer, dedup Deduplicator, opts ...Dispat
 		retryInitial:   config.GetEnvDuration("EVENTS_RETRY_INITIAL_BACKOFF", DefaultRetryInitialBackoff),
 		retryMax:       config.GetEnvDuration("EVENTS_RETRY_MAX_BACKOFF", DefaultRetryMaxBackoff),
 		messageTimeout: config.GetEnvDuration("EVENTS_MESSAGE_TIMEOUT", DefaultMessageTimeout),
+		prepareTimeout: config.GetEnvDuration("EVENTS_PREPARE_TIMEOUT", DefaultPrepareTimeout),
+		applyTimeout:   config.GetEnvDuration("EVENTS_APPLY_TIMEOUT", DefaultApplyTimeout),
 		log:            zap.NewNop(),
-		handlers:       make(map[string]handlerFn),
+		handlers:       make(map[string]registeredHandler),
 	}
 	for _, o := range opts {
 		o(d)
@@ -280,10 +320,21 @@ func checkTierWriter(tier string, w Writer) {
 	}
 }
 
-// handlerFn is the registered form of a handler: it decodes the payload and
-// calls the typed function. tx is the deduplicator's transaction (nil under
-// MemoryDeduplicator); a legacy handler ignores it.
+// handlerFn is the registered form of a transaction-form handler: it decodes the
+// payload and calls the typed function. tx is the deduplicator's transaction
+// (nil under MemoryDeduplicator); a legacy handler ignores it.
 type handlerFn func(ctx context.Context, tx Tx, rawPayload []byte, headers envelope.Headers) error
+
+// prepareFn is the registered first phase of a HandlePrepared handler: it
+// decodes the payload, runs the typed prepare and returns the second phase as a
+// closure over the decoded message and prepare's result.
+type prepareFn func(ctx context.Context, rawPayload []byte) (apply func(ctx context.Context, tx Tx) error, err error)
+
+// registeredHandler is what the dispatcher routes to: exactly one field is set.
+type registeredHandler struct {
+	tx      handlerFn
+	prepare prepareFn
+}
 
 // HandleTx registers a typed handler in the TRANSACTION form: the dispatcher
 // opens a transaction, records the event id in it, calls fn with that
@@ -305,13 +356,86 @@ func HandleTx[T proto.Message](d *Dispatcher, fn func(ctx context.Context, tx Tx
 	if fqn == "" {
 		panic("events.HandleTx: proto.MessageName returned empty (nil T?)")
 	}
-	d.handlers[fqn] = func(ctx context.Context, tx Tx, raw []byte, _ envelope.Headers) error {
-		msg := zero.ProtoReflect().New().Interface().(T)
-		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, msg); err != nil {
-			return fmt.Errorf("%w: %v", errUnmarshal, err)
+	d.handlers[fqn] = registeredHandler{tx: func(ctx context.Context, tx Tx, raw []byte, _ envelope.Headers) error {
+		msg, err := decodeProto[T](zero, raw)
+		if err != nil {
+			return err
 		}
 		return fn(ctx, tx, msg)
+	}}
+}
+
+// decodeProto unmarshals a payload into a new T; a failure is the decode class.
+func decodeProto[T proto.Message](zero T, raw []byte) (T, error) {
+	msg := zero.ProtoReflect().New().Interface().(T)
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, msg); err != nil {
+		return msg, fmt.Errorf("%w: %v", errUnmarshal, err)
 	}
+	return msg, nil
+}
+
+// HandlePrepared registers a typed handler in the TWO-PHASE form, for a handler
+// whose slow work is not a database write — an ffmpeg run, a call to a third
+// party — and which writes only afterwards. It keeps every guarantee of HandleTx
+// (the effect and the "processed" mark are one atomic unit, per-message retry,
+// dead letters, panic recovery) without holding a transaction, or the pooled
+// connection under it, through the slow part:
+//
+//  1. a read-only check: an event that is already processed skips prepare
+//     entirely (no transaction is held after it);
+//  2. prepare(ctx, msg) runs with NO transaction and NO connection held by this
+//     library. Its error is classified exactly like a handler's (Classify:
+//     retried in place, poison pill, validation, ErrLeaveUncommitted). It is
+//     bounded by WithPrepareTimeout (default DefaultPrepareTimeout);
+//  3. the dispatcher opens a transaction, claims the event id (the same
+//     processed_events insert as HandleTx; if a concurrent delivery got there
+//     first, apply is skipped and p discarded), calls apply(ctx, tx, msg, p) and
+//     commits once. apply does every database write and outbox publish through
+//     tx, like a HandleTx handler; it is bounded by WithApplyTimeout (default
+//     DefaultApplyTimeout), counted from the end of prepare.
+//
+// P is whatever prepare hands to apply (a path, a computed result); use
+// struct{} when the slow phase returns nothing. Neither phase may keep p or tx
+// after it returns.
+//
+// ONE NEW OBLIGATION: prepare must be idempotent, and safe to run more than
+// once, even at the same time. It runs again after an apply that failed or timed
+// out, after a commit that failed, after a crash between the phases, and in two
+// pods when a duplicate is delivered at once (only one of them applies). The
+// library caches p across NO attempt: every retry runs prepare afresh. Side
+// effects of prepare that are not repeatable belong in apply — or must be keyed
+// so that repeating them is harmless.
+//
+// Use HandleTx when the whole handler is database work; use HandlePrepared when
+// slow external work comes first; never do slow I/O inside HandleTx, where it
+// holds an open, idle transaction (a pinned connection, held-back vacuum).
+//
+// The message is routed when its event_type header equals
+// proto.MessageName(*new(T)). A nil prepare or apply panics.
+func HandlePrepared[T proto.Message, P any](
+	d *Dispatcher,
+	prepare func(ctx context.Context, msg T) (P, error),
+	apply func(ctx context.Context, tx Tx, msg T, p P) error,
+) {
+	if prepare == nil || apply == nil {
+		panic("events.HandlePrepared: prepare and apply are both required")
+	}
+	var zero T
+	fqn := string(proto.MessageName(zero))
+	if fqn == "" {
+		panic("events.HandlePrepared: proto.MessageName returned empty (nil T?)")
+	}
+	d.handlers[fqn] = registeredHandler{prepare: func(ctx context.Context, raw []byte) (func(context.Context, Tx) error, error) {
+		msg, err := decodeProto[T](zero, raw)
+		if err != nil {
+			return nil, err
+		}
+		p, err := prepare(ctx, msg)
+		if err != nil {
+			return nil, err
+		}
+		return func(ctx context.Context, tx Tx) error { return apply(ctx, tx, msg, p) }, nil
+	}}
 }
 
 // Handle registers a typed handler in the LEGACY form. The event id is still
@@ -570,7 +694,10 @@ func (d *Dispatcher) handleOne(ctx context.Context, stop <-chan struct{}, msg ka
 		ctx = logger.IntoContext(ctx, msgLog)
 	}
 
-	started := time.Now()
+	// The retry window runs from the FIRST FAILURE, not from the first attempt: a
+	// handler whose attempt takes minutes (a HandlePrepared prepare phase) must
+	// still get its retries when that attempt fails.
+	var firstFailure time.Time
 	for attempt := 1; ; attempt++ {
 		ran, err := d.attempt(ctx, msg, h, handler)
 		if err == nil {
@@ -599,6 +726,9 @@ func (d *Dispatcher) handleOne(ctx context.Context, stop <-chan struct{}, msg ka
 
 		span.RecordError(err)
 		handlerFailuresTotal.WithLabelValues(msg.Topic, d.group).Inc()
+		if firstFailure.IsZero() {
+			firstFailure = time.Now()
+		}
 
 		class := Classify(err)
 		if class.DeadLetterNow() {
@@ -612,7 +742,7 @@ func (d *Dispatcher) handleOne(ctx context.Context, stop <-chan struct{}, msg ka
 		}
 
 		delay := d.retryDelay(attempt)
-		if time.Since(started)+delay > d.retryWindow {
+		if time.Since(firstFailure)+delay > d.retryWindow {
 			msgLog.Error("retries exhausted; dead-lettering the message",
 				zap.Int("attempts", attempt),
 				zap.Duration("window", d.retryWindow),
@@ -637,22 +767,63 @@ func (d *Dispatcher) handleOne(ctx context.Context, stop <-chan struct{}, msg ka
 	}
 }
 
-// attempt runs the handler once, inside the deduplicator's unit and under the
-// per-message time limit. ran is false when the event had already been
-// processed.
-func (d *Dispatcher) attempt(ctx context.Context, msg kafka.Message, h envelope.Headers, handler handlerFn) (ran bool, err error) {
+// attempt runs the handler once — inside the deduplicator's unit and under the
+// per-message time limit for a transaction-form handler, in two phases for a
+// two-phase one. ran is false when the event had already been processed.
+func (d *Dispatcher) attempt(ctx context.Context, msg kafka.Message, h envelope.Headers, handler registeredHandler) (ran bool, err error) {
+	if handler.prepare != nil {
+		return d.attemptPrepared(ctx, msg, h, handler.prepare)
+	}
 	ctx, cancel := context.WithTimeout(ctx, d.messageTimeout)
 	defer cancel()
 
 	ran, err = d.dedup.process(ctx, d.group, h.EventID(), func(ctx context.Context, tx Tx) error {
-		return d.safelyInvoke(ctx, handler, tx, msg.Value, h)
+		return d.safelyInvoke(ctx, handler.tx, tx, msg.Value, h)
 	})
-	if err != nil && ctx.Err() == context.DeadlineExceeded && !Classify(err).DeadLetterNow() {
-		// Say that the limit was hit, keeping the original error in the chain.
-		err = fmt.Errorf("%w: %w", internalError(ReasonMessageTimeout,
-			fmt.Sprintf("events: handler exceeded the %s message limit", d.messageTimeout), nil), err)
+	return ran, timedOut(ctx, err, "handler", "message", d.messageTimeout)
+}
+
+// attemptPrepared is one attempt of a HandlePrepared handler (see there). The
+// read-only check and prepare run under prepareTimeout and hold no connection;
+// the transaction exists only inside the second, short, apply-timeout context.
+func (d *Dispatcher) attemptPrepared(ctx context.Context, msg kafka.Message, h envelope.Headers, prepare prepareFn) (ran bool, err error) {
+	eventID := h.EventID()
+
+	prepCtx, cancelPrep := context.WithTimeout(ctx, d.prepareTimeout)
+	defer cancelPrep()
+	// An event without an id cannot be deduplicated: process it (see the
+	// deduplicator), without the early exit.
+	if eventID != "" {
+		done, err := d.dedup.processed(prepCtx, d.group, eventID)
+		if err != nil {
+			return false, timedOut(prepCtx, err, "prepare", "prepare", d.prepareTimeout)
+		}
+		if done {
+			return false, nil
+		}
 	}
-	return ran, err
+	apply, err := d.safelyPrepare(prepCtx, prepare, msg.Value)
+	if err != nil {
+		return true, timedOut(prepCtx, err, "prepare", "prepare", d.prepareTimeout)
+	}
+	cancelPrep() // the slow phase is over; nothing may keep running on its deadline
+
+	applyCtx, cancelApply := context.WithTimeout(ctx, d.applyTimeout)
+	defer cancelApply()
+	ran, err = d.dedup.process(applyCtx, d.group, eventID, func(ctx context.Context, tx Tx) error {
+		return safelyApply(ctx, apply, tx)
+	})
+	return ran, timedOut(applyCtx, err, "apply", "apply", d.applyTimeout)
+}
+
+// timedOut says that a per-message limit was hit, keeping the original error in
+// the chain; an error that is already dead-letter-at-once keeps its class.
+func timedOut(ctx context.Context, err error, phase, name string, limit time.Duration) error {
+	if err != nil && ctx.Err() == context.DeadlineExceeded && !Classify(err).DeadLetterNow() {
+		return fmt.Errorf("%w: %w", internalError(ReasonMessageTimeout,
+			fmt.Sprintf("events: %s exceeded the %s %s limit", phase, limit, name), nil), err)
+	}
+	return err
 }
 
 // reasonOf maps a classified failure to its x-dlq-reason.
@@ -790,6 +961,28 @@ func (d *Dispatcher) startConsumerSpan(
 			attribute.String("event_id", h.EventID()),
 		),
 	)
+}
+
+// safelyPrepare runs a handler's first phase, turning a panic into an errPanic
+// error like safelyInvoke does.
+func (d *Dispatcher) safelyPrepare(ctx context.Context, prepare prepareFn, raw []byte) (apply func(context.Context, Tx) error, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			apply, err = nil, fmt.Errorf("%w: %v", errPanic, r)
+		}
+	}()
+	return prepare(ctx, raw)
+}
+
+// safelyApply runs a handler's second phase, turning a panic into an errPanic
+// error; the deduplicator's transaction then rolls back with it.
+func safelyApply(ctx context.Context, apply func(context.Context, Tx) error, tx Tx) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: %v", errPanic, r)
+		}
+	}()
+	return apply(ctx, tx)
 }
 
 func (d *Dispatcher) safelyInvoke(ctx context.Context, h handlerFn, tx Tx, raw []byte, hdr envelope.Headers) (err error) {

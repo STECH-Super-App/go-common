@@ -38,6 +38,12 @@ type Deduplicator interface {
 	// the event was already processed. When body fails the claim is rolled back
 	// with it, so a retry runs the handler again.
 	process(ctx context.Context, consumer, eventID string, body func(ctx context.Context, tx Tx) error) (ran bool, err error)
+
+	// processed reports, read-only, whether the event is already recorded as processed
+	// for this consumer. It holds no transaction and no connection once it
+	// returns. It is only an early exit for HandlePrepared (a redelivery skips the
+	// slow phase); the claim inside process stays the one that decides.
+	processed(ctx context.Context, consumer, eventID string) (bool, error)
 }
 
 // legacyClaimsTable is the table the previous deduplicator wrote to. While it
@@ -120,6 +126,27 @@ func (d *PostgresDeduplicator) process(ctx context.Context, consumer, eventID st
 	return true, nil
 }
 
+// processed is the read-only "already processed?" check of HandlePrepared: the
+// processed_events row, or — across the upgrade — the previous deduplicator's.
+// Each query borrows a pooled connection for its own duration only.
+func (d *PostgresDeduplicator) processed(ctx context.Context, consumer, eventID string) (bool, error) {
+	var done bool
+	const probe = `SELECT EXISTS (SELECT 1 FROM processed_events WHERE consumer = $1 AND event_id = $2)`
+	if err := d.pool.QueryRow(ctx, probe, consumer, eventID).Scan(&done); err != nil {
+		return false, internalError(ReasonDedupFailed, "events dedup: read processed events", err)
+	}
+	if done {
+		return true, nil
+	}
+	if _, err := uuid.Parse(eventID); err == nil && d.hasLegacyTable(ctx) {
+		const legacy = `SELECT EXISTS (SELECT 1 FROM ` + legacyClaimsTable + ` WHERE event_id = $1::uuid)`
+		if err := d.pool.QueryRow(ctx, legacy, eventID).Scan(&done); err != nil {
+			return false, internalError(ReasonDedupFailed, "events dedup: read legacy claims", err)
+		}
+	}
+	return done, nil
+}
+
 // claim takes the event for this consumer: the INSERT is the compare-and-set
 // (the primary key lets exactly one deliverer take the row; a concurrent second
 // delivery waits on the index until the first transaction ends). It reports
@@ -195,6 +222,13 @@ type MemoryDeduplicator struct {
 // NewMemoryDeduplicator returns an empty in-memory deduplicator. Tests only.
 func NewMemoryDeduplicator() *MemoryDeduplicator {
 	return &MemoryDeduplicator{seen: make(map[string]struct{})}
+}
+
+func (m *MemoryDeduplicator) processed(_ context.Context, consumer, eventID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, dup := m.seen[consumer+"/"+eventID]
+	return dup, nil
 }
 
 func (m *MemoryDeduplicator) process(ctx context.Context, consumer, eventID string, body func(context.Context, Tx) error) (bool, error) {

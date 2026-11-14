@@ -62,6 +62,19 @@
 //		return out, err
 //	}
 //
+// # Optional keys, large bodies, multipart
+//
+// Required is the default. For an endpoint whose shipped clients send no key,
+// idempotency.PostOptional (and the Put/Patch/Delete/Add forms) make the key
+// optional: an absent header runs the request once with no idempotency (a keyless
+// Claim whose Run only runs the work), a present one is enforced as usual, and
+// idempotency_keyless_requests_total{route} counts the keyless calls until the
+// route can become required. A keyed body is capped at 1 MiB; an upload route
+// raises it with idempotency.With(idempotency.WithMaxBody(10<<20)).Post(...) (the
+// body is held in memory once, so the peak is the cap times concurrent uploads),
+// and a multipart route whose clients retry opts into
+// idempotency.WithMultipartHash(), which ignores the multipart boundary.
+//
 // An application method that creates a record takes an idempotency.Claim, which
 // only ClaimFor / NewClaim can build, so the compiler refuses a create path with
 // no idempotency; CheckRoutes (one test per service) refuses a write route that

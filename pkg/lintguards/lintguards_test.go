@@ -184,6 +184,50 @@ func TestScan_OptInRulesFireOnTheSampleAndStayOutOfTheDefaults(t *testing.T) {
 	assert.Empty(t, vs)
 }
 
+// HandleTx and HandlePrepared are the two non-legacy handler forms: the opt-in
+// LegacyEventHandlers rule bans events.Handle and nothing else, and does not
+// read the longer name HandlePrepared as a spelling of it.
+func TestScan_LegacyEventHandlersAcceptsHandleTxAndHandlePrepared(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "internal/handlers.go", `package internal
+
+import (
+	"context"
+
+	usersv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/users/v1"
+	"github.com/STECH-Super-App/go-common/pkg/events"
+)
+
+func register(d *events.Dispatcher) {
+	events.HandleTx(d, func(context.Context, events.Tx, *usersv1.UserRegistered) error { return nil })
+	events.HandlePrepared(d,
+		func(context.Context, *usersv1.UserRegistered) (struct{}, error) { return struct{}{}, nil },
+		func(context.Context, events.Tx, *usersv1.UserRegistered, struct{}) error { return nil })
+}
+`)
+	vs, err := lintguards.Scan(root, []lintguards.Rule{lintguards.LegacyEventHandlers()}, nil)
+	require.NoError(t, err)
+	assert.Empty(t, vs)
+
+	write(t, root, "internal/legacy.go", `package internal
+
+import (
+	"context"
+
+	usersv1 "github.com/STECH-Super-App/gen-go-lib/proto/events/users/v1"
+	"github.com/STECH-Super-App/go-common/pkg/events"
+)
+
+func legacy(d *events.Dispatcher) {
+	events.Handle(d, func(context.Context, *usersv1.UserRegistered) error { return nil })
+}
+`)
+	vs, err = lintguards.Scan(root, []lintguards.Rule{lintguards.LegacyEventHandlers()}, nil)
+	require.NoError(t, err)
+	require.Len(t, vs, 1, "the control: the old form is still flagged")
+	assert.Equal(t, "internal/legacy.go", strings.SplitN(vs[0].String(), ":", 2)[0])
+}
+
 func TestScan_ReleaseTwoRulesAreQuietOnLegitimateCode(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "internal/ok.go", `package internal
