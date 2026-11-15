@@ -40,6 +40,18 @@ const (
 	BackoffCeiling = time.Second
 )
 
+// BatchLinger is the writer's BatchTimeout: how long kafka-go holds a batch
+// that is not full before it sends it. kafka-go's default is one second
+// (writer.go batchTimeout), and a synchronous WriteMessages returns only after
+// its batch was written, so a call with fewer than BatchSize messages for a
+// partition — one outbox event, one dead letter — waited that whole second
+// for nothing. Every caller here sends complete per-topic chunks in one
+// WriteMessages call, so there is no later message to wait for: the linger only
+// has to be long enough for the call's own messages to join the batch, and they
+// do that under the partition writer's mutex before the timer can act. 10 ms is
+// well below the 100 ms retry floor, and above the timer's own resolution.
+const BatchLinger = 10 * time.Millisecond
+
 // ReasonUnsafeWriter is the Reason of the error Check returns.
 const ReasonUnsafeWriter = "COMMON_KAFKA_WRITER_UNSAFE"
 
@@ -62,7 +74,8 @@ func WithTransport(rt kafka.RoundTripper) Option {
 // Topic (every outbox row names its own), RequireAll, the Hash balancer (so a
 // domain event's key keeps its partition and its order — a nil balancer is
 // round-robin and LeastBytes ignores the key), the Rule 5 retry triple,
-// synchronous, and no topic auto-creation (Critical Rule 13: topics are
+// synchronous, a BatchLinger flush timer (kafka-go's default is 1 s per
+// partial batch), and no topic auto-creation (Critical Rule 13: topics are
 // declared, never created by a service). Transport is kafkaauth.Transport().
 func NewProducer(brokers []string, opts ...Option) *kafka.Writer {
 	w := &kafka.Writer{
@@ -72,6 +85,7 @@ func NewProducer(brokers []string, opts ...Option) *kafka.Writer {
 		MaxAttempts:            MaxAttempts,
 		WriteBackoffMin:        BackoffFloor,
 		WriteBackoffMax:        BackoffCeiling,
+		BatchTimeout:           BatchLinger,
 		Async:                  false,
 		AllowAutoTopicCreation: false,
 		Transport:              kafkaauth.Transport(),

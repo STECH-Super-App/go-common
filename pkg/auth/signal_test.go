@@ -1,6 +1,9 @@
 package auth
 
-import "testing"
+import (
+	"sort"
+	"testing"
+)
 
 func TestResponseForOutcome(t *testing.T) {
 	cases := map[string]struct {
@@ -81,6 +84,29 @@ func TestOutcomeForRevokeReason(t *testing.T) {
 	for reason, want := range cases {
 		if got := OutcomeForRevokeReason(reason); got != want {
 			t.Errorf("reason %q: got %q, want %q", reason, got, want)
+		}
+	}
+}
+
+func TestKnownOutcomes_IsTheSortedClosedSetOfTheOutcomeMap(t *testing.T) {
+	got := KnownOutcomes()
+
+	if !sort.StringsAreSorted(got) {
+		t.Errorf("not sorted: %v", got)
+	}
+	if len(got) != len(outcomeResponses) {
+		t.Errorf("got %d outcomes, the map holds %d", len(got), len(outcomeResponses))
+	}
+	seen := map[string]bool{}
+	for _, o := range got {
+		seen[o] = true
+		if _, ok := ResponseForOutcome(o); !ok {
+			t.Errorf("%q is listed but not recognized", o)
+		}
+	}
+	for _, o := range []string{OutcomeExpired, OutcomeAccountDeleted} {
+		if !seen[o] {
+			t.Errorf("%q missing from %v", o, got)
 		}
 	}
 }

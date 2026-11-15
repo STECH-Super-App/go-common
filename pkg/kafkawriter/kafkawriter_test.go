@@ -22,6 +22,7 @@ func TestNewProducer_SafeSettings(t *testing.T) {
 	assert.Equal(t, 5, w.MaxAttempts)
 	assert.Equal(t, 100*time.Millisecond, w.WriteBackoffMin)
 	assert.Equal(t, time.Second, w.WriteBackoffMax)
+	assert.Equal(t, kafkawriter.BatchLinger, w.BatchTimeout)
 	assert.Empty(t, w.Topic, "an outbox writer carries no fixed topic: every row names its own")
 	assert.IsType(t, &kafka.Hash{}, w.Balancer, "a domain event's key must keep its partition")
 	assert.NotNil(t, w.Transport, "kafka.Writer.Transport is an interface: nil would skip kafka-go's default only by accident")
@@ -34,7 +35,16 @@ func TestNewTopicWriter_FixedTopicSameSafety(t *testing.T) {
 	assert.Equal(t, "user.events.dlq.order", w.Topic)
 	assert.Equal(t, kafka.RequireAll, w.RequiredAcks)
 	assert.False(t, w.Async)
+	assert.Equal(t, kafkawriter.BatchLinger, w.BatchTimeout)
 	require.NoError(t, kafkawriter.Check(w))
+}
+
+// kafka-go's default BatchTimeout is one second, and a synchronous write of a
+// partial batch waits for it: every outbox publish and every dead-letter write
+// paid that second. The linger must stay far below it.
+func TestBatchLinger_IsSmallAndNotTheKafkaGoDefault(t *testing.T) {
+	assert.Positive(t, int64(kafkawriter.BatchLinger), "zero means kafka-go's 1 s default")
+	assert.LessOrEqual(t, kafkawriter.BatchLinger, 50*time.Millisecond)
 }
 
 func TestOptions(t *testing.T) {
