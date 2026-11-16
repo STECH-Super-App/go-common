@@ -4,6 +4,10 @@ Shared library for STECH microservices.
 
 ## Packages
 
+### `pkg/auth` — token kind
+
+`Claims.Kind` (`t`, `omitempty`) says what kind of token this is: `TokenKindAccess` (`"a"`, full access token), `TokenKindRegistration` (`"r"`, phone-proof only, never a user identity) or `TokenKindConsent` (`"c"`). Empty means a token minted before the claim existed. auth-service stamps it; api-gateway is the only enforcer and decides which identity headers a kind may produce; no other service reads it. It is not `Type`, the user's type.
+
 ### `pkg/auth` — chat read claims
 
 `Claims.ChatRead` (`chat_read`) is separate from legacy active/write `tns`. `ValidateChatReadContext` validates the whole snapshot before signing; `FormatChatReadContext` and `ParseChatReadContext` carry its unpadded base64url JSON in the gateway-set `X-Chat-Read-Context` header. The complete header line has a 64 KiB byte budget, including name and CRLF; a 1024-entry decoder guard is subordinate to that budget. Oversize and malformed contexts are rejected, never truncated; these are transport limits, not tenant quotas. After signing a token with this claim, auth must also call `ValidateChatAccessTokenSize` for the complete Authorization line. If optional chat enrichment cannot fit or validate, auth must omit or mark the chat context unavailable and preserve normal login; refresh must not burn credentials on validation failure. Gateway and ingress capacity must be verified and configured before activation; a local HTTP limit is not cloud proof. `READY` with an empty set is authoritative; `NOT_READY` and a missing claim grant nothing. Each entry carries tenant UUID, role, ACTIVE/SUSPENDED status, grant UUID, effective timestamp and ACTUAL/FEATURE_CUTOVER basis. The gateway must strip any incoming identity header and set this header only from validated verified claims. `ParseActingTenantID` validates `X-Acting-Tenant-Id` as a selector, not proof; `ChatReadContext.Membership` resolves the read membership. Object-contact authorization and the active `tns` write check remain consumers' responsibility. Revocation retains the existing asynchronous token blacklist semantics.
