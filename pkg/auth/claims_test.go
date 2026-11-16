@@ -59,3 +59,32 @@ func TestClaimsDecodeLegacyTenantsWithoutAt(t *testing.T) {
 	assert.Zero(t, out.Tenants[0].At)
 	assert.Empty(t, out.TenantsReadonly)
 }
+
+// The token kind is a one-letter claim. The exact values are a wire contract
+// shared by auth-service (writer) and api-gateway (enforcer).
+func TestTokenKindConstantsAreWireValues(t *testing.T) {
+	assert.Equal(t, "a", TokenKindAccess)
+	assert.Equal(t, "r", TokenKindRegistration)
+	assert.Equal(t, "c", TokenKindConsent)
+}
+
+func TestClaimsKindMarshalsAsT(t *testing.T) {
+	b, err := json.Marshal(Claims{UserID: "u", Kind: TokenKindAccess})
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"t":"a"`)
+}
+
+func TestClaimsEmptyKindOmitsKey(t *testing.T) {
+	b, err := json.Marshal(Claims{UserID: "u"})
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(b, &raw))
+	assert.NotContains(t, raw, "t")
+}
+
+func TestClaimsWithoutTUnmarshalToEmptyKind(t *testing.T) {
+	var c Claims
+	require.NoError(t, json.Unmarshal([]byte(`{"sub":"u","type":"user"}`), &c))
+	assert.Empty(t, c.Kind)
+	assert.Equal(t, "user", c.Type, "Type (the user's type) is a different claim from Kind")
+}
