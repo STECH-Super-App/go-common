@@ -24,6 +24,21 @@ type TenantClaim struct {
 	At   int64  `json:"at,omitempty"`
 }
 
+// Token kinds, the values of Claims.Kind (JWT claim "t"). One letter each: the
+// claim rides in every access token, so its size is part of the token budget.
+// The exact values are a wire contract between the signer (auth-service) and
+// the enforcer (api-gateway).
+const (
+	// TokenKindAccess marks a full access token: it may carry user identity.
+	TokenKindAccess = "a"
+	// TokenKindRegistration marks a registration-scope token: it proves a
+	// verified phone only and never carries a user identity.
+	TokenKindRegistration = "r"
+	// TokenKindConsent marks a consent-scope token (reserved for the
+	// user-agreement acceptance flow).
+	TokenKindConsent = "c"
+)
+
 // Claims represents the custom claims in a JWT token.
 //
 // There is no chat_read claim any more (SL-25): it grew with a person's
@@ -40,6 +55,13 @@ type Claims struct {
 	Avatar        string        `json:"avatar,omitempty"`
 	Email         string        `json:"email,omitempty"`
 	EmailVerified bool          `json:"email_verified,omitempty"`
+
+	// Kind is the token's kind: one of the TokenKind* constants, or empty on a
+	// token minted before the claim existed. api-gateway is the only enforcer:
+	// it decides from Kind (and Scope) which identity headers a token may
+	// produce; no other service reads it. It is NOT Type, which is the user's
+	// type ("user", "service", ...) and says nothing about the token itself.
+	Kind string `json:"t,omitempty"`
 
 	// TenantsReadonly holds the caller's read-only memberships — seats in
 	// SUSPENDED tenants. Tenants stays active-only (every non-chat consumer

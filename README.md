@@ -8,6 +8,10 @@ Shared library for STECH microservices.
 
 ## Packages
 
+### `pkg/auth` — token kind
+
+`Claims.Kind` (`t`, `omitempty`) says what kind of token this is: `TokenKindAccess` (`"a"`, full access token), `TokenKindRegistration` (`"r"`, phone-proof only, never a user identity) or `TokenKindConsent` (`"c"`). Empty means a token minted before the claim existed. auth-service stamps it; api-gateway is the only enforcer and decides which identity headers a kind may produce; no other service reads it. It is not `Type`, the user's type.
+
 ### `pkg/auth` — claims, identity headers, acting-tenant selector
 
 `Claims` is the access-token payload. **There is no `chat_read` claim any more (SL-25):** it grew with a person's relationships and broke web login past the 4,096-byte cookie limit (Critical Rule 20). `ChatReadContext`, its codec, `HeaderChatReadContext`, the 64 KiB header constants and `ValidateChatAccessTokenSize` are gone. A token minted earlier may still carry the key; `encoding/json` ignores it, so those tokens keep decoding (pinned by `TestClaimsIgnoreRetiredChatReadClaim`) — never give the decoder `DisallowUnknownFields`. Messenger authorises from `tns` / `tns_ro` through the `pkg/authz` headers.
