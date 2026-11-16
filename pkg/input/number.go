@@ -2,7 +2,6 @@ package input
 
 import (
 	"errors"
-	"math"
 	"strconv"
 )
 
@@ -95,20 +94,38 @@ type Page struct {
 	Offset int64
 }
 
+// DefaultMaxPage is the page bound ParsePage applies: a deeper page is refused
+// with COMMON_NUMBER_OUT_OF_RANGE. A page number is an OFFSET, and Postgres
+// walks every skipped row, so an unbounded page (?page=2000000000, offset
+// ~2e11) lets one request cost a full scan of the filtered set (SL-20). A list
+// that really must go deeper takes ParsePageMax with its own bound — or, better,
+// moves to keyset pagination.
+const DefaultMaxPage int32 = 10_000
+
 // ParsePage parses a page number and size from raw query values. An empty
 // rawNumber means 1; an empty rawSize means defaultSize. Number must be in
-// [1, MaxInt32], Size in [1, maxSize]. A failure reports which input failed
-// through Failure.AtPage. Offset is computed in int64; with both factors
-// bounded by MaxInt32 the product cannot overflow ((2^31-1)^2 < 2^63), so the
-// type itself is the overflow check. Panics unless 1 <= defaultSize <= maxSize.
+// [1, DefaultMaxPage], Size in [1, maxSize]. A failure reports which input
+// failed through Failure.AtPage. Offset is computed in int64. Panics unless
+// 1 <= defaultSize <= maxSize.
+//
+// It is ParsePageMax with maxPage = DefaultMaxPage.
 func ParsePage(rawNumber, rawSize string, defaultSize, maxSize int32) (Page, *Failure) {
-	if maxSize < 1 || defaultSize < 1 || defaultSize > maxSize {
-		panic("input: ParsePage needs 1 <= defaultSize <= maxSize")
+	return ParsePageMax(rawNumber, rawSize, defaultSize, maxSize, DefaultMaxPage)
+}
+
+// ParsePageMax is ParsePage with the deepest allowed page stated by the caller,
+// like every other validator's mandatory bound. Number must be in [1, maxPage];
+// with both factors bounded by MaxInt32 the offset product cannot overflow
+// ((2^31-1)^2 < 2^63), so the type itself is the overflow check. Panics unless
+// 1 <= defaultSize <= maxSize and maxPage >= 1.
+func ParsePageMax(rawNumber, rawSize string, defaultSize, maxSize, maxPage int32) (Page, *Failure) {
+	if maxSize < 1 || defaultSize < 1 || defaultSize > maxSize || maxPage < 1 {
+		panic("input: ParsePageMax needs 1 <= defaultSize <= maxSize and maxPage >= 1")
 	}
 
 	number := int32(1)
 	if rawNumber != "" {
-		n, f := ParseInt32(rawNumber, 1, math.MaxInt32)
+		n, f := ParseInt32(rawNumber, 1, maxPage)
 		if f != nil {
 			f.page = pageNumber
 			return Page{}, f

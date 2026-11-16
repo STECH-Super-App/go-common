@@ -13,48 +13,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// ctxStore is a relayStore that, like Postgres, refuses work on a done
-// context. It hands out its batch once, then nothing.
-type ctxStore struct {
-	mu         sync.Mutex
-	pending    []*Message
-	fetchCalls int
-	markedIDs  []string
-	onFetch    func()
-}
-
-func (s *ctxStore) FetchPending(ctx context.Context, _ int) ([]*Message, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	s.fetchCalls++
-	batch := s.pending
-	s.pending = nil
-	onFetch := s.onFetch
-	s.mu.Unlock()
-	if onFetch != nil {
-		onFetch()
-	}
-	return batch, nil
-}
-
-func (s *ctxStore) MarkSentBatch(ctx context.Context, ids []string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.markedIDs = append(s.markedIDs, ids...)
-	return nil
-}
-
-func (s *ctxStore) snapshot() (fetches int, marked []string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.fetchCalls, append([]string(nil), s.markedIDs...)
-}
-
 // ctxWriter is a relayWriter that, like kafka-go, fails on a done context.
 // It waits `delay` (ctx-aware) before answering, then returns result.
 type ctxWriter struct {
@@ -75,6 +33,9 @@ func (w *ctxWriter) WriteMessages(ctx context.Context, _ ...kafka.Message) error
 	}
 	return w.result
 }
+
+// ctxStore is the shared fake under its old name in these tests.
+type ctxStore = fakeRelayStore
 
 func shutdownTestRelay(store relayStore, writer relayWriter, flush time.Duration) *Relay {
 	return &Relay{
@@ -101,15 +62,15 @@ func idsOf(msgs []*Message) []string {
 func TestRelayRun_FinishesFetchedBatchAfterCancel(t *testing.T) {
 	batch := pendingMessagesFixture(3)
 	ctx, cancel := context.WithCancel(context.Background())
-	store := &ctxStore{pending: batch, onFetch: cancel}
+	store := &ctxStore{pending: batch, onClaim: cancel}
 	writer := &ctxWriter{delay: 50 * time.Millisecond}
 
 	err := shutdownTestRelay(store, writer, time.Second).Run(ctx)
 
 	require.ErrorIs(t, err, context.Canceled)
-	fetches, marked := store.snapshot()
+	lists, marked := store.snapshot()
 	assert.Equal(t, idsOf(batch), marked, "an already-fetched batch must be marked sent despite the cancel")
-	assert.Equal(t, 1, fetches, "no new batch may be fetched after the cancel")
+	assert.Equal(t, 1, lists, "no new poll may start after the cancel")
 }
 
 // The partial-failure arm (kafka.WriteErrors) marks its delivered half on the
@@ -117,7 +78,7 @@ func TestRelayRun_FinishesFetchedBatchAfterCancel(t *testing.T) {
 func TestRelayRun_PartialBatchMarkedAfterCancel(t *testing.T) {
 	batch := pendingMessagesFixture(2)
 	ctx, cancel := context.WithCancel(context.Background())
-	store := &ctxStore{pending: batch, onFetch: cancel}
+	store := &ctxStore{pending: batch, onClaim: cancel}
 	writer := &ctxWriter{
 		delay:  20 * time.Millisecond,
 		result: kafka.WriteErrors{nil, errors.New("unknown topic or partition")},
@@ -136,7 +97,7 @@ func TestRelayRun_PartialBatchMarkedAfterCancel(t *testing.T) {
 func TestRelayRun_FlushBoundedByShutdownFlushTimeout(t *testing.T) {
 	batch := pendingMessagesFixture(2)
 	ctx, cancel := context.WithCancel(context.Background())
-	store := &ctxStore{pending: batch, onFetch: cancel}
+	store := &ctxStore{pending: batch, onClaim: cancel}
 	writer := &ctxWriter{delay: time.Hour}
 
 	start := time.Now()
@@ -153,16 +114,15 @@ func TestRelayRun_FlushBoundedByShutdownFlushTimeout(t *testing.T) {
 // The bound starts at cancellation, not at fetch: while the relay runs
 // normally a write slower than ShutdownFlushTimeout still completes and is
 // marked, so a slow broker cannot make every batch time out and re-publish.
-func TestPollAndForward_NoFlushBoundWithoutCancel(t *testing.T) {
+func TestPoll_NoFlushBoundWithoutCancel(t *testing.T) {
 	batch := pendingMessagesFixture(2)
 	store := &ctxStore{pending: batch}
 	writer := &ctxWriter{delay: 150 * time.Millisecond}
 
-	processed, err := shutdownTestRelay(store, writer, 20*time.Millisecond).
-		pollAndForward(context.Background())
+	res := shutdownTestRelay(store, writer, 20*time.Millisecond).poll(context.Background())
 
-	require.NoError(t, err)
-	assert.Equal(t, 2, processed)
+	assert.False(t, res.failed)
+	assert.Equal(t, 2, res.sent)
 	_, marked := store.snapshot()
 	assert.Equal(t, idsOf(batch), marked)
 }
@@ -200,7 +160,7 @@ func TestOutboxRun_BlocksUntilCancelAndFlushes(t *testing.T) {
 	batch := pendingMessagesFixture(2)
 	fetched := make(chan struct{})
 	var once sync.Once
-	store := &ctxStore{pending: batch, onFetch: func() { once.Do(func() { close(fetched) }) }}
+	store := &ctxStore{pending: batch, onClaim: func() { once.Do(func() { close(fetched) }) }}
 	o := &Outbox{
 		relay:   shutdownTestRelay(store, &ctxWriter{delay: 100 * time.Millisecond}, time.Second),
 		reaper:  &Reaper{store: nopReaperStore{}, logger: zap.NewNop(), cfg: ReaperConfig{Interval: time.Hour}},

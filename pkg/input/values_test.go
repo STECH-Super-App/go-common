@@ -113,9 +113,15 @@ func TestParsePage(t *testing.T) {
 	if f != nil || p != (input.Page{Number: 3, Size: 50, Offset: 100}) {
 		t.Fatalf("explicit: (%+v, %v)", p, f)
 	}
-	p, f = input.ParsePage("2147483647", "100", 20, 100)
-	if f != nil || p.Offset != int64(math.MaxInt32-1)*100 {
+	p, f = input.ParsePage("10000", "100", 20, 100)
+	if f != nil || p.Offset != (input.Page{Number: 10000, Size: 100, Offset: 999900}).Offset {
 		t.Fatalf("max page: (%+v, %v)", p, f)
+	}
+	// Past DefaultMaxPage a caller must state its own bound (SL-20); the type
+	// still holds the extreme: MaxInt32 pages of 100 cannot overflow the offset.
+	p, f = input.ParsePageMax("2147483647", "100", 20, 100, math.MaxInt32)
+	if f != nil || p.Offset != int64(math.MaxInt32-1)*100 {
+		t.Fatalf("explicit max page: (%+v, %v)", p, f)
 	}
 
 	bad := []struct {
@@ -235,7 +241,7 @@ func TestEmail(t *testing.T) {
 		"user@example.com":            "user@example.com",
 		"  User.Name@Example.COM  ":   "User.Name@example.com",
 		"a+tag@sub-domain.example.ru": "a+tag@sub-domain.example.ru",
-		"имя@example.com":             "имя@example.com",
+		"user@пример.рф":              "user@xn--e1afmkfd.xn--p1ai", // Cyrillic domain: stored as its A-label (rule «B», 14.11.2026)
 	}
 	for raw, want := range ok {
 		got, f := input.Email(raw, 254)
@@ -260,7 +266,7 @@ func TestEmail(t *testing.T) {
 		"user@exam ple.com",
 		"us\x00er@example.com",
 		"us\u200Ber@example.com",
-		"user@пример.рф",
+		"имя@example.com", // non-ASCII local part: refused since SL-18
 		"\xffuser@example.com",
 	}
 	for _, raw := range bad {

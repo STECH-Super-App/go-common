@@ -276,8 +276,10 @@ func TestRun_HTTPBudgetExpiryHardStops(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second, "the budget must bound Run")
 	assert.Error(t, <-clientErr, "the hard stop must close the stuck connection")
 	assert.NotEmpty(t, logs.FilterMessage("server did not stop within the shutdown budget; hard stop").All())
-	assert.False(t, closerRan, "the budget was spent in phase 1, so the closer is skipped")
-	assertShutdownComplete(t, logs, "signal", []string{"server:http", "closer:after"})
+	// SL-05: the server phase is hard-stopped at budget - reserve, so the
+	// closer keeps its share instead of being skipped (it used to be skipped).
+	assert.True(t, closerRan, "closers keep a reserve of the budget when phase 1 overruns")
+	assertShutdownComplete(t, logs, "signal", []string{"server:http"})
 }
 
 // gRPC: GracefulStop waits for an open stream forever; on the deadline Stop

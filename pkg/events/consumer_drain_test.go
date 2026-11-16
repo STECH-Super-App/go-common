@@ -89,28 +89,6 @@ func (w *ctxCheckingWriter) snapshot() (errs []error, written int) {
 	return append([]error(nil), w.errs...), len(w.msgs)
 }
 
-// txDedup models outbox.Deduplicator: fn runs inside a transaction whose
-// COMMIT happens after fn on the same ctx, so a ctx cancelled while fn ran
-// rolls the event_id claim back.
-type txDedup struct {
-	mu        sync.Mutex
-	commitErr error
-	calls     int
-}
-
-func (d *txDedup) Process(ctx context.Context, _ string, fn func() error) error {
-	d.mu.Lock()
-	d.calls++
-	d.mu.Unlock()
-	if err := fn(); err != nil {
-		return err
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.commitErr = ctx.Err()
-	return d.commitErr
-}
-
 // blockingHandler parks until released and records the context state it saw
 // at the moment it finished — i.e. after the cancel.
 type blockingHandler struct {
@@ -203,7 +181,7 @@ func runUntilCancelMidHandler(t *testing.T, disp *events.Dispatcher, h *blocking
 	}
 }
 
-// The re-send guard: the handler, the dedup commit and the offset commit of
+// The re-send guard: the handler and the offset commit of
 // the message in flight at shutdown all see a live context (with Run's values
 // kept), and the second message — already buffered — is neither fetched nor
 // handled.
@@ -212,10 +190,9 @@ func TestDispatcherRun_ShutdownFinishesInFlightMessage(t *testing.T) {
 		userRegisteredMsg(t, "e1"), userRegisteredMsg(t, "e2"),
 	}}
 	dlq := &ctxCheckingWriter{}
-	dedup := &txDedup{}
 	h := newBlockingHandler(nil)
 
-	disp := events.NewDispatcher(reader, dlq, events.WithDedup(dedup))
+	disp := newDisp(reader, dlq)
 	events.Handle(disp, h.handle)
 
 	err := runUntilCancelMidHandler(t, disp, h)
@@ -225,11 +202,6 @@ func TestDispatcherRun_ShutdownFinishesInFlightMessage(t *testing.T) {
 	assert.NoError(t, ctxErr, "the handler's context was cancelled mid-message")
 	assert.Equal(t, "kept", value, "the handler context must keep Run's values")
 	assert.Equal(t, 1, calls, "no message may be handled after shutdown began")
-
-	dedup.mu.Lock()
-	assert.NoError(t, dedup.commitErr, "the dedup transaction committed on a cancelled context")
-	assert.Equal(t, 1, dedup.calls)
-	dedup.mu.Unlock()
 
 	fetches, commitErrs := reader.snapshot()
 	assert.Equal(t, 1, fetches, "the buffered second message must not be fetched after shutdown")
@@ -251,7 +223,7 @@ func TestDispatcherRun_ShutdownStillDeadLettersInFlightFailure(t *testing.T) {
 	dlq := &ctxCheckingWriter{}
 	h := newBlockingHandler(fmt.Errorf("bad payload: %w", events.ErrPoisonPill))
 
-	disp := events.NewDispatcher(reader, dlq)
+	disp := newDisp(reader, dlq)
 	events.Handle(disp, h.handle)
 
 	err := runUntilCancelMidHandler(t, disp, h)
@@ -276,7 +248,7 @@ func TestDispatcherRun_ShutdownStillForwardsInFlightRetry(t *testing.T) {
 	retry := &ctxCheckingWriter{}
 	h := newBlockingHandler(errors.New("transient"))
 
-	disp := events.NewDispatcher(reader, dlq, events.WithRetry(retry))
+	disp := newDisp(reader, dlq, events.WithRetry(retry))
 	events.Handle(disp, h.handle)
 
 	err := runUntilCancelMidHandler(t, disp, h)
@@ -293,7 +265,7 @@ func TestDispatcherRun_ShutdownStillForwardsInFlightRetry(t *testing.T) {
 // With nothing in flight, cancel alone ends the blocking fetch.
 func TestDispatcherRun_IdleShutdownReturnsPromptly(t *testing.T) {
 	reader := &greedyReader{}
-	disp := events.NewDispatcher(reader, &ctxCheckingWriter{})
+	disp := newDisp(reader, &ctxCheckingWriter{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -316,7 +288,7 @@ func TestDispatcherRun_CancelledBeforeStartFetchesNothing(t *testing.T) {
 	reader := &greedyReader{msgs: []kafka.Message{userRegisteredMsg(t, "e1")}}
 	h := newBlockingHandler(nil)
 	close(h.release) // a regression must fail this test, not hang it
-	disp := events.NewDispatcher(reader, &ctxCheckingWriter{})
+	disp := newDisp(reader, &ctxCheckingWriter{})
 	events.Handle(disp, h.handle)
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -13,6 +13,7 @@ package pgerr
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -29,8 +30,28 @@ const (
 	SQLStateUntranslatableCharacter   = "22P05" // untranslatable_character (NUL in jsonb)
 	SQLStateStringDataRightTruncation = "22001" // string_data_right_truncation (varchar(n) overflow)
 	SQLStateInvalidTextRepresentation = "22P02" // invalid_text_representation (bad uuid/int literal)
+	SQLStateNumericValueOutOfRange    = "22003" // numeric_value_out_of_range (1e15 into numeric(12,2))
+	SQLStateInvalidDatetimeFormat     = "22007" // invalid_datetime_format
+	SQLStateDatetimeFieldOverflow     = "22008" // datetime_field_overflow (date outside the type's range)
+	SQLStateProgramLimitExceeded      = "54000" // program_limit_exceeded (value too large for an index row)
 	LabelEncode                       = "encode"
 )
+
+// backstopCodes are the SQLSTATEs InvalidInput recognises, in the order the
+// counter's series are pre-created. 22003 can also come from server-side
+// arithmetic on valid inputs (a SUM that overflows); the backstop still counts
+// it, because the missing piece in that case is just as often a range check on
+// the inputs, and a 4xx with an alert beats a Reason-less 500 (SL-21).
+var backstopCodes = []string{
+	SQLStateInvalidByteSequence,
+	SQLStateUntranslatableCharacter,
+	SQLStateStringDataRightTruncation,
+	SQLStateInvalidTextRepresentation,
+	SQLStateNumericValueOutOfRange,
+	SQLStateInvalidDatetimeFormat,
+	SQLStateDatetimeFieldOverflow,
+	SQLStateProgramLimitExceeded,
+}
 
 var backstopTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "stech_input_backstop_total",
@@ -39,17 +60,16 @@ var backstopTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 
 func init() {
 	metrics.Registry.MustRegister(backstopTotal)
-	// Pre-create every series at 0 so increase() has a baseline from the
-	// first scrape and the very first backstop hit is visible to the alert.
-	for _, code := range []string{
-		SQLStateInvalidByteSequence,
-		SQLStateUntranslatableCharacter,
-		SQLStateStringDataRightTruncation,
-		SQLStateInvalidTextRepresentation,
-		LabelEncode,
-	} {
-		backstopTotal.WithLabelValues(code)
+	precreateSeries(backstopTotal)
+}
+
+// precreateSeries creates every series at 0 so increase() has a baseline from
+// the first scrape and the very first backstop hit is visible to the alert.
+func precreateSeries(vec *prometheus.CounterVec) {
+	for _, code := range backstopCodes {
+		vec.WithLabelValues(code)
 	}
+	vec.WithLabelValues(LabelEncode)
 }
 
 // InvalidInput reports whether err is Postgres (or pgx) refusing an input
@@ -58,7 +78,8 @@ func init() {
 // nil and for every other error, so it is safe as the first line of any
 // mapPgError.
 //
-// Recognised: *pgconn.PgError with SQLSTATE 22021, 22P05, 22001 or 22P02, and
+// Recognised: *pgconn.PgError with a SQLSTATE in backstopCodes (22021, 22P05,
+// 22001, 22P02, 22003, 22007, 22008, 54000), and
 // pgx v5's integer out-of-range encode error (see isIntEncodeError).
 func InvalidInput(err error) (*input.Failure, bool) {
 	if err == nil {
@@ -67,9 +88,7 @@ func InvalidInput(err error) (*input.Failure, bool) {
 
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		switch pgErr.Code {
-		case SQLStateInvalidByteSequence, SQLStateUntranslatableCharacter,
-			SQLStateStringDataRightTruncation, SQLStateInvalidTextRepresentation:
+		if slices.Contains(backstopCodes, pgErr.Code) {
 			backstopTotal.WithLabelValues(pgErr.Code).Inc()
 			return input.RejectedByStorage(fmt.Errorf("sqlstate %s table=%q column=%q: %w",
 				pgErr.Code, pgErr.TableName, pgErr.ColumnName, err)), true

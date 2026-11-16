@@ -69,7 +69,7 @@ func TestRejectUndeclaredPlaceholder(t *testing.T) {
 	if len(sum.Rejected) != 1 || sum.Rejected[0] != "ru/greet.title" {
 		t.Fatalf("rejected = %v", sum.Rejected)
 	}
-	if got, _ := b.Snapshot().Resolve("ru", "greet.title", map[string]any{"name": "A"}); got != "Hello A" {
+	if got, _ := b.Snapshot().Resolve("ru", "greet.title", map[string]any{"name": "A"}); got != helloA {
 		t.Fatalf("rejected key must fall back to baseline, got %q", got)
 	}
 }

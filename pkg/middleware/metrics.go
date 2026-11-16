@@ -34,7 +34,7 @@ func Metrics() echo.MiddlewareFunc {
 			err := next(c)
 
 			metrics.HTTPRequestDuration.WithLabelValues(
-				c.Request().Method,
+				metrics.MethodLabel(c.Request().Method),
 				routeTemplate(c),
 				metrics.StatusClass(responseStatus(c, err)),
 			).Observe(time.Since(start).Seconds())

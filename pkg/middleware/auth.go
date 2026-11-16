@@ -1,15 +1,16 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
 	"github.com/STECH-Super-App/go-common/pkg/authz"
 	commonErrors "github.com/STECH-Super-App/go-common/pkg/errors"
+	"github.com/STECH-Super-App/go-common/pkg/logger"
 	"github.com/STECH-Super-App/go-common/pkg/response"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
 // AuthMiddleware enforces authentication for protected routes. It reads the
@@ -60,14 +61,21 @@ func OptionalAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 // RegistrationAuthMiddleware checks for the presence of the X-Phone and X-Scope headers.
 // It is used for registration-scope tokens that don't have a user ID yet.
+//
+// A refusal is always the same 401 COMMON_REGISTRATION_TOKEN_REQUIRED; WHY it
+// was refused goes to the operator, never to the client: one stech_registration_
+// auth_rejected_total{cause} increment and one Info line holding the cause (the
+// request-scoped logger carries request_id). Neither ever holds the phone
+// number or the scope value — the phone is PII (SL-12).
 func RegistrationAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		phone := c.Request().Header.Get(auth.HeaderPhone)
 		scope := c.Request().Header.Get(auth.HeaderScope)
 
-		log.Printf("RegistrationAuthMiddleware - Phone: %q, Scope: %q", phone, scope)
-
 		if phone == "" || scope != "registration" {
+			cause := registrationRefusalCause(c.Request().Header.Get(auth.HeaderAuthOutcome), phone)
+			registrationAuthRejected.WithLabelValues(cause).Inc()
+			logger.FromContext(c.Request().Context()).Info("registration token refused", zap.String("cause", cause))
 			return response.JSONError(c, commonErrors.New(http.StatusUnauthorized).
 				Reason("COMMON_REGISTRATION_TOKEN_REQUIRED").
 				Message("valid registration token required").

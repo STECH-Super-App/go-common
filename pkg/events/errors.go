@@ -3,11 +3,15 @@
 // failed message: poison pill and leave uncommitted.
 package events
 
-import "errors"
+import (
+	"errors"
+
+	commonerrors "github.com/STECH-Super-App/go-common/pkg/errors"
+)
 
 // ErrPoisonPill marks an error as non-retryable. Handlers that return an error
 // wrapping ErrPoisonPill cause the dispatcher to route the message straight to
-// the DLQ without consuming retry budget. Example:
+// the DLQ without any retry. Example:
 //
 //	return fmt.Errorf("unknown tenant %s: %w", id, events.ErrPoisonPill)
 var ErrPoisonPill = errors.New("events: non-retryable")
@@ -27,20 +31,54 @@ var ErrPoisonPill = errors.New("events: non-retryable")
 //	}
 //
 // The dispatcher then commits no offset, writes no retry or DLQ copy and counts
-// no handler failure, and the error reaches Deduplicator.Process, so the
-// event_id claim rolls back with it. Run returns at once with an error wrapping
+// no handler failure, and the error reaches the deduplicator, so the claim
+// rolls back with it. Run returns at once with an error wrapping
 // ErrLeaveUncommitted and never fetches again (see Run for why the stop is
 // mandatory and how callers treat it). Kafka redelivers the message to whichever
 // consumer owns its partition after this reader is closed.
 //
-// With WithDedup(outbox.NewDeduplicator(pool)), an outage already under way
-// when a message arrives fails pool.Begin before the handler runs, and the
-// message is routed as an ordinary retryable failure. So a handler meant to
-// pause on a Postgres outage does without WithDedup and calls
-// Deduplicator.Process itself, where it can pause on that failure, with the
-// event_id from envelope.HeadersFromContext.
+// Since release 2 most outages need no handler code at all: any error that is
+// not a decode failure, an ErrPoisonPill or a validation failure is retried in
+// place for about two minutes (see Classify), and an in-place retry that is
+// interrupted by a shutdown leaves the message uncommitted by itself.
 //
 // It outranks every other classification, ErrPoisonPill included: leaving the
-// message loses nothing, and the redelivery is judged afresh. A panic never
-// leaves a message uncommitted; it is dead-lettered as handler_panic.
+// message loses nothing, and the redelivery is judged afresh.
 var ErrLeaveUncommitted = errors.New("events: leave the message uncommitted")
+
+// ErrDeadLetterWriteFailed marks the error Run returns when the dead-letter (or
+// legacy retry-tier) write of a failed message itself failed. The dispatcher
+// stops: it commits nothing and fetches nothing more, so the message is not
+// lost; the process must exit non-zero (through pkg/lifecycle, see
+// Dispatcher.Worker) and Kafka redelivers the message after the restart.
+//
+// Until release 2 the dispatcher logged "leaving offset uncommitted" and went
+// on to the next message, whose commit then moved the partition's offset past
+// the one it had just failed to dead-letter (SL-00, go-common#38).
+var ErrDeadLetterWriteFailed = errors.New("events: dead-letter write failed")
+
+// ErrReaderClosed marks the error Dispatcher.Worker returns when the reader was
+// closed (kafka-go answers io.EOF) while the process was NOT stopping. Run
+// treats a closed reader as a shutdown and returns nil, which is right for a
+// shutdown and wrong for a reader that something else closed: lifecycle takes a
+// worker's early nil as "returned; continuing", and the pod would live on with
+// a consumer that is dead and a reader that no longer holds its partitions.
+var ErrReaderClosed = errors.New("events: reader closed while the process is running")
+
+// Reasons of the typed errors this package returns (Critical Rule 7).
+const (
+	// ReasonReaderClosed: the 500 Worker returns with ErrReaderClosed in its chain.
+	ReasonReaderClosed = "COMMON_EVENTS_READER_CLOSED"
+	// ReasonDeadLetterWriteFailed: the 500 Run returns with ErrDeadLetterWriteFailed
+	// in its chain.
+	ReasonDeadLetterWriteFailed = "COMMON_EVENTS_DEAD_LETTER_WRITE_FAILED"
+	// ReasonDedupFailed: the deduplicator's own transaction failed (begin, claim
+	// or commit), never the handler's error.
+	ReasonDedupFailed = "COMMON_EVENTS_DEDUP_FAILED"
+	// ReasonMessageTimeout: a handler outlived the per-message time limit.
+	ReasonMessageTimeout = "COMMON_EVENTS_MESSAGE_TIMEOUT"
+)
+
+func internalError(reason, message string, cause error) *commonerrors.AppError {
+	return commonerrors.New(500).Reason(reason).Message(message).Cause(cause).Build()
+}

@@ -31,6 +31,29 @@ func WithShutdownBudget(d time.Duration) Option {
 	}
 }
 
+// DefaultWorkerReserve is the part of the shutdown budget the server phase may
+// NOT use: it is kept for stopping workers (an outbox relay's in-flight batch,
+// a Dispatcher's in-flight message) and running closers (Kafka readers, DB
+// pool, tracer flush). The server phase is hard-stopped at budget - reserve.
+// Without it one handler or stream that never returns held phase 1 for the
+// whole budget and every later step was abandoned (SL-05).
+const DefaultWorkerReserve = 10 * time.Second
+
+// maxReserveShare caps the reserve at this fraction of the budget, so a short
+// budget (a test's 200 ms) still gives the server phase a real share.
+const maxReserveShare = 0.4
+
+// WithWorkerReserve sets the part of the budget kept for workers and closers
+// (default DefaultWorkerReserve, never more than 40% of the budget). Zero or
+// negative values are ignored.
+func WithWorkerReserve(d time.Duration) Option {
+	return func(a *App) {
+		if d > 0 {
+			a.reserve = d
+		}
+	}
+}
+
 // WithDrainDelay sets a sleep between the shutdown trigger and the server
 // stop phase (default 0). Stopping() is already closed during it, so the
 // process can fail readiness while the load balancer is still routing to it.
@@ -82,6 +105,7 @@ type NamedCloser struct {
 type App struct {
 	log        *zap.Logger
 	budget     time.Duration
+	reserve    time.Duration
 	drainDelay time.Duration
 
 	mu      sync.Mutex
@@ -93,6 +117,13 @@ type App struct {
 	stopping chan struct{}
 }
 
+// serverBudget is how long the drain delay plus the server phase may take: the
+// whole budget minus the reserve kept for workers and closers.
+func (a *App) serverBudget() time.Duration {
+	reserve := min(a.reserve, time.Duration(float64(a.budget)*maxReserveShare))
+	return a.budget - reserve
+}
+
 // New returns an App logging to log (a nil logger means zap.NewNop()).
 func New(log *zap.Logger, opts ...Option) *App {
 	if log == nil {
@@ -101,6 +132,7 @@ func New(log *zap.Logger, opts ...Option) *App {
 	a := &App{
 		log:      log,
 		budget:   DefaultShutdownBudget,
+		reserve:  DefaultWorkerReserve,
 		stopping: make(chan struct{}),
 	}
 	for _, opt := range opts {

@@ -47,6 +47,65 @@ func counterOf(t *testing.T, family string) float64 {
 	return 0
 }
 
+// topicGaugeValue and topicCounterOf read one series of a by-topic family; 0
+// when the series does not exist yet.
+func topicGaugeValue(t *testing.T, family, topic string) float64 {
+	t.Helper()
+	return topicSeries(t, family, topic, false)
+}
+
+func topicCounterOf(t *testing.T, family, topic string) float64 {
+	t.Helper()
+	return topicSeries(t, family, topic, true)
+}
+
+func topicSeries(t *testing.T, family, topic string, counter bool) float64 {
+	t.Helper()
+	families, err := metrics.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() != family {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "topic" && l.GetValue() == topic {
+					if counter {
+						return m.GetCounter().GetValue()
+					}
+					return m.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// SL-03: the by-topic gauges name the stuck topic, and a topic that drained is
+// reset to 0 instead of keeping its last (stuck-looking) value forever.
+func TestSampler_ByTopicGaugesNameTheStuckTopicAndResetWhenDrained(t *testing.T) {
+	stats := []TopicStat{
+		{Topic: "sampler.stuck.events", Pending: 7, OldestAgeSeconds: 321},
+		{Topic: "sampler.healthy.events", Pending: 1, OldestAgeSeconds: 0.5},
+	}
+	s := newSampler(func(context.Context) (int64, float64, error) { return 8, 321, nil }, time.Hour, zap.NewNop()).
+		withTopics(func(context.Context) ([]TopicStat, error) { return stats, nil })
+
+	s.collect(context.Background())
+
+	assert.Equal(t, 7.0, topicGaugeValue(t, "outbox_topic_pending_messages", "sampler.stuck.events"))
+	assert.Equal(t, 321.0, topicGaugeValue(t, "outbox_topic_oldest_pending_age_seconds", "sampler.stuck.events"))
+	assert.Equal(t, 0.5, topicGaugeValue(t, "outbox_topic_oldest_pending_age_seconds", "sampler.healthy.events"))
+
+	stats = stats[1:] // the stuck topic drained
+	s.collect(context.Background())
+
+	assert.Zero(t, topicGaugeValue(t, "outbox_topic_pending_messages", "sampler.stuck.events"))
+	assert.Zero(t, topicGaugeValue(t, "outbox_topic_oldest_pending_age_seconds", "sampler.stuck.events"),
+		"a drained topic must not keep reporting its old age")
+	assert.Equal(t, 1.0, topicGaugeValue(t, "outbox_topic_pending_messages", "sampler.healthy.events"))
+}
+
 // Test (e), part one: BOTH gauges must be published from process start,
 // including on an empty table (§3.3).
 //

@@ -77,14 +77,39 @@ func text(raw string, maxRunes int, multiLine bool, opts []TextOpt) (string, *Fa
 }
 
 // trimEdges removes leading and trailing runes that are whitespace
-// (unicode.IsSpace), control (Cc) or format (Cf) characters — step 2 of
-// Line/Body, shared with Phone and Email.
+// (unicode.IsSpace), control (Cc) or one of the invisible format characters
+// named in isInvisibleFormat — step 2 of Line/Body, shared with Phone and Email.
 func trimEdges(s string) string {
 	return strings.TrimFunc(s, isEdgeTrimmed)
 }
 
 func isEdgeTrimmed(r rune) bool {
-	return unicode.IsSpace(r) || unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r)
+	return unicode.IsSpace(r) || unicode.Is(unicode.Cc, r) || isInvisibleFormat(r)
+}
+
+// isInvisibleFormat is the named list of format (Cf) runes that draw nothing and
+// only ever appear at the edge of a text by accident or to disguise it: BOM,
+// the zero-width spaces and joiners, direction marks and the bidi embedding /
+// override / isolate controls, word joiner and the invisible operators, soft
+// hyphen, Arabic letter mark, Mongolian vowel separator and the deprecated
+// format controls.
+//
+// It is NOT the whole Cf category, which also holds runes that carry meaning at
+// an edge: the emoji tag characters U+E0020–U+E007F that END a flag sequence
+// (a text ending in the flag of Scotland must keep it) and the Arabic number
+// signs U+0600–U+0605 / U+06DD that START a number (SL-17).
+func isInvisibleFormat(r rune) bool {
+	switch {
+	case r == 0x00AD, r == 0x061C, r == 0x180E, r == 0xFEFF:
+		return true // soft hyphen, ALM, Mongolian vowel separator, BOM
+	case r >= 0x200B && r <= 0x200F: // ZWSP, ZWNJ, ZWJ, LRM, RLM
+		return true
+	case r >= 0x202A && r <= 0x202E: // LRE, RLE, PDF, LRO, RLO
+		return true
+	case r >= 0x2060 && r <= 0x206F: // WJ, invisible operators, isolates, deprecated
+		return true
+	}
+	return false
 }
 
 // hasForbiddenRune is the character rule. It mirrors sale-service
@@ -107,7 +132,39 @@ func hasForbiddenRune(s string, multiLine bool) bool {
 			return true
 		}
 	}
-	return false
+	// Body takes bidi controls only in matched pairs (SL-19): an unclosed
+	// override such as RLO reverses everything after it, which lets a
+	// description display a phone number or a link backwards. Line refuses them
+	// outright above.
+	return multiLine && hasUnbalancedBidi(s)
+}
+
+// hasUnbalancedBidi reports a bidi embedding/override (LRE, RLE, LRO, RLO) that
+// is never closed by PDF, a PDF with nothing to close, or the same for the
+// isolates (LRI, RLI, FSI closed by PDI). The two families are counted apart,
+// so an RLO closed by an isolate's PDI is still unbalanced. LRM and RLM are
+// marks, not openers, and are always allowed.
+func hasUnbalancedBidi(s string) bool {
+	var embeds, isolates int
+	for _, r := range s {
+		switch {
+		case r >= 0x202A && r <= 0x202B, r == 0x202D, r == 0x202E:
+			embeds++
+		case r == 0x202C:
+			if embeds == 0 {
+				return true
+			}
+			embeds--
+		case r >= 0x2066 && r <= 0x2068:
+			isolates++
+		case r == 0x2069:
+			if isolates == 0 {
+				return true
+			}
+			isolates--
+		}
+	}
+	return embeds != 0 || isolates != 0
 }
 
 // isSingleLineDenied is sale-service's SINGLE_LINE_DENIED set
@@ -143,5 +200,21 @@ func isInvisible(r rune) bool {
 	return unicode.IsSpace(r) ||
 		unicode.Is(unicode.Cf, r) ||
 		unicode.Is(unicode.Variation_Selector, r) ||
-		unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r)
+		unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r) ||
+		isBlankLookalike(r)
+}
+
+// isBlankLookalike lists runes that are neither space nor default-ignorable but
+// draw nothing, so a required field could be "filled" with them (SL-19). U+2800
+// BRAILLE PATTERN BLANK is the known one; the Hangul and Khmer fillers are
+// default-ignorable already and are listed so the intent survives a Unicode
+// table change.
+func isBlankLookalike(r rune) bool {
+	switch r {
+	case 0x2800, // BRAILLE PATTERN BLANK
+		0x115F, 0x1160, 0x3164, 0xFFA0, // Hangul fillers
+		0x17B4, 0x17B5: // Khmer inherent vowels
+		return true
+	}
+	return false
 }

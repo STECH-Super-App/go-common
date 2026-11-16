@@ -28,6 +28,22 @@ var globalRoleRank = map[GlobalRole]int{
 	GlobalRoleAdmin:        3,
 }
 
+// FormatRolesCSV renders roles as the comma-separated X-User-Roles value. A role
+// that is blank or holds a ',' or '=' is omitted instead of being split into
+// extra roles by the reader (HasMinGlobalRole splits on commas): a claim that
+// smuggled "user,admin" in one string must not become two roles.
+func FormatRolesCSV(roles []string) string {
+	parts := make([]string, 0, len(roles))
+	for _, r := range roles {
+		r = strings.TrimSpace(r)
+		if !formattable(r) {
+			continue
+		}
+		parts = append(parts, r)
+	}
+	return strings.Join(parts, ",")
+}
+
 // HasMinGlobalRole reports whether any role in the comma-separated rolesCSV
 // ranks >= minRole in the platform hierarchy admin > support_agent > user. It is
 // THE global-role authorization predicate every Go service routes through.

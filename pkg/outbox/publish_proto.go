@@ -3,16 +3,18 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/STECH-Super-App/go-common/pkg/envelope"
+	"github.com/STECH-Super-App/go-common/pkg/errors"
 )
 
 // PublishProtoOptions configures a single typed-proto outbox publish.
@@ -40,7 +42,7 @@ type PublishProtoOptions struct {
 // envelope header set per design §4.2. This is the only producer API.
 func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOptions) error {
 	if opts.Message == nil {
-		return fmt.Errorf("outbox: PublishProto: Message is nil")
+		return internalError(ReasonPublishInvalid, "outbox: PublishProto: Message is nil", nil)
 	}
 
 	eventID := opts.EventID
@@ -51,7 +53,7 @@ func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOp
 
 	payload, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(opts.Message)
 	if err != nil {
-		return fmt.Errorf("outbox: marshal proto: %w", err)
+		return internalError(ReasonMarshalFailed, "outbox: marshal proto", err)
 	}
 
 	topic := opts.Topic
@@ -63,6 +65,10 @@ func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOp
 
 	headers := make(map[string]string, len(opts.Headers)+7)
 	for k, v := range opts.Headers {
+		// Baggage is caller-controlled data, never an event header (SL-24).
+		if strings.EqualFold(k, "baggage") {
+			continue
+		}
 		headers[k] = v
 	}
 	headers[envelope.HeaderEventID] = eventID
@@ -82,7 +88,11 @@ func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOp
 	//
 	// Injects nothing when no span is active, so this is a no-op for services
 	// that never call tracing.Init.
-	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(headers))
+	//
+	// Only the W3C trace context is written — never the global propagator,
+	// which may include Baggage: a client-sent baggage header would otherwise
+	// be copied into every row and Kafka message the request causes (SL-24).
+	propagation.TraceContext{}.Inject(ctx, propagation.MapCarrier(headers))
 
 	msg := &Message{
 		ID:            eventID,
@@ -96,7 +106,27 @@ func (p *Publisher) PublishProto(ctx context.Context, tx Tx, opts PublishProtoOp
 		Status:        StatusPending,
 		CreatedAt:     time.Now().UTC(),
 	}
+	// Refused HERE, in the request that built the event: a row bigger than the
+	// broker accepts can never be sent, and (SL-03) used to stall the whole outbox
+	// behind it. The compact size is a lower bound, so this check is free and
+	// exact for what it refuses; the Store then measures the size Postgres will
+	// really send (jsonb::text) and refuses the rest in the same statement.
+	if size := msg.compactWireSize(); size > p.maxMessageBytes {
+		return eventTooLarge(eventType, size, p.maxMessageBytes)
+	}
+	if li, ok := p.store.(limitedInserter); ok {
+		return li.InsertTxLimited(ctx, tx, msg, p.maxMessageBytes)
+	}
 	return p.store.InsertTx(ctx, tx, msg)
+}
+
+// eventTooLarge is the typed 422 of an event over the size limit.
+func eventTooLarge(eventType string, size, limit int) error {
+	return errors.New(http.StatusUnprocessableEntity).
+		Reason(ReasonEventTooLarge).
+		Message(fmt.Sprintf("outbox: %s event is %d bytes, over the %d byte limit", eventType, size, limit)).
+		Params(map[string]any{"event_type": eventType, "size": size, "limit": limit}).
+		Build()
 }
 
 // setEventIDField sets the "event_id" string field on msg by name, if present.

@@ -65,10 +65,10 @@ const defaultSamplerRatio = 1.0
 //
 // The returned shutdown is never nil and is safe to call more than once.
 func Init(serviceName string) (shutdown func(context.Context) error, err error) {
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
+	// W3C trace context only. Baggage is deliberately NOT propagated: nothing
+	// here reads it, a client can send up to 8 KiB of it, and it would be copied
+	// into every outbox row and Kafka message (SL-24).
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	if endpoint() == "" {
 		otel.SetTracerProvider(noop.NewTracerProvider())

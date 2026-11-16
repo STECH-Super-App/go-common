@@ -1,5 +1,10 @@
 package auth
 
+import (
+	"slices"
+	"strings"
+)
+
 // X-Auth-Action response-header values. The gateway/services tell the client
 // which action to take when authentication fails.
 const (
@@ -83,6 +88,19 @@ var outcomeResponses = map[string]Failure{
 func ResponseForOutcome(outcome string) (Failure, bool) {
 	f, ok := outcomeResponses[outcome]
 	return f, ok
+}
+
+// KnownOutcomes lists every X-Auth-Outcome value ResponseForOutcome recognizes,
+// sorted. It is the closed set a metric label built from the header may take
+// (the gateway sets nothing else), so a caller can pre-register one series per
+// value and never drift from the map above.
+func KnownOutcomes() []string {
+	out := make([]string, 0, len(outcomeResponses))
+	for k := range outcomeResponses {
+		out = append(out, k)
+	}
+	slices.SortFunc(out, strings.Compare)
+	return out
 }
 
 // OutcomeForRevokeReason maps a stored blacklist reason to an auth outcome.

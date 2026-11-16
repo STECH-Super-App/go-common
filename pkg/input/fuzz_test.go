@@ -135,7 +135,9 @@ func FuzzParsePage(f *testing.F) {
 }
 
 func FuzzEmail(f *testing.F) {
-	for _, s := range []string{"user@example.com", " A@B.CO ", "a@b@c.d", "x@-y.z", "\x00@a.b"} {
+	for _, s := range []string{"user@example.com", " A@B.CO ", "a@b@c.d", "x@-y.z", "\x00@a.b",
+		"ivan@почта.рф", "ivan@xn--80a1acny.xn--p1ai", "ivan@ПОЧТА.РФ", "ivan@mаil.ru", "ivan@xn--garbage.ru",
+		"ivan@münchen.de", "ivan@по\u200dчта.рф", "ivan@почта.ru", "ivan@mİl.ru"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, raw string) {
@@ -153,6 +155,16 @@ func FuzzEmail(f *testing.F) {
 		}
 		if again, f2 := input.Email(out, 254); f2 != nil || again != out {
 			t.Fatalf("Email(%q): not idempotent %q -> (%q, %v)", raw, out, again, f2)
+		}
+		// The stored form is ASCII (rule «B»), and what a person is shown can be
+		// typed back to the same stored value.
+		for i := 0; i < len(out); i++ {
+			if out[i] >= utf8.RuneSelf {
+				t.Fatalf("Email(%q) = %q is not ASCII", raw, out)
+			}
+		}
+		if back, f3 := input.Email(input.EmailDisplay(out), 254); f3 != nil || back != out {
+			t.Fatalf("Email(%q) = %q: display %q does not round-trip: (%q, %v)", raw, out, input.EmailDisplay(out), back, f3)
 		}
 	})
 }

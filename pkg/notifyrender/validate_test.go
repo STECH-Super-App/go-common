@@ -97,3 +97,41 @@ func TestValidateBundleComplete_MissingSection(t *testing.T) {
 		t.Fatal("expected non-nil error: single-type fixture is incomplete")
 	}
 }
+
+// SL-07: the validator's regexp saw only a bare {{ .name }}, so an undeclared
+// name inside {{if}} / {{- -}} / a pipeline passed CI in i18n-catalog and then
+// failed at render; an unparseable value passed too.
+func TestValidateBundle_UndeclaredPlaceholderInOtherActionForms(t *testing.T) {
+	for name, body := range map[string]string{
+		"if":       `{{.listing_title}} {{if .bogus}}x{{end}}`,
+		"trim":     `{{.listing_title}} {{- .bogus -}}`,
+		"pipeline": `{{.listing_title}} {{ .bogus | printf "%s" }}`,
+		"index":    `{{.listing_title}} {{index . "bogus"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			fsys := fstest.MapFS{"en.json": {Data: []byte(`{"listing_approved": {"title": "t", "body": ` + quoteJSON(body) + `}}`)}}
+			if err := ValidateBundle(fsys); err == nil {
+				t.Fatalf("expected an undeclared-placeholder error for %q", body)
+			}
+		})
+	}
+}
+
+func TestValidateBundle_UnparseableTemplate(t *testing.T) {
+	fsys := fstest.MapFS{"en.json": {Data: []byte(`{"listing_approved": {"title": "t", "body": "{{.listing_title}"}}`)}}
+	if err := ValidateBundle(fsys); err == nil {
+		t.Fatal("expected an error for a value that is not a valid template")
+	}
+}
+
+func TestValidateBundle_RequiredParamUsedInsideIf(t *testing.T) {
+	fsys := fstest.MapFS{"en.json": {Data: []byte(`{"listing_approved": {"title": "t", "body": "{{if .listing_title}}{{.listing_title}}{{end}}"}}`)}}
+	if err := ValidateBundle(fsys); err != nil {
+		t.Fatalf("a required param read inside {{if}} is used: %v", err)
+	}
+}
+
+func quoteJSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}

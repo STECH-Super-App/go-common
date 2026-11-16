@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -131,7 +132,7 @@ func TestDispatcher_TagsTopicPerMessageAndGroup(t *testing.T) {
 	}}
 
 	done := make(chan struct{}, 2)
-	disp := events.NewDispatcher(reader, &fakeWriter{}, events.WithGroup(group))
+	disp := newDisp(reader, &fakeWriter{}, events.WithGroup(group))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		done <- struct{}{}
 		return nil
@@ -147,24 +148,8 @@ func TestDispatcher_TagsTopicPerMessageAndGroup(t *testing.T) {
 		"the retry tier of the same dispatcher must get its own topic label")
 }
 
-func TestDispatcher_GroupDefaultsToUnknown(t *testing.T) {
-	labels := map[string]string{"topic": "user.events", "group": events.GroupUnknown}
-	before := counterValue(t, "events_consumer_processed_total", labels)
-
-	reader := &fakeReader{msgs: []kafka.Message{userRegisteredMessage(t, "user.events", "e3")}}
-
-	done := make(chan struct{}, 1)
-	disp := events.NewDispatcher(reader, &fakeWriter{}) // no WithGroup
-	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
-		done <- struct{}{}
-		return nil
-	})
-
-	runDispatcher(t, disp, 1, done)
-
-	eventuallyCounter(t, "events_consumer_processed_total", labels, before+1,
-		"an unset group must label as \"unknown\", never as an empty string")
-}
+// (TestDispatcher_GroupDefaultsToUnknown is gone: an unset group is now a panic in
+// NewDispatcher, see group_required_test.go.)
 
 func TestDispatcher_DeadLetterCounterCarriesReason(t *testing.T) {
 	const group = "media"
@@ -185,7 +170,7 @@ func TestDispatcher_DeadLetterCounterCarriesReason(t *testing.T) {
 
 	dlq := &fakeWriter{}
 	reader := &fakeReader{msgs: []kafka.Message{msg}}
-	disp := events.NewDispatcher(reader, dlq, events.WithGroup(group))
+	disp := newDisp(reader, dlq, events.WithGroup(group))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error { return nil })
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -214,7 +199,7 @@ func TestDispatcher_FailurePathErrorsCounter(t *testing.T) {
 	}
 
 	reader := &fakeReader{msgs: []kafka.Message{msg}}
-	disp := events.NewDispatcher(reader, &failingWriter{}, events.WithGroup(group))
+	disp := newDisp(reader, &failingWriter{}, events.WithGroup(group))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error { return nil })
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -232,15 +217,17 @@ func TestDispatcher_DedupHitsCounter(t *testing.T) {
 	beforeHits := counterValue(t, "events_consumer_dedup_hits_total", hits)
 	beforeProcessed := counterValue(t, "events_consumer_processed_total", processed)
 
-	reader := &fakeReader{msgs: []kafka.Message{userRegisteredMessage(t, "user.events", "e6")}}
+	// The same event delivered twice: the first is processed, the redelivery is
+	// a dedup hit.
+	reader := &fakeReader{msgs: []kafka.Message{
+		userRegisteredMessage(t, "user.events", "e6"),
+		userRegisteredMessage(t, "user.events", "e6"),
+	}}
 
-	disp := events.NewDispatcher(reader, &fakeWriter{},
-		events.WithGroup(group),
-		events.WithDedup(alreadyProcessedDedup{}),
-	)
-	invoked := false
+	disp := newDisp(reader, &fakeWriter{}, events.WithGroup(group))
+	invoked := 0
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
-		invoked = true
+		invoked++
 		return nil
 	})
 
@@ -248,10 +235,10 @@ func TestDispatcher_DedupHitsCounter(t *testing.T) {
 	defer cancel()
 	_ = disp.Run(ctx)
 
-	assert.False(t, invoked, "a deduplicated redelivery must not run the handler")
+	assert.Equal(t, 1, invoked, "a deduplicated redelivery must not run the handler")
 	assert.Equal(t, beforeHits+1, counterValue(t, "events_consumer_dedup_hits_total", hits))
-	assert.Equal(t, beforeProcessed, counterValue(t, "events_consumer_processed_total", processed),
-		"a dedup skip is not a processed message")
+	assert.Equal(t, beforeProcessed+1, counterValue(t, "events_consumer_processed_total", processed),
+		"only the first delivery is a processed message; a dedup skip is not")
 }
 
 // Test (i), consumer half: the traceparent injected by the producer is read
@@ -285,7 +272,7 @@ func TestDispatcher_ContinuesProducerTraceAsRemoteParent(t *testing.T) {
 	done := make(chan struct{}, 1)
 
 	reader := &fakeReader{msgs: []kafka.Message{msg}}
-	disp := events.NewDispatcher(reader, &fakeWriter{}, events.WithGroup("user"))
+	disp := newDisp(reader, &fakeWriter{}, events.WithGroup("user"))
 	events.Handle(disp, func(ctx context.Context, _ *usersv1.UserRegistered) error {
 		handlerTraceID = trace.SpanContextFromContext(ctx).TraceID()
 		done <- struct{}{}
@@ -316,15 +303,6 @@ func (failingWriter) WriteMessages(_ context.Context, _ ...kafka.Message) error 
 	return errors.New("broker unavailable")
 }
 
-// alreadyProcessedDedup mimics *outbox.Deduplicator losing the claim: it
-// returns nil WITHOUT running fn, which is exactly why the dispatcher cannot
-// tell a dedup hit from a completion by the error alone.
-type alreadyProcessedDedup struct{}
-
-func (alreadyProcessedDedup) Process(_ context.Context, _ string, _ func() error) error {
-	return nil
-}
-
 // A dispatcher built WITHOUT WithLogger must not put its Nop-derived child
 // logger on the handler context: logger.FromContext would find it and silently
 // swallow every handler log line, shadowing the process logger that carries
@@ -337,7 +315,7 @@ func TestDispatcher_WithoutLogger_HandlerFallsBackToProcessLogger(t *testing.T) 
 	done := make(chan struct{}, 1)
 
 	reader := &fakeReader{msgs: []kafka.Message{userRegisteredMessage(t, "user.events", "e8")}}
-	disp := events.NewDispatcher(reader, &fakeWriter{}) // no WithLogger
+	disp := newDisp(reader, &fakeWriter{}) // no WithLogger
 	events.Handle(disp, func(ctx context.Context, _ *usersv1.UserRegistered) error {
 		got = logger.FromContext(ctx)
 		done <- struct{}{}
@@ -358,7 +336,7 @@ func TestDispatcher_WithLogger_HandlerGetsMessageScopedLogger(t *testing.T) {
 
 	done := make(chan struct{}, 1)
 	reader := &fakeReader{msgs: []kafka.Message{userRegisteredMessage(t, "user.events", "e9")}}
-	disp := events.NewDispatcher(reader, &fakeWriter{},
+	disp := newDisp(reader, &fakeWriter{},
 		events.WithLogger(zap.New(core)),
 		events.WithGroup("auth"),
 	)
@@ -383,11 +361,41 @@ func TestDispatcher_WithLogger_HandlerGetsMessageScopedLogger(t *testing.T) {
 func TestDispatcher_WithNilLoggerDoesNotPanic(t *testing.T) {
 	done := make(chan struct{}, 1)
 	reader := &fakeReader{msgs: []kafka.Message{userRegisteredMessage(t, "user.events", "e10")}}
-	disp := events.NewDispatcher(reader, &fakeWriter{}, events.WithLogger(nil))
+	disp := newDisp(reader, &fakeWriter{}, events.WithLogger(nil))
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		done <- struct{}{}
 		return nil
 	})
 
 	require.NotPanics(t, func() { runDispatcher(t, disp, 1, done) })
+}
+
+// SL-24: a baggage header on a Kafka message (written by an old producer, or
+// by anything with broker access) never reaches the handler's context, even
+// when the process propagator would carry it.
+func TestDispatcher_IgnoresBaggageHeader(t *testing.T) {
+	prevPropagator := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	t.Cleanup(func() { otel.SetTextMapPropagator(prevPropagator) })
+
+	msg := userRegisteredMessage(t, "user.events", "e-baggage")
+	msg.Headers = append(msg.Headers,
+		kafka.Header{Key: envelope.HeaderTraceparent, Value: []byte("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")},
+		kafka.Header{Key: "baggage", Value: []byte("tenant=evil")},
+	)
+
+	var members int
+	var traceID trace.TraceID
+	done := make(chan struct{}, 1)
+	disp := newDisp(&fakeReader{msgs: []kafka.Message{msg}}, &fakeWriter{}, events.WithGroup("user"))
+	events.Handle(disp, func(ctx context.Context, _ *usersv1.UserRegistered) error {
+		members = len(baggage.FromContext(ctx).Members())
+		traceID = trace.SpanContextFromContext(ctx).TraceID()
+		done <- struct{}{}
+		return nil
+	})
+	runDispatcher(t, disp, 1, done)
+
+	assert.Zero(t, members)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", traceID.String(), "the trace link stays")
 }

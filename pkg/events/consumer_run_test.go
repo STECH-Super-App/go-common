@@ -11,8 +11,6 @@ import (
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/STECH-Super-App/go-common/pkg/events"
 )
 
 // scriptedFetchReader answers FetchMessage from a script; past the end of the
@@ -58,7 +56,7 @@ var errBrokerDown = errors.New("dial tcp: connection refused")
 // spun a CPU core for as long as the process lived.
 func TestDispatcherRun_ClosedReaderReturnsNil(t *testing.T) {
 	reader := &scriptedFetchReader{script: []fetchStep{{err: io.EOF}}}
-	disp := events.NewDispatcher(reader, &fakeWriter{})
+	disp := newDisp(reader, &fakeWriter{})
 
 	done := make(chan error, 1)
 	go func() { done <- disp.Run(context.Background()) }()
@@ -75,7 +73,7 @@ func TestDispatcherRun_ClosedReaderReturnsNil(t *testing.T) {
 // A wrapped io.EOF is still a closed reader.
 func TestDispatcherRun_WrappedEOFReturnsNil(t *testing.T) {
 	reader := &scriptedFetchReader{script: []fetchStep{{err: errors.Join(errors.New("fetch"), io.EOF)}}}
-	err := events.NewDispatcher(reader, &fakeWriter{}).Run(context.Background())
+	err := newDisp(reader, &fakeWriter{}).Run(context.Background())
 	require.NoError(t, err)
 }
 
@@ -84,7 +82,7 @@ func TestDispatcherRun_WrappedEOFReturnsNil(t *testing.T) {
 // 700) — never the thousands a hot loop makes.
 func TestDispatcherRun_FetchErrorsBackOff(t *testing.T) {
 	reader := &scriptedFetchReader{script: []fetchStep{{err: errBrokerDown}}}
-	disp := events.NewDispatcher(reader, &fakeWriter{})
+	disp := newDisp(reader, &fakeWriter{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 650*time.Millisecond)
 	defer cancel()
@@ -112,7 +110,7 @@ func TestDispatcherRun_SuccessResetsBackoff(t *testing.T) {
 		{err: errBrokerDown},
 		{err: errBrokerDown},
 	}}
-	disp := events.NewDispatcher(reader, &fakeWriter{})
+	disp := newDisp(reader, &fakeWriter{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -137,7 +135,7 @@ func TestDispatcherRun_CancelDuringBackoffReturnsPromptly(t *testing.T) {
 		{err: errBrokerDown}, {err: errBrokerDown}, {err: errBrokerDown},
 		{err: errBrokerDown}, {err: errBrokerDown}, {err: errBrokerDown},
 	}}
-	disp := events.NewDispatcher(reader, &fakeWriter{})
+	disp := newDisp(reader, &fakeWriter{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

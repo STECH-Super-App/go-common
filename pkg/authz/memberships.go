@@ -12,11 +12,17 @@
 package authz
 
 import (
+	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/STECH-Super-App/go-common/pkg/auth"
+	commonerr "github.com/STECH-Super-App/go-common/pkg/errors"
 	"github.com/labstack/echo/v4"
 )
+
+// ReasonTenantMembershipsInvalid is the typed 400 of ParseTenantMembershipsStrict.
+const ReasonTenantMembershipsInvalid = "COMMON_TENANT_MEMBERSHIPS_INVALID"
 
 // HeaderTenantMemberships carries the caller's tenant roles as a comma-separated
 // list like "<tenant_id>=ADMIN,<tenant_id>=MANAGER". The API Gateway builds it
@@ -38,6 +44,11 @@ type TenantMembership struct {
 // every entry is malformed the result is nil. Order is preserved. O(n) over the
 // header length, one slice allocation. Role values are not validated here — the
 // header is trusted (gateway-set) and role vocabulary lives with the consumer.
+//
+// This lenient reader is kept for compatibility: it accepts a tenant id that is
+// not a UUID, a repeated tenant, and reads past a malformed entry. New code
+// should use ParseTenantMembershipsStrict, the same strictness the two chat
+// header codecs already have.
 func ParseTenantMemberships(header string) []TenantMembership {
 	header = strings.TrimSpace(header)
 	if header == "" {
@@ -72,17 +83,78 @@ func parseTenantEntry(raw string) (TenantMembership, bool) {
 	return TenantMembership{TenantID: raw[:eq], Role: raw[eq+1:]}, true
 }
 
+// ParseTenantMembershipsStrict decodes X-Tenant-Memberships strictly, like
+// ParseMembershipSince: every entry must be "<uuid>=<role>", the tenant id is
+// lower-cased and may not be the nil UUID or repeat, the role is non-empty and
+// holds no separator, whitespace or control character, no entry may be empty,
+// and at most MaxMembershipHeaderEntries are accepted. Any violation rejects the
+// whole header with a typed 400 COMMON_TENANT_MEMBERSHIPS_INVALID and returns no
+// partial result. An empty header is an empty result. The role vocabulary is not
+// checked (an unknown role passes through, so a future mint stays compatible).
+func ParseTenantMembershipsStrict(header string) ([]TenantMembership, error) {
+	entries, ok := splitMembershipEntries(header)
+	if !ok {
+		return nil, invalidTenantMemberships()
+	}
+	out := make([]TenantMembership, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, raw := range entries {
+		fields := strings.Split(raw, "=")
+		if len(fields) != 2 {
+			return nil, invalidTenantMemberships()
+		}
+		id, ok := membershipTenantID(fields[0])
+		if !ok || !validMembershipRole(fields[1]) {
+			return nil, invalidTenantMemberships()
+		}
+		if _, dup := seen[id]; dup {
+			return nil, invalidTenantMemberships()
+		}
+		seen[id] = struct{}{}
+		out = append(out, TenantMembership{TenantID: id, Role: fields[1]})
+	}
+	return out, nil
+}
+
+func invalidTenantMemberships() error {
+	return commonerr.New(http.StatusBadRequest).
+		Reason(ReasonTenantMembershipsInvalid).
+		Message("Invalid tenant memberships header").
+		Build()
+}
+
+// validMembershipRole: non-empty, no ',' or '=' and no whitespace or control
+// rune — what a value needs to survive a round trip through the header.
+func validMembershipRole(role string) bool {
+	return role != "" && !strings.ContainsFunc(role, func(r rune) bool {
+		return r == ',' || r == '=' || unicode.IsSpace(r) || unicode.IsControl(r)
+	})
+}
+
 // FormatTenantMemberships is the inverse of ParseTenantMemberships: it renders
 // memberships back into the header wire form. An empty or nil slice yields "".
+//
+// An entry whose id or role is empty or holds a ',' or '=' is omitted: written
+// out it would be read back as a different entry — a role "ADMIN,<other id>=ADMIN"
+// would forge a second membership. One bad entry costs only itself, as in the
+// chat header formatters.
 func FormatTenantMemberships(ms []TenantMembership) string {
 	if len(ms) == 0 {
 		return ""
 	}
 	parts := make([]string, 0, len(ms))
 	for _, m := range ms {
+		if !formattable(m.TenantID) || !formattable(m.Role) {
+			continue
+		}
 		parts = append(parts, m.TenantID+"="+m.Role)
 	}
 	return strings.Join(parts, ",")
+}
+
+// formattable: non-empty and free of the two header separators.
+func formattable(v string) bool {
+	return v != "" && !strings.ContainsAny(v, ",=")
 }
 
 // TenantMembershipsFromContext retrieves the memberships that AuthMiddleware

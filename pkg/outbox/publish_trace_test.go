@@ -2,11 +2,13 @@ package outbox_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
@@ -120,4 +122,37 @@ func TestHeadersTraceparentAccessor(t *testing.T) {
 	h := envelope.Headers{envelope.HeaderTraceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
 	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", h.Traceparent())
 	assert.Empty(t, envelope.Headers{}.Traceparent())
+}
+
+// SL-24: a client-sent baggage header rides the request context in a service
+// that installed a baggage-capable propagator. It must not be written into the
+// outbox row (and from there into every Kafka message); traceparent still is.
+func TestPublishProto_NeverCopiesBaggageIntoTheRow(t *testing.T) {
+	prev := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	t.Cleanup(func() { otel.SetTextMapPropagator(prev) })
+
+	ctx, traceID, _ := sampledContext(t)
+	member, err := baggage.NewMember("tenant", "evil")
+	require.NoError(t, err)
+	bag, err := baggage.New(member)
+	require.NoError(t, err)
+	ctx = baggage.ContextWithBaggage(ctx, bag)
+
+	store := outbox.NewTestStore()
+	pub := outbox.NewPublisher(store, "user.events")
+	require.NoError(t, pub.PublishProto(ctx, nil, outbox.PublishProtoOptions{
+		AggregateType: "user",
+		AggregateID:   "u1",
+		Message:       &usersv1.UserRegistered{UserId: "u1", Name: "Alice"},
+		// A call site that forwards inbound headers wholesale must not smuggle it in either.
+		Headers: map[string]string{"Baggage": "tenant=evil"},
+	}))
+
+	require.Len(t, store.Messages, 1)
+	headers := store.Messages[0].Headers
+	for key := range headers {
+		assert.NotEqual(t, "baggage", strings.ToLower(key), "baggage must not be stored in an outbox row")
+	}
+	assert.Contains(t, headers[envelope.HeaderTraceparent], traceID.String(), "the trace link stays")
 }

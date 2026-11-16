@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -36,9 +35,6 @@ const (
 	sourceOverlay       = "overlay"
 	sourceBaselinesOnly = "baselines-only"
 )
-
-// placeholderRe matches a Go text/template field reference like {{ .name }}.
-var placeholderRe = regexp.MustCompile(`\{\{\s*\.\s*([A-Za-z0-9_]+)\s*\}\}`)
 
 // Load builds a fresh Snapshot from the baselines + overlay dir and publishes
 // it. It never returns an error and never panics on a bad overlay: a missing or
@@ -142,7 +138,19 @@ func (b *OverlayBundle) loadFile(dirFS fs.FS, name string, overlay map[string]ma
 		dst = map[string]string{}
 	}
 	for key, val := range flat {
-		if !subset(extractPlaceholders(val), b.allowedFor(key)) {
+		// The value is parsed as the template it will be rendered as: an
+		// unparseable one would fail every render of its key (SL-07), and only
+		// the parse tree sees every action form ({{if}}, {{- -}}, a pipeline,
+		// {{index . "x"}}) the placeholder policy has to cover.
+		names, perr := Placeholders(val)
+		if perr != nil {
+			sum.Rejected = append(sum.Rejected, tagKey+"/"+key)
+			b.logger.Warn("i18n_overlay value rejected: not a valid template",
+				zap.String("namespace", b.ns), zap.String("locale", tagKey),
+				zap.String("key", key), zap.Error(perr))
+			continue
+		}
+		if !subset(setOf(names), b.allowedFor(key)) {
 			sum.Rejected = append(sum.Rejected, tagKey+"/"+key)
 			b.logger.Warn("i18n_overlay value rejected: undeclared placeholder",
 				zap.String("namespace", b.ns), zap.String("locale", tagKey),
@@ -184,7 +192,7 @@ func (b *OverlayBundle) publish(overlay map[string]map[string]string, tagSet map
 	sort.Strings(sum.Rejected)
 	sort.Strings(sum.Missing)
 	sort.Strings(sum.Shadowed)
-	b.cur.Store(newSnapshot(b.baseline, overlay, tagSet))
+	b.cur.Store(newSnapshot(b.baseline, overlay, tagSet, b.logger, b.ns))
 }
 
 // allowedFor returns the permitted placeholder set for a key. A configured
@@ -200,7 +208,8 @@ func (b *OverlayBundle) allowedFor(key string) map[string]bool {
 			return out
 		}
 	}
-	return extractPlaceholders(b.baseline[key])
+	names, _ := Placeholders(b.baseline[key]) // a broken baseline allows nothing
+	return setOf(names)
 }
 
 // flatten collapses nested JSON objects into dotted keys, matching the
@@ -222,11 +231,10 @@ func flatten(prefix string, node map[string]any, out map[string]string) {
 	}
 }
 
-// extractPlaceholders returns the set of template field names referenced in s.
-func extractPlaceholders(s string) map[string]bool {
-	out := map[string]bool{}
-	for _, m := range placeholderRe.FindAllStringSubmatch(s, -1) {
-		out[m[1]] = true
+func setOf(names []string) map[string]bool {
+	out := make(map[string]bool, len(names))
+	for _, n := range names {
+		out[n] = true
 	}
 	return out
 }

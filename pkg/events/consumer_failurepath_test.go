@@ -212,7 +212,7 @@ func TestDispatcher_failurePath(t *testing.T) {
 			if tc.withRetry {
 				opts = append(opts, events.WithRetry(retry))
 			}
-			disp := events.NewDispatcher(reader, dlq, opts...)
+			disp := newDisp(reader, dlq, opts...)
 			events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 				return errors.New("transient failure")
 			})
@@ -269,7 +269,7 @@ func TestDispatcher_poisonPillDLQWriteFails_leavesUncommitted(t *testing.T) {
 	reader := &commitCountingReader{msgs: []kafka.Message{transientMsg(t, "")}}
 	dlq := &failableWriter{fail: true}
 
-	disp := events.NewDispatcher(reader, dlq)
+	disp := newDisp(reader, dlq)
 	events.Handle(disp, func(_ context.Context, _ *usersv1.UserRegistered) error {
 		return errors.Join(events.ErrPoisonPill, errors.New("bad data"))
 	})

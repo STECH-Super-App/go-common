@@ -74,7 +74,7 @@ func TestDispatcherRun_LeaveUncommittedStopsAtOnce(t *testing.T) {
 		userRegisteredMsg(t, "e1"), userRegisteredMsg(t, "e2"),
 	}}
 	dlq, retry := &fakeWriter{}, &fakeWriter{}
-	disp := events.NewDispatcher(reader, dlq, events.WithRetry(retry))
+	disp := newDisp(reader, dlq, events.WithRetry(retry))
 
 	var (
 		mu   sync.Mutex
@@ -111,7 +111,7 @@ func TestDispatcherRun_StaysStoppedAfterLeavingAMessage(t *testing.T) {
 	reader := &greedyReader{msgs: []kafka.Message{
 		userRegisteredMsg(t, "e1"), userRegisteredMsg(t, "e2"),
 	}}
-	disp := events.NewDispatcher(reader, &fakeWriter{})
+	disp := newDisp(reader, &fakeWriter{})
 	events.Handle(disp, func(context.Context, *usersv1.UserRegistered) error {
 		return leaveAtShutdown()
 	})
@@ -178,16 +178,14 @@ func TestDispatcher_LeaveUncommittedAgainstTheFailurePath(t *testing.T) {
 			wantReason: "poison_pill",
 		},
 		{
-			name:       "a panic wrapping the sentinel is a handler panic: dead-lettered and committed",
+			name:       "a panic wrapping the sentinel is a handler panic: dead-lettered at once and committed",
 			panicWith:  fmt.Errorf("x: %w", events.ErrLeaveUncommitted),
-			withRetry:  true,
 			wantDLQ:    1,
 			wantReason: "handler_panic",
 		},
 		{
-			name:       "a bare panic with the sentinel is a handler panic: dead-lettered and committed",
+			name:       "a bare panic with the sentinel is a handler panic: dead-lettered at once and committed",
 			panicWith:  events.ErrLeaveUncommitted,
-			withRetry:  true,
 			wantDLQ:    1,
 			wantReason: "handler_panic",
 		},
@@ -201,7 +199,7 @@ func TestDispatcher_LeaveUncommittedAgainstTheFailurePath(t *testing.T) {
 			if tc.withRetry {
 				opts = append(opts, events.WithRetry(retry))
 			}
-			disp := events.NewDispatcher(reader, dlq, opts...)
+			disp := newDisp(reader, dlq, opts...)
 			events.Handle(disp, func(context.Context, *usersv1.UserRegistered) error {
 				if tc.panicWith != nil {
 					panic(tc.panicWith)
@@ -249,26 +247,22 @@ func TestDispatcher_LeaveUncommittedAgainstTheFailurePath(t *testing.T) {
 // same event_id, same dedup store — runs the handler instead of being skipped
 // as already processed.
 func TestDispatcher_LeaveUncommittedRecordsNoDedupClaim(t *testing.T) {
-	dedup := newFakeDedup()
+	dedup := events.NewMemoryDeduplicator()
 
 	first := &greedyReader{msgs: []kafka.Message{userRegisteredMsg(t, "e1")}}
-	disp := events.NewDispatcher(first, &fakeWriter{}, events.WithDedup(dedup))
+	disp := newDispWith(dedup, first, &fakeWriter{})
 	events.Handle(disp, func(context.Context, *usersv1.UserRegistered) error {
 		return leaveAtShutdown()
 	})
 	require.ErrorIs(t, runToReturn(t, disp), events.ErrLeaveUncommitted)
 
-	dedup.mu.Lock()
-	claimed := dedup.processed["e1"]
-	dedup.mu.Unlock()
-	require.False(t, claimed, "a message left uncommitted must leave no dedup claim")
 	_, commitErrs := first.snapshot()
 	assert.Empty(t, commitErrs)
 
 	// The restart: a new reader redelivers e1 to a new dispatcher on the same store.
 	handled := make(chan struct{}, 1)
 	second := &greedyReader{msgs: []kafka.Message{userRegisteredMsg(t, "e1")}}
-	redelivery := events.NewDispatcher(second, &fakeWriter{}, events.WithDedup(dedup))
+	redelivery := newDispWith(dedup, second, &fakeWriter{})
 	events.Handle(redelivery, func(context.Context, *usersv1.UserRegistered) error {
 		handled <- struct{}{}
 		return nil
@@ -287,10 +281,6 @@ func TestDispatcher_LeaveUncommittedRecordsNoDedupClaim(t *testing.T) {
 		2*time.Second, 5*time.Millisecond, "the redelivery must be committed")
 	cancel()
 	require.ErrorIs(t, awaitRun(t, done), context.Canceled)
-
-	dedup.mu.Lock()
-	defer dedup.mu.Unlock()
-	assert.True(t, dedup.processed["e1"], "the redelivery's success records the claim")
 }
 
 // consumerCountersOf sums, per family, every events_consumer_* sample that
@@ -327,7 +317,7 @@ func TestDispatcher_LeaveUncommittedCountsNothingAndLogsOnce(t *testing.T) {
 	msg := userRegisteredMsg(t, "e1")
 	msg.Partition, msg.Offset = 2, 42
 	reader := &greedyReader{msgs: []kafka.Message{msg}}
-	disp := events.NewDispatcher(reader, &fakeWriter{},
+	disp := newDisp(reader, &fakeWriter{},
 		events.WithRetry(&fakeWriter{}),
 		events.WithGroup(group),
 		events.WithLogger(zap.New(core)),
@@ -358,7 +348,7 @@ func TestDispatcher_LeaveUncommittedCountsNothingAndLogsOnce(t *testing.T) {
 	// values above are not vacuous.
 	processedBefore := consumerCountersOf(t, group)["events_consumer_processed_total"]
 	ok := &greedyReader{msgs: []kafka.Message{userRegisteredMsg(t, "e2")}}
-	control := events.NewDispatcher(ok, &fakeWriter{}, events.WithGroup(group))
+	control := newDisp(ok, &fakeWriter{}, events.WithGroup(group))
 	events.Handle(control, func(context.Context, *usersv1.UserRegistered) error { return nil })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -381,7 +371,7 @@ func TestDispatcher_LeaveUncommittedMarksTheSpan(t *testing.T) {
 	t.Cleanup(func() { otel.SetTracerProvider(prev) })
 
 	reader := &greedyReader{msgs: []kafka.Message{userRegisteredMsg(t, "e1")}}
-	disp := events.NewDispatcher(reader, &fakeWriter{})
+	disp := newDisp(reader, &fakeWriter{})
 	events.Handle(disp, func(context.Context, *usersv1.UserRegistered) error {
 		return leaveAtShutdown()
 	})

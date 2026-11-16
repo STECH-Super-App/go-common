@@ -2,7 +2,6 @@ package outbox
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -62,7 +61,7 @@ func RunInTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx Tx) error) erro
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("outbox: begin tx: %w", err)
+		return internalError(ReasonTxFailed, "outbox: begin tx", err)
 	}
 
 	// Rollback is a no-op after a successful Commit.
@@ -73,7 +72,7 @@ func RunInTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx Tx) error) erro
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("outbox: commit tx: %w", err)
+		return internalError(ReasonTxFailed, "outbox: commit tx", err)
 	}
 
 	return nil
