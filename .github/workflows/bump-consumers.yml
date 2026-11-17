@@ -1,0 +1,193 @@
+name: Bump consumers
+
+# After go-common's own CI («Go CI», ci.yml) has finished GREEN for a commit on
+# main, open a «bump go-common» pull request in every consumer repo and, where it
+# is safe, switch on GitHub auto-merge. No agent is involved.
+# The consumers are listed in .github/consumers.json; the logic is in
+# scripts/ci/ (bump-consumer.sh and friends, tested by bump_consumer_test.sh).
+# README: «How a go-common change reaches the services».
+#
+# SWITCH: it does nothing until the org secret GO_COMMON_BUMP_TOKEN exists (the
+# run ends green with a notice). To stop it: delete the secret, or set
+# `"enabled": false` for a repo in .github/consumers.json.
+#
+# WHY workflow_run and not `push`: a push starts this workflow beside Go CI, so a
+# broken main would open PRs in every consumer. `workflow_run` starts it only once
+# Go CI has COMPLETED for the commit; the job guard below lets through a SUCCESS of
+# a PUSH to main of THIS repository, and nothing else (a pull_request run of Go CI,
+# a red run, a fork's branch that happens to be called main). The pinned commit is
+# the run's head_sha, not whatever main is by then.
+#   - A workflow_run workflow runs from the DEFAULT branch's file, with secrets.
+#     Nothing the pusher controls reaches a `run:` line: the only event data used is
+#     head_sha, handed over as an env var, checked to be 40 hex characters and to be
+#     on go-common's main by scripts/ci/plan-bump.sh. No commit message, branch
+#     name or title is read.
+#   - `paths-ignore` does not exist for workflow_run: the «docs, the workflow and
+#     its scripts cannot change what a consumer compiles» rule is IGNORED_PATHS
+#     below, applied by plan-bump.sh to the files the commit changed.
+#
+# Rules it follows (owner decisions of 14.11.2026):
+#  - Auto-merge is switched on only for a pure bump (the PR changes go.mod and
+#    go.sum of the module and nothing else), only when the commits touch none of
+#    AUTH_PATHS below, and only in a repo that allows auto-merge and requires the
+#    status checks named in consumers.json on main. Otherwise the PR is opened and
+#    left for a human. Never a direct merge.
+#  - At most three services roll at once (max-parallel): a job that armed
+#    auto-merge waits until its PR is merged and the consumer's deploy run for the
+#    merge commit has finished (a consumer with no deploy workflow, `deploy_workflow`
+#    "" in consumers.json, is not waited for after the merge).
+#  - go build is NOT run here: each consumer's own PR checks are the test.
+
+on:
+  workflow_run:
+    # Must be the `name:` of ci.yml (bump_consumer_test.sh checks it).
+    workflows: ["Go CI"]
+    types: [completed]
+    # Filters the run's head branch only; the job guard below repeats it and adds
+    # the event and the repository.
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'go-common commit to pin (must be on main); empty = the head of main'
+        type: string
+        required: false
+        default: ''
+      only:
+        description: 'Bump one consumer only (short repo name, e.g. auth-service); empty = all'
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: 'Dry run: do everything up to the diff, push and open nothing'
+        type: boolean
+        required: false
+        default: true
+
+# Two runs queue (GitHub keeps one pending run: a middle one is dropped and the
+# newest one pins the newest commit, which contains it).
+concurrency:
+  group: bump-consumers
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # THE ONE LIST of paths that cannot change what a consumer compiles: a commit
+  # whose changed files ALL match one of them (the old `paths-ignore`) starts no
+  # bump — 18 repos would otherwise open a PR and deploy for a README edit. `*` and
+  # `**` both match across `/`. An empty list ignores nothing (a bump).
+  IGNORED_PATHS: |
+    **.md
+    .agentrules
+    .github/**
+    scripts/**
+  # THE ONE LIST of go-common paths that make a commit an auth change. A bump
+  # whose commits (everything since the consumer's previous pin, which contains
+  # the commits of the run being bumped) touch any of them is opened WITHOUT auto-merge: Critical Rule 20 — Token size
+  # budget says a change to the token or the auth path needs the owner's sign-off
+  # and a real login on dev. `*` and `**` both match across `/`.
+  #   pkg/auth         token claims, token kind, identity headers, the X-Auth-Outcome set
+  #   pkg/authz        the tenant-membership headers built from the tns / tns_ro claims
+  #   pkg/middleware   AuthMiddleware, RegistrationAuthMiddleware, ClientMiddleware
+  #                    (the whole directory: a new auth file would otherwise slip past)
+  #   pkg/trustedheaders  the list of identity headers the gateway strips at the edge
+  #   pkg/clientip     X-Client-IP, the address every limit and login check keys on
+  # pkg/httpserver only installs the middleware above and sets body limits, so it
+  # is not listed. AUTH_DEPS: the JWT library decodes every token we accept.
+  AUTH_PATHS: |
+    pkg/auth/**
+    pkg/authz/**
+    pkg/middleware/**
+    pkg/trustedheaders/**
+    pkg/clientip/**
+  AUTH_DEPS: |
+    golang-jwt/jwt
+
+jobs:
+  plan:
+    name: Plan
+    # The guard: a manual run, or a Go CI run that SUCCEEDED for a PUSH to main of
+    # this repository. Anything else is skipped (and so is every `bump` job).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      dry_run: ${{ steps.plan.outputs.dry_run }}
+      count: ${{ steps.plan.outputs.count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP_TOKEN: ${{ secrets.GO_COMMON_BUMP_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          IGNORED_PATHS: ${{ env.IGNORED_PATHS }}
+          GOCOMMON_DIR: .
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_ONLY: ${{ inputs.only }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          GOCOMMON_REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: bash scripts/ci/plan-bump.sh
+
+  bump:
+    name: ${{ matrix.repo }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    # Merge wait + deploy wait are bounded by WAIT_SECONDS (30 min) each way.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      # Each merge deploys to dev's single small node: three services at a time.
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Check out go-common at the commit Go CI passed
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          path: go-common
+      - name: Check out the consumer's main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository_owner }}/${{ matrix.repo }}
+          ref: main
+          # The org token, not GITHUB_TOKEN: it may push to the consumer, and a PR
+          # it opens starts the consumer's own CI (GITHUB_TOKEN's would not).
+          token: ${{ secrets.GO_COMMON_BUMP_TOKEN }}
+          path: consumer
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          # The toolchain the consumer's go.mod declares, as in its own CI.
+          go-version-file: consumer/${{ matrix.module_dir }}/go.mod
+          cache: false
+      - name: Bump go-common in ${{ matrix.repo }}
+        env:
+          GO_COMMON_BUMP_TOKEN: ${{ secrets.GO_COMMON_BUMP_TOKEN }}
+          # Read access to the private modules, as in ci.yml; scripts/ci/bump-consumer.sh
+          # hands it to the go commands only (a global git insteadOf would also
+          # rewrite the push URL).
+          GEN_GO_PAT: ${{ secrets.GEN_GO_PAT }}
+          CONSUMER_REPO: ${{ github.repository_owner }}/${{ matrix.repo }}
+          CONSUMER_DIR: consumer
+          MODULE_DIR: ${{ matrix.module_dir }}
+          GOCOMMON_SHA: ${{ needs.plan.outputs.sha }}
+          GOCOMMON_DIR: go-common
+          GOCOMMON_REPO: ${{ github.repository }}
+          AUTO_MERGE: ${{ matrix.auto_merge }}
+          REQUIRED_CHECKS: ${{ matrix.required_checks }}
+          DEPLOY_WORKFLOW: ${{ matrix.deploy_workflow }}
+          DRY_RUN: ${{ needs.plan.outputs.dry_run }}
+          GOPRIVATE: github.com/STECH-Super-App/*
+        run: bash go-common/scripts/ci/bump-consumer.sh
