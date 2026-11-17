@@ -95,3 +95,15 @@ jobs:
           GOCOMMON_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
           REQUIRE_DB: "1"
         run: go test -v -race ./...
+
+  # The scripts behind .github/workflows/bump-consumers.yml, run against a fake
+  # `gh` and a local bare repository: nothing here touches a consumer.
+  scripts:
+    name: CI scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: shellcheck
+        run: shellcheck -x scripts/ci/*.sh
+      - name: Bump scripts
+        run: bash scripts/ci/bump_consumer_test.sh

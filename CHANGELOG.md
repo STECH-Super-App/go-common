@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **ci: a push to `main` now opens «bump go-common» pull requests in every consumer** (`.github/workflows/bump-consumers.yml`, `scripts/ci/`, `.github/consumers.json`; README «How a go-common change reaches the services»). Auto-merge only for a pure `go.mod`/`go.sum` bump with no auth-path commit, in a repo that requires its checks; three consumers at a time; inert until the org secret `GO_COMMON_BUMP_TOKEN` exists; geo-service switched off.
+
 ### Release 2, follow-up — Kafka writer linger, registration refusals say why (audit-fix campaign, gate 2)
 
 **UPGRADING: nothing to do beyond the pin** (`go get github.com/STECH-Super-App/go-common@<sha>`; `go mod tidy`). No new option, no API removed, no panic added.

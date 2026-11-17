@@ -707,6 +707,41 @@ The platform's one REST idempotency (spec §3.2). It replaces five hand-written 
 - Reasons (add en/ru texts to i18n-catalog): `COMMON_IDEMPOTENCY_KEY_REQUIRED`, `_KEY_INVALID`, `_KEY_REUSED`, `_BODY_UNREADABLE`, `_BODY_TOO_LARGE`, `_ROUTE_UNGUARDED`, `_RECORD_INCOMPLETE`, `_FAILED`.
 
 
+## How a go-common change reaches the services
+
+A push to go-common's `main` opens a **«chore: go-common \<sha7\> — \<subject\>» pull request in every consumer** and, where it is safe, switches on GitHub auto-merge. No agent is involved. Workflow `.github/workflows/bump-consumers.yml`, scripts `scripts/ci/`, consumer list `.github/consumers.json`.
+
+**The flow.** `plan` picks the commit (the pushed one) and the consumers. Then a matrix runs `scripts/ci/bump-consumer.sh` per consumer, **three at a time** (`max-parallel: 3`, because every merge deploys to dev's one small node): check out the consumer's `main`, `go get github.com/STECH-Super-App/go-common@<sha> && go mod tidy` in its module directory (Go version from its `go.mod`), stop if nothing changed, **refuse** if anything besides `go.mod` and `go.sum` of the module changed, push `chore/go-common-<sha7>`, close and delete the branch of any older open bump PR (never two open), open the PR (body: the go-common commit, the go-common commits since the previous pin, whether auto-merge is on and why not). `go build` is **not** run here: the consumer's own PR checks are the test. When auto-merge was armed, the job then waits (30 minutes at most) for the merge and for the consumer's `deploy.yml` run on the merge commit to finish, so the next consumer starts only after this one has rolled. Two pushes queue (`concurrency: bump-consumers`, no cancel; GitHub keeps one pending run, and the newest pins the newest commit).
+
+**Auto-merge is armed only when all of these hold** (otherwise the PR is opened and left for a human, and its body says which one failed; the workflow never merges directly):
+- the diff is `go.mod` and `go.sum` of the module and nothing else (checked twice: before the push and on the opened PR);
+- no go-common commit in the push range (`before..sha`) **or since the consumer's previous pin** touches the token or auth-middleware code (Critical Rule 20 — Token size budget: that needs the owner's sign-off and a real login on dev). The paths are the `AUTH_PATHS` block at the top of the workflow, in one place: `pkg/auth`, `pkg/authz`, `pkg/middleware`, `pkg/trustedheaders`, `pkg/clientip`, plus a change of the `golang-jwt/jwt` line in `go.mod`. The second range matters: otherwise a push after an unmerged auth bump would carry the auth change in with its own auto-merge;
+- the repo has **Allow auto-merge** and **Allow squash merging** on, and `main` has **required status checks** (classic protection or a ruleset) that include every name in the consumer's `required_checks` (its test jobs);
+- the consumer's entry in `.github/consumers.json` does not say `"auto_merge": false`.
+
+**The token.** Org secret `GO_COMMON_BUMP_TOKEN`, a fine-grained personal access token (or a GitHub App installation token) of a bot user, because the run's `GITHUB_TOKEN` cannot push to other repos and a PR opened with it would not start the consumers' CI. Minimum: resource owner = the org, **repository access = only the 18 consumer repos**, permissions **Contents: read and write**, **Pull requests: read and write**, **Metadata: read** (always on), plus **Administration: read** (reading the branch protection to see the required checks; without it the workflow cannot prove the checks are required and fails closed: PRs open, auto-merge stays off). **Workflows** is *not* needed: the bump never touches `.github/`. If the token's account can only read the private modules through it, it needs Contents: read on `gen-go-lib` too; otherwise the existing `GEN_GO_PAT` is used for the `go` commands. Auto-merge is armed as the token's user, so that user needs write access to every consumer; the merge then lands on `main` as a normal user push and starts the consumer's `deploy.yml` (a merge made with `GITHUB_TOKEN` would not).
+
+**What each consumer repo needs** for auto-merge (Settings > General: *Allow auto-merge*, *Allow squash merging*; Settings > Branches: a rule or ruleset on `main` with *Require status checks to pass* — **no required review**). The check names are the ones GitHub shows; the first column is what `consumers.json` demands:
+
+| Repo | Required checks (demanded) | Also worth requiring |
+|---|---|---|
+| api-gateway, auth-service, user-service, organisation-service, notification-service, verification-service, tenant-service, draft-service, chat-service, order-service, crm-sync-service, geo-service | `test / build & test` | `lint` |
+| media-service, machinery-service | `test` | `lint` |
+| review-service | `build & test` | `lint` |
+| egress-service | `test / build & test` | `golangci` |
+| seo-service | `build & unit tests`, `repository tests (Postgres 16)` | `lint` |
+| sale-service (module `services/outbox-worker`) | `validate`, `go (outbox-worker)` | |
+
+Until a repo has all of that, the bump PR is opened and not merged. **geo-service is switched off** (`"enabled": false`): it is still on the go-common of 04.11.2026 and a bump does not compile.
+
+**Dry run.** Actions > *Bump consumers* > *Run workflow*: `sha` (empty = head of `main`; it must be on `main`), `only` (one repo, e.g. `auth-service`), `dry_run` (**default true**). A dry run clones, runs `go get`, computes the diff, the PRs it would close and the auto-merge decision, prints what it WOULD push and open, and pushes and opens nothing. `dry_run: false` with `only` makes a real single-repo run.
+
+**To stop it.** Delete the secret `GO_COMMON_BUMP_TOKEN` (the workflow then ends green with a notice and does nothing), or set `"enabled": false` for a repo in `.github/consumers.json` (nothing is opened there) or `"auto_merge": false` (the PR is opened, never auto-merged). Disable the workflow in the Actions tab to stop all of it. Pushes that only touch `*.md`, `.agentrules`, `.github/**` or `scripts/**` do not start it.
+
+go-common is a **public** repo, so the run's log is public: it shows the consumers' names and PR numbers, and `go.mod` diffs, never a secret or a file of a private repo.
+
+Tests: `scripts/ci/bump_consumer_test.sh` (fake `gh`, fake `go`, local bare repos; run by the `CI scripts` job of `ci.yml`).
+
 ## Commit message prefixes
 
 This project uses common commit message prefixes inspired by Conventional Commits.

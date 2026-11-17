@@ -1,0 +1,31 @@
+{
+  "_comment": "The one list of go-common consumers for .github/workflows/bump-consumers.yml. Per entry: repo (short name in the org), module_dir (directory of the go.mod, relative to the repo root), enabled (default true; false = open nothing, give the reason in note), auto_merge (default true; false = open the PR but never switch on auto-merge), required_checks (check names that must be REQUIRED on main before auto-merge is switched on: the repo's test jobs, as GitHub shows them), deploy_workflow (default deploy.yml: the workflow whose run on the merge commit the job waits for). Edit this file to add or retire a consumer; nothing else lists them.",
+  "consumers": [
+    { "repo": "api-gateway",          "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "auth-service",         "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "user-service",         "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "media-service",        "module_dir": ".", "required_checks": ["test"] },
+    { "repo": "organisation-service", "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "notification-service", "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "verification-service", "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "tenant-service",       "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "machinery-service",    "module_dir": ".", "required_checks": ["test"] },
+    { "repo": "draft-service",        "module_dir": ".", "required_checks": ["test / build & test"] },
+    {
+      "repo": "geo-service", "module_dir": ".", "enabled": false,
+      "note": "OPEN NOTHING: geo-service is still on the go-common of 04.11.2026, before release 2 (events.NewDispatcher needs a deduplicator and a group, outbox.New needs a key-hashing writer, ...). A bump there does not compile. Port it by hand, then delete this flag.",
+      "required_checks": ["test / build & test"]
+    },
+    { "repo": "chat-service",         "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "review-service",       "module_dir": ".", "required_checks": ["build & test"] },
+    { "repo": "order-service",        "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "egress-service",       "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "crm-sync-service",     "module_dir": ".", "required_checks": ["test / build & test"] },
+    { "repo": "seo-service",          "module_dir": ".", "required_checks": ["build & unit tests", "repository tests (Postgres 16)"] },
+    {
+      "repo": "sale-service", "module_dir": "services/outbox-worker",
+      "note": "PHP repo; its Go module is the outbox relay. The bump touches services/outbox-worker/go.mod and go.sum only. validate is the PHP suite and runs on every PR.",
+      "required_checks": ["validate", "go (outbox-worker)"]
+    }
+  ]
+}
