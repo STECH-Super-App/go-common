@@ -98,6 +98,12 @@ emit() { # emit <canned file>: what the real gh prints for --jq
 case "$*" in
   "api graphql"*) exit "${FAKE_GRAPHQL_RC:-0}" ;;
   "api -X DELETE "*) exit 0 ;;
+  "api user"*)
+    if [ -f "$FAKE/user.json" ]; then emit user.json; else
+      echo "gh: Resource not accessible by integration (HTTP 403)" >&2
+      exit 1
+    fi
+    ;;
   "api repos/"*"/compare/"*) emit compare.json ;;
   "api repos/"*"/branches/main/protection/required_status_checks"*)
     if [ -f "$FAKE/protection.json" ]; then emit protection.json; else
@@ -112,7 +118,12 @@ case "$*" in
   "api repos/"*) emit repo.json ;;
   "pr list"*) emit open_prs.json ;;
   "pr create"*) echo "https://github.com/org/consumer/pull/7" ;;
-  "pr view"*) emit pr_view.json ;;
+  "pr view"*)
+    # @HEAD@ = the tip of the bump branch on the fake remote, i.e. the PR's head
+    head=$(git --git-dir="${FAKE_REMOTE:-/nonexistent}" rev-parse -q --verify "refs/heads/chore/go-common-${GOCOMMON_SHA:0:7}" 2>/dev/null || echo none)
+    sed "s/@HEAD@/${head}/" "$FAKE/pr_view.json" >"$FAKE/pr_view.cur"
+    emit pr_view.cur
+    ;;
   "pr close"* | "pr comment"*) exit 0 ;;
   "run list"*) emit runs.json ;;
   *)
@@ -162,7 +173,8 @@ new_case() {
   echo '{"contexts":["test / build & test","lint"],"checks":[{"context":"test / build & test"},{"context":"lint"}]}' >"$FAKE/protection.json"
   echo '[]' >"$FAKE/rules.json"
   echo '[]' >"$FAKE/open_prs.json"
-  echo '{"id":"PR_node","state":"MERGED","mergeCommit":{"oid":"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"},"files":[{"path":"go.mod"},{"path":"go.sum"}]}' >"$FAKE/pr_view.json"
+  echo '{"id":"PR_node","headRefOid":"@HEAD@","state":"MERGED","mergeCommit":{"oid":"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"},"files":[{"path":"go.mod"},{"path":"go.sum"}]}' >"$FAKE/pr_view.json"
+  echo '{"login":"bump-bot"}' >"$FAKE/user.json"
   echo '[{"databaseId":9,"status":"completed","conclusion":"success"}]' >"$FAKE/runs.json"
   : >"$FAKE/calls.log"
   : >"$FAKE/go.log"
@@ -184,7 +196,7 @@ run_bump() {
   shift
   RC=0
   env -i PATH="$root/bin:$PATH" HOME="$CASE" TMPDIR="${TMPDIR:-/tmp}" FAKE="$FAKE" \
-    GO_COMMON_BUMP_TOKEN=tok GEN_GO_PAT=modpat \
+    GO_COMMON_BUMP_TOKEN=tok GEN_GO_PAT=modpat FAKE_REMOTE="$REMOTE" \
     CONSUMER_REPO=org/consumer CONSUMER_DIR="$CK" MODULE_DIR=. \
     GOCOMMON_SHA="$sha" GOCOMMON_DIR="$GC" GOCOMMON_REPO=org/go-common \
     AUTH_PATHS="$AUTH_PATHS" AUTH_DEPS="$AUTH_DEPS" \
@@ -192,6 +204,35 @@ run_bump() {
     POLL_SECONDS=0 ENABLE_RETRY_SECONDS=0 ENABLE_RETRIES=2 WAIT_SECONDS=2 DEPLOY_APPEAR_SECONDS=0 \
     PUSH_BEFORE="$C3" GITHUB_STEP_SUMMARY="$CASE/summary" \
     "$@" bash "$bump" >"$CASE/out" 2>&1 || RC=$?
+}
+
+# mk_pr <number> <branch> [author] [isCrossRepository] [head repo owner]: one `gh pr list` row
+mk_pr() {
+  jq -cn --argjson n "$1" --arg b "$2" --arg a "${3:-bump-bot}" --argjson c "${4:-false}" --arg o "${5:-org}" '{
+    number: $n, headRefName: $b, url: ("https://github.com/org/consumer/pull/" + ($n | tostring)),
+    isCrossRepository: $c, headRepositoryOwner: {login: $o}, author: {login: $a}}'
+}
+# rewind <sha>: back to a clean main in the checkout (the bump branch stays on the remote), fresh call log
+rewind() {
+  git -C "$CK" reset -q --hard
+  git -C "$CK" switch -q main
+  git -C "$CK" branch -q -D "chore/go-common-${1:0:7}" 2>/dev/null || true
+  : >"$FAKE/calls.log"
+}
+# set_pin <version>: the consumer's main requires go-common at exactly this version
+set_pin() {
+  printf 'module example.com/consumer\n\ngo 1.25.0\n\nrequire github.com/STECH-Super-App/go-common %s\n' "$1" >"$CK/go.mod"
+  gitq -C "$CK" commit -q -am "pin $1" >/dev/null || true
+}
+# rogue_push <branch> <file> <line>: someone else pushes a commit onto the bump branch
+rogue_push() {
+  local w="$CASE/rogue"
+  rm -rf "$w"
+  git clone -q "$REMOTE" "$w"
+  git -C "$w" switch -q "$1"
+  printf '%s\n' "$3" >>"$w/$2"
+  gitq -C "$w" commit -q -am rogue
+  git -C "$w" push -q --force origin "$1"
 }
 
 called() { grep -q -- "$1" "$FAKE/calls.log"; }
@@ -290,7 +331,7 @@ check "no go call" test ! -s "$FAKE/go.log"
 # --- 8. an older open bump PR is closed and replaced -----------------------------
 echo "older bump PR"
 new_case older
-echo '[{"number":5,"headRefName":"chore/go-common-abcdef0","url":"https://github.com/org/consumer/pull/5"},{"number":6,"headRefName":"feature/other","url":"x"}]' >"$FAKE/open_prs.json"
+echo "[$(mk_pr 5 chore/go-common-abcdef0),$(mk_pr 6 feature/other)]" >"$FAKE/open_prs.json"
 run_bump "$C4"
 check "exits 0" test "$RC" -eq 0
 check "old PR #5 closed with a comment" called "pr close 5 -R org/consumer --comment"
@@ -301,16 +342,171 @@ check "closed before the new PR was opened" test "$(grep -n 'pr close 5' "$FAKE/
 
 echo "the same bump is already open (a re-run)"
 new_case rerun
-echo "[{\"number\":7,\"headRefName\":\"chore/go-common-${C4:0:7}\",\"url\":\"https://github.com/org/consumer/pull/7\"}]" >"$FAKE/open_prs.json"
 run_bump "$C4"
+bump_branch="chore/go-common-${C4:0:7}"
+first_head=$(git --git-dir="$REMOTE" rev-parse "refs/heads/${bump_branch}")
+check "first run: the mutation carries expectedHeadOid" called "expectedHeadOid"
+check "first run: armed on exactly the commit it pushed" called "oid=${first_head}"
+rewind "$C4"
+echo "[$(mk_pr 7 "$bump_branch")]" >"$FAKE/open_prs.json"
+run_bump "$C4"
+check "exits 0" test "$RC" -eq 0
 check "no second PR" not_called "pr create"
 check "no PR closed" not_called "pr close"
 check "auto-merge armed on the existing PR" called "enablePullRequestAutoMerge"
+check "armed on the head it verified (expectedHeadOid)" called "oid=${first_head}"
+check "the branch was not pushed over" test "$(git --git-dir="$REMOTE" rev-parse "refs/heads/${bump_branch}")" = "$first_head"
+
+echo "reused PR: its head holds other go.mod content than this job computed"
+new_case reuse-differs
+run_bump "$C4"
+rogue_push "$bump_branch" go.mod "require example.com/evil v1.0.0"
+rewind "$C4"
+echo "[$(mk_pr 7 "$bump_branch")]" >"$FAKE/open_prs.json"
+run_bump "$C4"
+check "exits 1" test "$RC" -eq 1
+check "NO auto-merge call" not_called "graphql"
+check "says the head is not what the job computed" out_has "not what this job computed"
+check "no second PR, nothing closed" test -z "$(grep -E 'pr create|pr close' "$FAKE/calls.log" || true)"
+
+echo "reused PR: its head also changes another file"
+new_case reuse-extra
+run_bump "$C4"
+rogue_push "$bump_branch" main.go "// extra"
+rewind "$C4"
+echo "[$(mk_pr 7 "$bump_branch")]" >"$FAKE/open_prs.json"
+run_bump "$C4"
+check "exits 1, no auto-merge" test "$RC" -eq 1 -a -z "$(grep graphql "$FAKE/calls.log" || true)"
+check "names the file" out_has "changes main.go against main"
+
+echo "the PR's head has a replace directive"
+new_case replace-line
+printf 'module example.com/consumer\n\ngo 1.25.0\n\nrequire github.com/STECH-Super-App/go-common v0.0.0-20261116140524-%s\n\nreplace example.com/x => ../x\n' "${C3:0:12}" >"$CK/go.mod"
+gitq -C "$CK" commit -q -am "replace"
+run_bump "$C4"
+check "exits 1" test "$RC" -eq 1
+check "NO auto-merge call" not_called "graphql"
+check "says why" out_has "replace directive"
+new_case replace-block
+printf 'module example.com/consumer\n\ngo 1.25.0\n\nrequire github.com/STECH-Super-App/go-common v0.0.0-20261116140524-%s\n\nreplace (\n\texample.com/x => ../x\n)\n' "${C3:0:12}" >"$CK/go.mod"
+gitq -C "$CK" commit -q -am "replace"
+run_bump "$C4"
+check "a replace block is caught too" test "$RC" -eq 1 -a -z "$(grep graphql "$FAKE/calls.log" || true)"
+new_case replace-comment
+printf 'module example.com/consumer\n\ngo 1.25.0\n\n// replace example.com/x => ../x is gone\nrequire github.com/STECH-Super-App/go-common v0.0.0-20261116140524-%s\n' "${C3:0:12}" >"$CK/go.mod"
+gitq -C "$CK" commit -q -am "comment"
+run_bump "$C4"
+check "a comment mentioning replace is not one" called "enablePullRequestAutoMerge"
+
+echo "a fork PR carries the bump branch name"
+new_case fork
+echo "[$(mk_pr 8 "$bump_branch" mallory true mallory)]" >"$FAKE/open_prs.json"
+run_bump "$C4"
+check "exits 1" test "$RC" -eq 1
+check "says it is not this job's own same-repository PR" out_has "not this job's own same-repository PR"
+check "names the fork as the reason" out_has "fork or another repository"
+check "nothing pushed" test -z "$(git --git-dir="$REMOTE" branch --list 'chore/*')"
+check "no PR created, none closed" test -z "$(grep -E 'pr create|pr close' "$FAKE/calls.log" || true)"
+check "NO auto-merge call" not_called "graphql"
+check "the foreign PR is not commented on either" not_called "pr comment"
+
+echo "a same-repository PR by another author carries the bump branch name"
+new_case other-author
+echo "[$(mk_pr 8 "$bump_branch" mallory false org)]" >"$FAKE/open_prs.json"
+run_bump "$C4"
+check "exits 1" test "$RC" -eq 1
+check "names the author" out_has "authored by mallory, not by bump-bot"
+check "nothing pushed" test -z "$(git --git-dir="$REMOTE" branch --list 'chore/*')"
+check "NO auto-merge call, no PR created or closed" test -z "$(grep -E 'graphql|pr create|pr close' "$FAKE/calls.log" || true)"
+
+echo "a same-repository PR from a head repo owned by someone else"
+new_case other-owner
+echo "[$(mk_pr 8 "$bump_branch" bump-bot false evil)]" >"$FAKE/open_prs.json"
+run_bump "$C4"
+check "exits 1, nothing armed" test "$RC" -eq 1 -a -z "$(grep graphql "$FAKE/calls.log" || true)"
+
+echo "a foreign bump PR on ANOTHER branch name is left alone"
+new_case foreign-old
+echo "[$(mk_pr 5 chore/go-common-abcdef0 mallory true mallory)]" >"$FAKE/open_prs.json"
+run_bump "$C4"
+check "exits 0" test "$RC" -eq 0
+check "not closed, branch not deleted" test -z "$(grep -E 'pr close|DELETE' "$FAKE/calls.log" || true)"
+check "says it left it alone" out_has "leaving https://github.com/org/consumer/pull/5 alone"
+check "own PR opened and armed" called "enablePullRequestAutoMerge"
+
+echo "the bump token's user cannot be read"
+new_case no-actor
+run_bump "$C4"
+rewind "$C4"
+rm "$FAKE/user.json"
+echo "[$(mk_pr 7 "$bump_branch")]" >"$FAKE/open_prs.json"
+run_bump "$C4"
+check "an earlier PR is not trusted: exits 1, nothing armed" test "$RC" -eq 1 -a -z "$(grep graphql "$FAKE/calls.log" || true)"
+check "says the user is unknown" out_has "bump token user is unknown"
+rewind "$C4"
+run_bump "$C4" BUMP_ACTOR_LOGIN=bump-bot
+check "BUMP_ACTOR_LOGIN stands in for gh api user" called "enablePullRequestAutoMerge"
+
+echo "dry run with a foreign PR on the bump branch name"
+new_case dry-fork
+echo "[$(mk_pr 8 "$bump_branch" mallory true mallory)]" >"$FAKE/open_prs.json"
+run_bump "$C4" DRY_RUN=true
+check "exits 0 and says it would refuse" test "$RC" -eq 0 && out_has "WOULD refuse"
+check "touches nothing" test -z "$(grep -E 'graphql|pr create|pr close|DELETE' "$FAKE/calls.log" || true)"
+
+# --- 8b. the previous pin: every form maps to a commit, otherwise no auto-merge -------------
+# C1 is older than the auth commit C3, so a pin that maps to C1 must block auto-merge
+# through the "since the previous pin" range (the push range C3..C4 is clean); a pin
+# that does not map must block it through its own reason. Either way the PR opens.
+gitq -C "$GC" tag v1.5.0 "$C1"
+gitq -C "$GC" tag v1.5.1-rc.1 "$C1"
+for ver in \
+  "v0.0.0-20261116140524-${C1:0:12}" \
+  "v1.4.3-0.20261116140524-${C1:0:12}" \
+  "v1.4.3-pre.0.20261116140524-${C1:0:12}" \
+  "v2.0.0-beta.2.0.20261116140524-${C1:0:12}" \
+  "v2.0.0-20261116140524-${C1:0:12}+incompatible" \
+  "v1.5.0" "v1.5.1-rc.1" "v1.5.0+incompatible"; do
+  echo "previous pin ${ver}"
+  new_case "pin-$ver" "$C1"
+  set_pin "$ver"
+  mk_compare "$C1" "$C4" ahead
+  run_bump "$C4" PUSH_BEFORE="$C3"
+  check "maps to C1: the range since it is checked (auth commit found)" body_has "since the previous pin"
+  check "no unmappable-pin reason" test -z "$(grep 'cannot be mapped' "$FAKE/pr_body.md" || true)"
+  check "PR opened, no auto-merge" test -n "$(grep 'pr create' "$FAKE/calls.log")" -a -z "$(grep graphql "$FAKE/calls.log" || true)"
+done
+
+for ver in "v9.9.9" "v0.0.0-20261116140524-deadbeefdead" "v1.2.3-0.20261116140524-deadbeefdead" "garbage"; do
+  echo "unmappable previous pin ${ver}"
+  new_case "unmappable-$ver"
+  set_pin "$ver"
+  run_bump "$C4" PUSH_BEFORE="$C3"
+  check "exits 0" test "$RC" -eq 0
+  check "PR still opened" called "pr create"
+  check "NO auto-merge call" not_called "graphql"
+  check "the body says the pin cannot be mapped to a commit" body_has "previous pin ${ver} cannot be mapped to a commit"
+done
+
+echo "no previous go-common requirement"
+new_case no-requirement
+printf 'module example.com/consumer\n\ngo 1.25.0\n' >"$CK/go.mod"
+gitq -C "$CK" commit -q -am "no requirement"
+run_bump "$C4" PUSH_BEFORE="$C3"
+check "PR opened, no auto-merge" test -n "$(grep 'pr create' "$FAKE/calls.log")" -a -z "$(grep graphql "$FAKE/calls.log" || true)"
+check "the body says there was no previous requirement" body_has "no previous go-common requirement"
+
+echo "a mappable previous pin with a clean range still arms (the new check does not over-block)"
+new_case pin-clean "$C3"
+set_pin "v1.4.3-0.20261116140524-${C3:0:12}"
+mk_compare "$C3" "$C4" ahead
+run_bump "$C4" PUSH_BEFORE="$C3"
+check "auto-merge armed" called "enablePullRequestAutoMerge"
 
 # --- 9. dry run -------------------------------------------------------------------
 echo "dry run"
 new_case dry
-echo '[{"number":5,"headRefName":"chore/go-common-abcdef0","url":"https://github.com/org/consumer/pull/5"}]' >"$FAKE/open_prs.json"
+echo "[$(mk_pr 5 chore/go-common-abcdef0)]" >"$FAKE/open_prs.json"
 run_bump "$C4" DRY_RUN=true
 check "exits 0" test "$RC" -eq 0
 check "nothing pushed" test -z "$(git --git-dir="$REMOTE" branch --list 'chore/*')"
@@ -380,7 +576,7 @@ check "comments on the PR" called "pr comment"
 # --- 11. the wait ---------------------------------------------------------------------
 echo "PR never merges"
 new_case nomerge
-echo '{"id":"PR_node","state":"OPEN","mergeCommit":null,"files":[{"path":"go.mod"},{"path":"go.sum"}]}' >"$FAKE/pr_view.json"
+echo '{"id":"PR_node","headRefOid":"@HEAD@","state":"OPEN","mergeCommit":null,"files":[{"path":"go.mod"},{"path":"go.sum"}]}' >"$FAKE/pr_view.json"
 run_bump "$C4" WAIT_SECONDS=1
 check "exits 1 after the budget" test "$RC" -eq 1
 check "says it was not merged" out_has "was not merged within"
@@ -401,7 +597,7 @@ check "says so" out_has "no deploy.yml run"
 # --- 12. the PR is not pure at the last look -------------------------------------------
 echo "PR files include something else"
 new_case impure
-echo '{"id":"PR_node","state":"OPEN","mergeCommit":null,"files":[{"path":"go.mod"},{"path":"main.go"}]}' >"$FAKE/pr_view.json"
+echo '{"id":"PR_node","headRefOid":"@HEAD@","state":"OPEN","mergeCommit":null,"files":[{"path":"go.mod"},{"path":"main.go"}]}' >"$FAKE/pr_view.json"
 run_bump "$C4"
 check "exits 1" test "$RC" -eq 1
 check "no auto-merge call" not_called "graphql"
@@ -409,7 +605,7 @@ check "no auto-merge call" not_called "graphql"
 # --- 13. a module in a subdirectory (sale-service) --------------------------------------
 echo "module in a subdirectory"
 new_case subdir "$C3" services/outbox-worker
-echo '{"id":"PR_node","state":"MERGED","mergeCommit":{"oid":"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"},"files":[{"path":"services/outbox-worker/go.mod"},{"path":"services/outbox-worker/go.sum"}]}' >"$FAKE/pr_view.json"
+echo '{"id":"PR_node","headRefOid":"@HEAD@","state":"MERGED","mergeCommit":{"oid":"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"},"files":[{"path":"services/outbox-worker/go.mod"},{"path":"services/outbox-worker/go.sum"}]}' >"$FAKE/pr_view.json"
 run_bump "$C4" MODULE_DIR=services/outbox-worker
 check "exits 0" test "$RC" -eq 0
 check "only that module's go.mod and go.sum committed" test "$(git --git-dir="$REMOTE" show --name-only --format= "chore/go-common-${C4:0:7}" | sort | tr '\n' ' ')" = "services/outbox-worker/go.mod services/outbox-worker/go.sum "

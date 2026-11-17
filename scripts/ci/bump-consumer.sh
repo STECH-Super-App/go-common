@@ -30,7 +30,17 @@
 #                         (falls back to the bump token)
 #   WAIT_SECONDS (1800)   one budget for "merged and deployed"; POLL_SECONDS (20);
 #                         DEPLOY_APPEAR_SECONDS (300); ENABLE_RETRIES (5), ENABLE_RETRY_SECONDS (10)
+#   BUMP_ACTOR_LOGIN     login the bump PRs are authored by. Default: `gh api user`, i.e. the
+#                         token's own user. Set it when the token is an App installation
+#                         token (which cannot read /user); without any identity no earlier
+#                         PR is trusted and auto-merge is never armed on a reused one.
 #   GITHUB_STEP_SUMMARY, GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID: optional
+#
+# Auto-merge is armed only on a head commit this script created (or, for a PR of an
+# earlier run, one whose go.mod/go.sum are byte-identical to what it just computed),
+# with that commit's sha as expectedHeadOid: a later push to the branch disarms it.
+# A PR on the bump branch name that is not the token user's own same-repository PR is
+# never reused, closed, pushed over or armed; the job stops with an error instead.
 #
 # Exit: 0 done (PR opened, nothing to do, or no token); 1 something needs a human.
 set -euo pipefail
@@ -104,12 +114,34 @@ pinned_version() {
 echo "== ${CONSUMER_REPO} (${module_dir}) -> go-common ${sha7}"
 
 # --- Where is the consumer now? --------------------------------------------
+# Map the previous pin to a go-common commit: every pseudo-version form
+# (vX.Y.Z-<ts>-<sha>, vX.Y.Z-0.<ts>-<sha>, vX.Y.Z-pre.0.<ts>-<sha>, +incompatible)
+# carries a 12-hex commit prefix; a plain tag is resolved through git in the
+# go-common checkout. prev_sha is the FULL sha, or empty with prev_problem saying
+# why; an empty prev_sha blocks auto-merge below (the range since the previous pin
+# cannot be checked for auth changes) but never the PR itself.
 prev_version=$(pinned_version)
 prev_sha=""
-if [[ $prev_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]{14}-([0-9a-f]{12})$ ]]; then
-  prev_sha=${BASH_REMATCH[1]}
+prev_problem=""
+pseudo_re='^v[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z.-]*[-.])?[0-9]{14}-([0-9a-f]{12})(\+incompatible)?$'
+tag_re='^(v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)(\+incompatible)?$'
+if [ -z "$prev_version" ]; then
+  prev_problem="the consumer has no previous go-common requirement"
+else
+  prev_ref=""
+  if [[ $prev_version =~ $pseudo_re ]]; then
+    prev_ref=${BASH_REMATCH[2]}
+  elif [[ $prev_version =~ $tag_re ]]; then
+    prev_ref=refs/tags/${BASH_REMATCH[1]}
+  fi
+  if [ -n "$prev_ref" ]; then
+    prev_sha=$(git -C "$GOCOMMON_DIR" rev-parse --verify -q "${prev_ref}^{commit}" 2>/dev/null) || prev_sha=""
+  fi
+  if [ -z "$prev_sha" ]; then
+    prev_problem="previous pin ${prev_version} cannot be mapped to a commit"
+  fi
 fi
-if [ -n "$prev_sha" ] && [ "${GOCOMMON_SHA:0:12}" = "$prev_sha" ]; then
+if [ -n "$prev_sha" ] && [ "$GOCOMMON_SHA" = "$prev_sha" ]; then
   notice "${CONSUMER_REPO} is already on go-common ${sha7}: no pull request"
   summary "- ${CONSUMER_REPO}: already on ${sha7}"
   exit 0
@@ -121,14 +153,14 @@ if [ -n "$prev_sha" ]; then
   if cmp_json=$(gh api "repos/${gocommon_repo}/compare/${prev_sha}...${GOCOMMON_SHA}" 2>/dev/null); then
     cmp_status=$(jq -r '.status // ""' <<<"$cmp_json")
   else
-    warn "could not compare go-common ${prev_sha}...${sha7}: the PR body will not list the commits"
+    warn "could not compare go-common ${prev_sha:0:7}...${sha7}: the PR body will not list the commits"
     cmp_json=""
   fi
 fi
 case "$cmp_status" in
   behind | identical)
-    notice "${CONSUMER_REPO} already holds go-common ${prev_sha}, which is ${cmp_status} ${sha7}: no pull request"
-    summary "- ${CONSUMER_REPO}: pin ${prev_sha} is not older than ${sha7}"
+    notice "${CONSUMER_REPO} already holds go-common ${prev_sha:0:7}, which is ${cmp_status} ${sha7}: no pull request"
+    summary "- ${CONSUMER_REPO}: pin ${prev_sha:0:7} is not older than ${sha7}"
     exit 0
     ;;
 esac
@@ -169,6 +201,8 @@ if [ "${#stray[@]}" -gt 0 ]; then
   fail "${CONSUMER_REPO}: the bump changes files besides ${allowed_files[*]}: ${stray[*]} — not a pure bump, nothing pushed"
 fi
 new_version=$(pinned_version)
+# What the bump is computed against: the checkout of main, before any branch.
+base_sha=$(git_c rev-parse HEAD)
 
 # --- Title, body, auto-merge decision ---------------------------------------
 subject=$(git -C "$GOCOMMON_DIR" log -1 --format=%s "$GOCOMMON_SHA" 2>/dev/null || true)
@@ -199,17 +233,15 @@ check_auth_range() {
   esac
 }
 push_before=${PUSH_BEFORE:-}
-checked=0
 if [ -n "$push_before" ] && [[ ! $push_before =~ ^0+$ ]]; then
   check_auth_range "$push_before" "this push"
-  checked=1
 fi
 if [ -n "$prev_sha" ]; then
   check_auth_range "$prev_sha" "since the previous pin"
-  checked=1
-fi
-if [ "$checked" -eq 0 ]; then
-  auth_lines="no commit range to check (no push 'before' and no sha in the previous pin) "
+else
+  # Fail closed: an unmapped pin leaves the range since it unchecked, and a push
+  # after an unmerged auth bump could carry that change in under its own auto-merge.
+  reasons+=("${prev_problem} (the go-common commits since it could not be checked for token / auth-middleware changes, Critical Rule 20 — Token size budget)")
 fi
 if [ -n "$auth_lines" ]; then
   reasons+=("the go-common commits touch the token / auth-middleware code, which needs the owner's sign-off and a real login on dev (Critical Rule 20 — Token size budget): ${auth_lines% }")
@@ -286,7 +318,7 @@ trap 'rm -f "$body_file"' EXIT
       echo "- … and $((total - 50)) more"
     fi
   else
-    echo "go-common commits since the previous pin: not available (the previous pin is not a pseudo-version of a go-common commit, or the compare call failed)."
+    echo "go-common commits since the previous pin: not available (the previous pin cannot be mapped to a go-common commit, or the compare call failed)."
   fi
   echo
   echo "**\`go build ./...\` was not run by go-common's workflow.** This PR's own checks are the test: a red check means the bump does not fit this service yet."
@@ -296,32 +328,71 @@ trap 'rm -f "$body_file"' EXIT
   fi
 } >"$body_file"
 
-# --- Older bump PRs ----------------------------------------------------------
+# --- Open bump PRs -----------------------------------------------------------
 # Never two open bump PRs in one repo. Same branch = this very bump, opened by an
 # earlier run of the same push: reuse it. Another branch = an older go-common
 # commit: close it (that also stops its auto-merge) and delete its branch.
+#
+# Only PRs this job could have opened are touched: same repository (not a fork)
+# and authored by the bump token's own user. Anyone with push access can name a
+# branch chore/go-common-<anything>, and anyone can open a fork PR with that head
+# name; such a PR is never reused, closed or pushed over, and never armed.
+owner=${CONSUMER_REPO%%/*}
+actor=${BUMP_ACTOR_LOGIN:-}
+if [ -z "$actor" ]; then
+  actor=$(gh api user --jq .login 2>/dev/null) || actor=""
+fi
+if [ -z "$actor" ]; then
+  warn "${CONSUMER_REPO}: cannot read the bump token's user (gh api user); no earlier bump PR is trusted"
+fi
+
 existing_url=""
 superseded=()
+blocked=()
 open_bumps=$(gh pr list -R "$CONSUMER_REPO" --state open --base main --limit 100 \
-  --json number,headRefName,url \
-  --jq '.[] | select(.headRefName | startswith("chore/go-common-")) | [.number, .headRefName, .url] | @tsv')
-while IFS=$'\t' read -r number head url; do
+  --json number,headRefName,url,isCrossRepository,headRepositoryOwner,author |
+  jq -r --arg owner "$owner" --arg actor "$actor" '
+    .[] | select(.headRefName | startswith("chore/go-common-"))
+    | (if .isCrossRepository != false then "it comes from a fork or another repository"
+       elif ((.headRepositoryOwner.login // "") | ascii_downcase) != ($owner | ascii_downcase) then "its head repository is not owned by " + $owner
+       elif $actor == "" then "the bump token user is unknown"
+       elif ((.author.login // "") | ascii_downcase) != ($actor | ascii_downcase) then "authored by " + (.author.login // "an unknown user") + ", not by " + $actor
+       else "" end) as $why
+    | [(if $why == "" then "1" else "0" end), (.number | tostring), .headRefName, .url, $why] | @tsv')
+while IFS=$'\t' read -r trusted number head url why; do
   [ -z "$number" ] && continue
-  if [ "$head" = "$branch" ]; then
-    existing_url=$url
+  if [ "$trusted" = "1" ]; then
+    if [ "$head" = "$branch" ]; then
+      existing_url=$url
+    else
+      superseded+=("${number}"$'\t'"${head}")
+    fi
+  elif [ "$head" = "$branch" ]; then
+    blocked+=("${url} (${why})")
   else
-    superseded+=("${number}"$'\t'"${head}")
+    warn "${CONSUMER_REPO}: leaving ${url} alone: not a bump PR of this job (${why})"
   fi
 done <<<"$open_bumps"
+
+# A foreign PR on OUR branch name: pushing would overwrite its branch (or sit next
+# to a look-alike), so nothing is pushed, opened or armed here. The job fails so a
+# human looks: it is either a mistake or someone steering the auto-merge.
+blocked_text=""
+if [ "${#blocked[@]}" -gt 0 ]; then
+  blocked_text="an open PR uses the bump branch name ${branch} and is not this job's own same-repository PR: $(printf '%s; ' "${blocked[@]}" | sed 's/; $//')"
+fi
 
 if [ "$dry_run" = "true" ]; then
   echo "DRY RUN: nothing is pushed, opened or closed."
   git_c diff --stat
+  if [ -n "$blocked_text" ]; then
+    echo "WOULD refuse: ${blocked_text}"
+  fi
   for item in "${superseded[@]}"; do
     echo "WOULD close superseded bump PR #${item%%$'\t'*} and delete branch ${item#*$'\t'}"
   done
   if [ -n "$existing_url" ]; then
-    echo "WOULD reuse the open PR ${existing_url}"
+    echo "WOULD reuse the open PR ${existing_url} if its head matches this bump byte for byte"
   else
     echo "WOULD push branch ${branch} and open a PR"
   fi
@@ -331,6 +402,11 @@ if [ "$dry_run" = "true" ]; then
   echo "WOULD handle auto-merge: ${am_line}"
   summary "- ${CONSUMER_REPO}: dry run, would open ${branch}; auto-merge: ${am_line}"
   exit 0
+fi
+
+if [ -n "$blocked_text" ]; then
+  summary "- ${CONSUMER_REPO}: REFUSED, ${blocked_text}"
+  fail "${CONSUMER_REPO}: ${blocked_text} — nothing pushed, opened or armed, and that PR is left untouched"
 fi
 
 for item in "${superseded[@]}"; do
@@ -343,6 +419,7 @@ for item in "${superseded[@]}"; do
     warn "could not delete branch ${old_branch} in ${CONSUMER_REPO}"
 done
 
+pushed_sha=""
 if [ -n "$existing_url" ]; then
   pr_url=$existing_url
   echo "the bump PR for ${sha7} is already open: ${pr_url}"
@@ -351,6 +428,7 @@ else
   git_c add -- "${allowed_files[@]}"
   git_c -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
     commit -q -m "$title"
+  pushed_sha=$(git_c rev-parse HEAD)
   # A leftover branch of the same name (a closed PR of an earlier attempt) holds
   # the same bump; replacing it is safe.
   git_c push -q --force origin "$branch"
@@ -366,7 +444,53 @@ if [ "${#reasons[@]}" -gt 0 ]; then
 fi
 
 # --- Switch auto-merge on ----------------------------------------------------
-# Last look: the pull request really changes go.mod and go.sum and nothing else.
+# Last look, from the pull request's actual head commit and not from a file list:
+# on top of the main this bump was computed against, the commit changes go.mod and
+# go.sum of the module and nothing else, both byte-identical to the files computed
+# here, and the go.mod has no replace directive. Sets verify_error on failure.
+verify_error=""
+verify_head() {
+  local oid=$1 fetched names path allowed ok want have
+  if ! [[ $oid =~ ^[0-9a-f]{40}$ ]]; then
+    verify_error="the head commit of the PR is unreadable (${oid:-empty})"
+    return 1
+  fi
+  if ! git_c fetch -q origin "refs/heads/${branch}" 2>/dev/null; then
+    verify_error="branch ${branch} cannot be fetched from ${CONSUMER_REPO}"
+    return 1
+  fi
+  fetched=$(git_c rev-parse --verify -q "FETCH_HEAD^{commit}") || fetched=""
+  if [ "$fetched" != "$oid" ]; then
+    verify_error="the head of the PR (${oid:0:7}) is not the tip of branch ${branch} (${fetched:0:7}): it moved"
+    return 1
+  fi
+  mapfile -t names < <(git_c diff --name-only "$base_sha" "$oid")
+  for path in "${names[@]}"; do
+    ok=0
+    for allowed in "${allowed_files[@]}"; do
+      [ "$path" = "$allowed" ] && ok=1
+    done
+    if [ "$ok" -ne 1 ]; then
+      verify_error="the head commit ${oid:0:7} changes ${path} against main, not only go.mod and go.sum"
+      return 1
+    fi
+  done
+  for path in "${allowed_files[@]}"; do
+    want=absent
+    [ -f "$CONSUMER_DIR/$path" ] && want=$(git_c hash-object --no-filters -- "$path")
+    have=$(git_c rev-parse --verify -q "${oid}:${path}") || have=absent
+    if [ "$want" != "$have" ]; then
+      verify_error="${path} in the head commit ${oid:0:7} is not what this job computed (${have:0:7} vs ${want:0:7})"
+      return 1
+    fi
+  done
+  if git_c show "${oid}:${mod_prefix}go.mod" | grep -Eq '^[[:space:]]*replace([[:space:]]|\()'; then
+    verify_error="${mod_prefix}go.mod in the head commit ${oid:0:7} has a replace directive"
+    return 1
+  fi
+  return 0
+}
+
 mapfile -t pr_files < <(gh pr view "$pr_url" --json files --jq '.files[].path')
 for path in "${pr_files[@]}"; do
   ok=0
@@ -376,17 +500,28 @@ for path in "${pr_files[@]}"; do
   [ "$ok" -eq 1 ] || fail "${CONSUMER_REPO}: ${pr_url} changes ${path}, not a pure bump: auto-merge NOT enabled"
 done
 
+IFS=$'\t' read -r node_id head_oid < <(gh pr view "$pr_url" --json id,headRefOid --jq '[.id, .headRefOid] | @tsv')
+if [ -n "$pushed_sha" ] && [ "$head_oid" != "$pushed_sha" ]; then
+  summary "- ${CONSUMER_REPO}: ${pr_url} head is not the commit pushed here: auto-merge NOT enabled"
+  fail "${CONSUMER_REPO}: ${pr_url} has head ${head_oid:0:7}, but this job pushed ${pushed_sha:0:7}: auto-merge NOT enabled"
+fi
+if ! verify_head "$head_oid"; then
+  summary "- ${CONSUMER_REPO}: ${pr_url} auto-merge NOT enabled: ${verify_error}"
+  fail "${CONSUMER_REPO}: ${pr_url} is not reusable, auto-merge NOT enabled: ${verify_error}"
+fi
+
 # The GraphQL mutation, not `gh pr merge --auto`: it only ever arms auto-merge
 # and errors on a pull request that is already mergeable, where the CLI could
-# merge it straight away. Right after creation GitHub may still be registering
-# the required checks, hence the retries.
-node_id=$(gh pr view "$pr_url" --json id --jq .id)
+# merge it straight away. expectedHeadOid = the commit verified above: a push to
+# the branch after this point makes GitHub refuse (or cancel) the merge. Right
+# after creation GitHub may still be registering the required checks, hence the
+# retries.
 enabled=0
 for ((attempt = 1; attempt <= enable_retries; attempt++)); do
-  # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
+  # shellcheck disable=SC2016 # $id and $oid are GraphQL variables, not shell ones
   if gh api graphql \
-    -f query='mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: SQUASH}) { pullRequest { number } } }' \
-    -f id="$node_id" >/dev/null; then
+    -f query='mutation($id: ID!, $oid: GitObjectID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: SQUASH, expectedHeadOid: $oid}) { pullRequest { number } } }' \
+    -f id="$node_id" -f oid="$head_oid" >/dev/null; then
     enabled=1
     break
   fi
@@ -399,7 +534,7 @@ if [ "$enabled" -ne 1 ]; then
   summary "- ${CONSUMER_REPO}: auto-merge could not be enabled on ${pr_url}"
   exit 0
 fi
-echo "auto-merge enabled on ${pr_url}"
+echo "auto-merge enabled on ${pr_url} (head ${head_oid:0:7})"
 
 # --- Wait: merged, then deployed ---------------------------------------------
 # One merge deploys to dev's single small node, and the matrix runs three jobs at
