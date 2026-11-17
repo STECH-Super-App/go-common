@@ -5,8 +5,14 @@
 # run it with a fake `gh`.
 #
 # Environment
-#   EVENT          push | workflow_dispatch
-#   PUSH_SHA       the pushed commit (a push run)
+#   EVENT          workflow_run | workflow_dispatch
+#   RUN_SHA        workflow_run: the head_sha of the Go CI run that succeeded (the
+#                  workflow's job guard has already checked success / push / main)
+#   IGNORED_PATHS  workflow_run: newline-separated globs (`*` and `**` match across
+#                  `/`). A commit whose changed files ALL match starts no bump.
+#                  Empty = nothing is ignored. Not applied to workflow_dispatch.
+#   GOCOMMON_DIR   a git checkout of go-common to read the commit's files from
+#                  (default `.`; the commit and its parent are fetched if missing)
 #   INPUT_SHA      dispatch input: the commit to pin; empty = the head of main
 #   INPUT_ONLY     dispatch input: one repo (short name) instead of the list
 #   INPUT_DRY_RUN  dispatch input; anything but 'false' is a dry run
@@ -22,6 +28,7 @@ consumers_file=${CONSUMERS_FILE:-.github/consumers.json}
 out=${GITHUB_OUTPUT:-/dev/stdout}
 
 notice() { echo "::notice::$*"; }
+warn() { echo "::warning::$*"; }
 fail() {
   echo "::error::$*"
   exit 1
@@ -46,10 +53,71 @@ if [ -z "${BUMP_TOKEN:-}" ]; then
   exit 0
 fi
 
+# Consumers only ever pin a commit on main (Critical Rule 9 — Push policy split:
+# a pin to a branch commit must never reach a consumer's main).
+require_on_main() { # require_on_main <sha>
+  local relation
+  relation=$(gh api "repos/${gocommon_repo}/compare/$1...main" --jq .status)
+  case "$relation" in
+    ahead | identical) ;;
+    *) fail "${1:0:7} is not on go-common's main (compare says '${relation}'): refusing to pin it" ;;
+  esac
+}
+
+# only_ignored_paths <sha>: 0 when the commit changed files and EVERY one matches
+# IGNORED_PATHS. Anything else, including a commit whose files cannot be read (a
+# root commit, a parent that cannot be fetched), is 1: fail closed, the bump goes
+# ahead. The diff is against the commit's first parent, i.e. the whole change a
+# squash or merge commit brought in.
+only_ignored_paths() {
+  local sha=$1 dir=${GOCOMMON_DIR:-.} line file pattern ignored files=()
+  local patterns=()
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "$line" in '#'*) continue ;; esac
+    patterns+=("$line")
+  done <<<"${IGNORED_PATHS:-}"
+  [ "${#patterns[@]}" -gt 0 ] || return 1
+
+  have_parent() { git -C "$dir" rev-parse --verify --quiet "${sha}^1^{commit}" >/dev/null 2>&1; }
+  have_parent || git -C "$dir" fetch --quiet --no-tags --depth=2 origin "$sha" >/dev/null 2>&1 || true
+  have_parent || {
+    warn "cannot read the files of ${sha:0:7} (no parent commit available): not skipping the bump"
+    return 1
+  }
+  while IFS= read -r file; do
+    [ -n "$file" ] && files+=("$file")
+  done < <(git -C "$dir" diff --name-only "${sha}^1" "$sha" 2>/dev/null)
+  [ "${#files[@]}" -gt 0 ] || return 1
+
+  for file in "${files[@]}"; do
+    ignored=0
+    for pattern in "${patterns[@]}"; do
+      # The pattern is a glob on purpose: case matches `*` across `/`.
+      # shellcheck disable=SC2254
+      case "$file" in
+        $pattern)
+          ignored=1
+          break
+          ;;
+      esac
+    done
+    [ "$ignored" -eq 1 ] || return 1
+  done
+  return 0
+}
+
 dry_run=false
 case "${EVENT:-}" in
-  push)
-    sha=${PUSH_SHA:-}
+  workflow_run)
+    sha=${RUN_SHA:-}
+    [[ $sha =~ ^[0-9a-f]{40}$ ]] || fail "the Go CI run's head_sha is not a full lowercase 40-hex sha (got '${sha}')"
+    require_on_main "$sha"
+    if only_ignored_paths "$sha"; then
+      notice "${sha:0:7} changed only docs, the workflow or its scripts (IGNORED_PATHS): no consumer is bumped"
+      emit "$sha" false "$empty"
+      exit 0
+    fi
     ;;
   workflow_dispatch)
     [ "${INPUT_DRY_RUN:-true}" = "false" ] || dry_run=true
@@ -59,13 +127,7 @@ case "${EVENT:-}" in
     fi
     [[ $sha =~ ^[0-9a-f]{7,40}$ ]] || fail "sha must be 7 to 40 lowercase hex characters, got '${sha}'"
     sha=$(gh api "repos/${gocommon_repo}/commits/${sha}" --jq .sha)
-    # Consumers only ever pin a commit on main (Critical Rule 9 — Push policy
-    # split: a pin to a branch commit must never reach a consumer's main).
-    relation=$(gh api "repos/${gocommon_repo}/compare/${sha}...main" --jq .status)
-    case "$relation" in
-      ahead | identical) ;;
-      *) fail "${sha:0:7} is not on go-common's main (compare says '${relation}'): refusing to pin it" ;;
-    esac
+    require_on_main "$sha"
     ;;
   *)
     fail "unsupported event '${EVENT:-}'"
@@ -94,7 +156,8 @@ matrix=$(jq -c --arg only "$only" '{
         module_dir,
         auto_merge: ((if has("auto_merge") then .auto_merge else true end) | tostring),
         required_checks: ((.required_checks // []) | tojson),
-        deploy_workflow: (.deploy_workflow // "deploy.yml")
+        # absent = deploy.yml; "" = no deploy workflow, nothing to wait for
+        deploy_workflow: (if (.deploy_workflow | type) == "string" then .deploy_workflow else "deploy.yml" end)
       }
   ]
 }' "$consumers_file")

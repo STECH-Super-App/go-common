@@ -13,6 +13,7 @@ repo_root=$(cd "$here/../.." && pwd)
 bump="$here/bump-consumer.sh"
 authpaths="$here/auth-paths.sh"
 workflow="$repo_root/.github/workflows/bump-consumers.yml"
+ci_workflow="$repo_root/.github/workflows/ci.yml"
 
 root=$(mktemp -d)
 trap '[ -n "${KEEP:-}" ] || rm -rf "$root"' EXIT
@@ -44,16 +45,17 @@ extract_block() { # extract_block <KEY> <file>: the literal block under `  KEY: 
 }
 AUTH_PATHS=$(extract_block AUTH_PATHS "$workflow")
 AUTH_DEPS=$(extract_block AUTH_DEPS "$workflow")
-export AUTH_PATHS AUTH_DEPS
-if [ -z "$AUTH_PATHS" ]; then
-  echo "could not read AUTH_PATHS out of $workflow"
+IGNORED_PATHS=$(extract_block IGNORED_PATHS "$workflow")
+export AUTH_PATHS AUTH_DEPS IGNORED_PATHS
+if [ -z "$AUTH_PATHS" ] || [ -z "$IGNORED_PATHS" ]; then
+  echo "could not read AUTH_PATHS / IGNORED_PATHS out of $workflow"
   exit 1
 fi
 
 # --- fixtures ------------------------------------------------------------------
 gitq() { git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false "$@"; }
 
-make_gocommon() { # make_gocommon <dir>: five commits C1..C5, C3 and C5 are auth changes
+make_gocommon() { # make_gocommon <dir>: C1..C5 (C3 and C5 are auth changes), then C6 docs/workflow/scripts only, C7 docs + code
   local d=$1
   git init -q -b main "$d"
   mkdir -p "$d/pkg/utils" "$d/pkg/errors" "$d/pkg/middleware" "$d/pkg/outbox"
@@ -73,6 +75,18 @@ make_gocommon() { # make_gocommon <dir>: five commits C1..C5, C3 and C5 are auth
   sed -i 's#jwt/v5 v5.3.0#jwt/v5 v5.4.0#' "$d/go.mod"
   gitq -C "$d" add -A && gitq -C "$d" commit -q -m "build: bump jwt"
   C5=$(git -C "$d" rev-parse HEAD)
+  mkdir -p "$d/.github/workflows" "$d/scripts/ci" "$d/pkg/utils/docs"
+  echo r >"$d/README.md"
+  echo r >"$d/pkg/utils/docs/NOTES.md"
+  echo w >"$d/.github/workflows/x.yml"
+  echo s >"$d/scripts/ci/y.sh"
+  echo a >"$d/.agentrules"
+  gitq -C "$d" add -A && gitq -C "$d" commit -q -m "docs: readme, workflow, scripts"
+  C6=$(git -C "$d" rev-parse HEAD)
+  echo r2 >"$d/README.md"
+  echo e >"$d/pkg/errors/e2.go"
+  gitq -C "$d" add -A && gitq -C "$d" commit -q -m "feat: errors again, readme"
+  C7=$(git -C "$d" rev-parse HEAD)
 }
 
 GC="$root/gocommon"
@@ -202,7 +216,7 @@ run_bump() {
     AUTH_PATHS="$AUTH_PATHS" AUTH_DEPS="$AUTH_DEPS" \
     REQUIRED_CHECKS='["test / build & test"]' DEPLOY_WORKFLOW=deploy.yml \
     POLL_SECONDS=0 ENABLE_RETRY_SECONDS=0 ENABLE_RETRIES=2 WAIT_SECONDS=2 DEPLOY_APPEAR_SECONDS=0 \
-    PUSH_BEFORE="$C3" GITHUB_STEP_SUMMARY="$CASE/summary" \
+    GITHUB_STEP_SUMMARY="$CASE/summary" \
     "$@" bash "$bump" >"$CASE/out" 2>&1 || RC=$?
 }
 
@@ -259,11 +273,11 @@ check "go commands got the module-PAT insteadOf through the environment" grep -q
 check "the PAT rewrite is not written to any git config" test -z "$(git -C "$CK" config --local --get-regexp 'url\..*insteadof' 2>/dev/null || true)"
 check "waited for the deploy workflow run" called "run list -R org/consumer --workflow deploy.yml --commit mmmm"
 
-# --- 2. the push range holds an auth commit: PR, no auto-merge -----------------
+# --- 2. the range since the pin holds an auth commit: PR, no auto-merge -------
 echo "auth-path commit"
 new_case auth "$C1"
 mk_compare "$C1" "$C4" ahead
-run_bump "$C4" PUSH_BEFORE="$C2"
+run_bump "$C4"
 check "exits 0" test "$RC" -eq 0
 check "PR created" called "pr create"
 check "NO auto-merge call" not_called "enablePullRequestAutoMerge"
@@ -275,17 +289,9 @@ check "the job did not wait for a merge" not_called "run list"
 echo "auth commit already behind the pin"
 new_case behind-pin "$C3"
 mk_compare "$C3" "$C4" ahead
-run_bump "$C4" PUSH_BEFORE="$C3"
+run_bump "$C4"
 check "exits 0" test "$RC" -eq 0
 check "auto-merge sent" called "enablePullRequestAutoMerge"
-
-# --- 4. an auth commit between the pin and the push, push range clean ----------
-echo "auth commit skipped by an earlier push"
-new_case skipped "$C1"
-mk_compare "$C1" "$C4" ahead
-run_bump "$C4" PUSH_BEFORE="$C3"
-check "no auto-merge (pin range holds C3)" not_called "enablePullRequestAutoMerge"
-check "PR still opened" called "pr create"
 
 # --- 5. anything besides go.mod / go.sum changed: refuse ------------------------
 echo "stray file"
@@ -456,7 +462,7 @@ check "touches nothing" test -z "$(grep -E 'graphql|pr create|pr close|DELETE' "
 
 # --- 8b. the previous pin: every form maps to a commit, otherwise no auto-merge -------------
 # C1 is older than the auth commit C3, so a pin that maps to C1 must block auto-merge
-# through the "since the previous pin" range (the push range C3..C4 is clean); a pin
+# through the "since the previous pin" range (the only auth range there is); a pin
 # that does not map must block it through its own reason. Either way the PR opens.
 gitq -C "$GC" tag v1.5.0 "$C1"
 gitq -C "$GC" tag v1.5.1-rc.1 "$C1"
@@ -471,7 +477,7 @@ for ver in \
   new_case "pin-$ver" "$C1"
   set_pin "$ver"
   mk_compare "$C1" "$C4" ahead
-  run_bump "$C4" PUSH_BEFORE="$C3"
+  run_bump "$C4"
   check "maps to C1: the range since it is checked (auth commit found)" body_has "since the previous pin"
   check "no unmappable-pin reason" test -z "$(grep 'cannot be mapped' "$FAKE/pr_body.md" || true)"
   check "PR opened, no auto-merge" test -n "$(grep 'pr create' "$FAKE/calls.log")" -a -z "$(grep graphql "$FAKE/calls.log" || true)"
@@ -481,7 +487,7 @@ for ver in "v9.9.9" "v0.0.0-20261116140524-deadbeefdead" "v1.2.3-0.2026111614052
   echo "unmappable previous pin ${ver}"
   new_case "unmappable-$ver"
   set_pin "$ver"
-  run_bump "$C4" PUSH_BEFORE="$C3"
+  run_bump "$C4"
   check "exits 0" test "$RC" -eq 0
   check "PR still opened" called "pr create"
   check "NO auto-merge call" not_called "graphql"
@@ -492,7 +498,7 @@ echo "no previous go-common requirement"
 new_case no-requirement
 printf 'module example.com/consumer\n\ngo 1.25.0\n' >"$CK/go.mod"
 gitq -C "$CK" commit -q -am "no requirement"
-run_bump "$C4" PUSH_BEFORE="$C3"
+run_bump "$C4"
 check "PR opened, no auto-merge" test -n "$(grep 'pr create' "$FAKE/calls.log")" -a -z "$(grep graphql "$FAKE/calls.log" || true)"
 check "the body says there was no previous requirement" body_has "no previous go-common requirement"
 
@@ -500,7 +506,7 @@ echo "a mappable previous pin with a clean range still arms (the new check does 
 new_case pin-clean "$C3"
 set_pin "v1.4.3-0.20261116140524-${C3:0:12}"
 mk_compare "$C3" "$C4" ahead
-run_bump "$C4" PUSH_BEFORE="$C3"
+run_bump "$C4"
 check "auto-merge armed" called "enablePullRequestAutoMerge"
 
 # --- 9. dry run -------------------------------------------------------------------
@@ -594,6 +600,15 @@ run_bump "$C4"
 check "exits 0 with a notice" test "$RC" -eq 0
 check "says so" out_has "no deploy.yml run"
 
+echo "consumer without a deploy workflow"
+new_case nodeploywf
+run_bump "$C4" DEPLOY_WORKFLOW=
+check "exits 0" test "$RC" -eq 0
+check "auto-merge was still armed" called "enablePullRequestAutoMerge"
+check "waited for the merge" called "pr view"
+check "did not look for a deploy run" not_called "run list"
+check "says there is no deploy workflow" out_has "no deploy workflow"
+
 # --- 12. the PR is not pure at the last look -------------------------------------------
 echo "PR files include something else"
 new_case impure
@@ -663,7 +678,8 @@ run_plan() {
   : >"$CASE/plan.out"
   env -i PATH="$root/bin:$PATH" HOME="$CASE" FAKE="$FAKE" \
     GITHUB_OUTPUT="$CASE/plan.out" CONSUMERS_FILE="$repo_root/.github/consumers.json" \
-    GOCOMMON_REPO=org/go-common BUMP_TOKEN=tok EVENT=push PUSH_SHA="$C4" \
+    GOCOMMON_REPO=org/go-common BUMP_TOKEN=tok EVENT=workflow_run RUN_SHA="$C4" \
+    GOCOMMON_DIR="$GC" IGNORED_PATHS="$IGNORED_PATHS" \
     "$@" bash "$here/plan-bump.sh" >"$CASE/plan.log" 2>&1 || RC=$?
 }
 plan_out() { sed -n "s/^$1=//p" "$CASE/plan.out"; }
@@ -671,18 +687,67 @@ matrix_repos() { plan_out matrix | jq -r '[.include[].repo] | join(" ")'; }
 
 new_case plan1
 run_plan
-check "push: exits 0" test "$RC" -eq 0
-check "push: pins the pushed commit" test "$(plan_out sha)" = "$C4"
-check "push: is not a dry run" test "$(plan_out dry_run)" = false
-check "push: every enabled consumer" test "$(plan_out count)" = "$(jq '[.consumers[] | select(.enabled != false)] | length' "$repo_root/.github/consumers.json")"
-check "push: geo-service is not in the matrix" test -z "$(matrix_repos | grep -w geo-service || true)"
-check "push: sale-service carries its module dir" test "$(plan_out matrix | jq -r '.include[] | select(.repo == "sale-service") | .module_dir')" = services/outbox-worker
-check "push: required checks travel as JSON" test "$(plan_out matrix | jq -r '.include[] | select(.repo == "seo-service") | .required_checks | fromjson | length')" = 2
-check "push: auto_merge defaults to true" test "$(plan_out matrix | jq -r '.include[0].auto_merge')" = true
+check "run: exits 0" test "$RC" -eq 0
+check "run: pins the pushed commit" test "$(plan_out sha)" = "$C4"
+check "run: is not a dry run" test "$(plan_out dry_run)" = false
+check "run: every enabled consumer" test "$(plan_out count)" = "$(jq '[.consumers[] | select(.enabled != false)] | length' "$repo_root/.github/consumers.json")"
+check "run: geo-service is not in the matrix" test -z "$(matrix_repos | grep -w geo-service || true)"
+check "run: sale-service carries its module dir" test "$(plan_out matrix | jq -r '.include[] | select(.repo == "sale-service") | .module_dir')" = services/outbox-worker
+check "run: required checks travel as JSON" test "$(plan_out matrix | jq -r '.include[] | select(.repo == "seo-service") | .required_checks | fromjson | length')" = 2
+check "run: auto_merge defaults to true" test "$(plan_out matrix | jq -r '.include[0].auto_merge')" = true
+check "run: a consumer without deploy_workflow waits for deploy.yml" test "$(plan_out matrix | jq -r '.include[] | select(.repo == "auth-service") | .deploy_workflow')" = deploy.yml
+check "run: i18n-catalog has no deploy workflow to wait for" test "$(plan_out matrix | jq -r '.include[] | select(.repo == "i18n-catalog") | .deploy_workflow | length')" = 0
+check "run: dev-setup is dlqctl, never auto-merged" test "$(plan_out matrix | jq -r '.include[] | select(.repo == "dev-setup") | [.module_dir, .auto_merge, .deploy_workflow] | join("|")')" = "tools/dlqctl|false|"
 
-echo '{"consumers":[{"repo":"a","module_dir":".","auto_merge":false},{"repo":"b","module_dir":"."},{"repo":"c","module_dir":".","enabled":false}]}' >"$CASE/two.json"
+echo '{"consumers":[{"repo":"a","module_dir":".","auto_merge":false},{"repo":"b","module_dir":".","deploy_workflow":""},{"repo":"c","module_dir":".","enabled":false},{"repo":"d","module_dir":".","deploy_workflow":"ship.yml"}]}' >"$CASE/two.json"
 run_plan CONSUMERS_FILE="$CASE/two.json"
-check "push: auto_merge:false is kept, absent means true, enabled:false is dropped" test "$(plan_out matrix | jq -r '[.include[] | .repo + "=" + .auto_merge] | join(" ")')" = "a=false b=true"
+check "run: auto_merge:false is kept, absent means true, enabled:false is dropped" test "$(plan_out matrix | jq -r '[.include[] | .repo + "=" + .auto_merge] | join(" ")')" = "a=false b=true d=true"
+check "run: deploy_workflow absent = deploy.yml, \"\" = none, a name is kept" test "$(plan_out matrix | jq -r '[.include[] | .repo + "=" + .deploy_workflow] | join(" ")')" = "a=deploy.yml b= d=ship.yml"
+
+# What `paths-ignore` did on the push event, now done here (workflow_run has none).
+new_case planignore
+mk_compare "$C6" "$C6" identical
+run_plan RUN_SHA="$C6"
+check "docs/workflow/scripts only: exits 0 with an empty matrix" test "$RC" -eq 0 -a "$(plan_out count)" = 0
+check "docs/workflow/scripts only: still reports the sha" test "$(plan_out sha)" = "$C6"
+check "docs/workflow/scripts only: says why" grep -q "changed only docs" "$CASE/plan.log"
+mk_compare "$C7" "$C7" identical
+run_plan RUN_SHA="$C7"
+check "docs plus code: every consumer is bumped" test "$RC" -eq 0 -a "$(plan_out count)" -gt 0 -a "$(plan_out sha)" = "$C7"
+run_plan RUN_SHA="$C6" IGNORED_PATHS=
+check "no ignore list: nothing is skipped (fail closed)" test "$(plan_out count)" -gt 0
+mk_compare "$C1" "$C1" identical
+run_plan RUN_SHA="$C1"
+check "root commit (no parent to diff against): bumped, not skipped" test "$RC" -eq 0 -a "$(plan_out count)" -gt 0
+mk_compare "$C6" "$C6" identical
+run_plan RUN_SHA="$C6" GOCOMMON_DIR="$CASE/not-a-repo"
+check "files unreadable: bumped, not skipped" test "$RC" -eq 0 -a "$(plan_out count)" -gt 0
+# The step's checkout is shallow: the parent has to be fetched.
+git clone -q --depth 1 "file://$GC" "$CASE/shallow"
+run_plan RUN_SHA="$C7" GOCOMMON_DIR="$CASE/shallow"
+check "shallow checkout: the parent is fetched, a code commit is bumped" test "$RC" -eq 0 -a "$(plan_out count)" -gt 0
+git -C "$GC" branch -q docs-head "$C6"
+git clone -q --depth 1 --branch docs-head "file://$GC" "$CASE/shallow2"
+run_plan RUN_SHA="$C6" GOCOMMON_DIR="$CASE/shallow2"
+check "shallow checkout: the parent is fetched, a docs commit is skipped" test "$RC" -eq 0 -a "$(plan_out count)" = 0
+git -C "$GC" branch -q -D docs-head
+run_plan RUN_SHA=
+check "run: an empty sha is an error" test "$RC" -eq 1
+run_plan RUN_SHA="${C6:0:7}"
+check "run: a short sha is an error" test "$RC" -eq 1
+run_plan RUN_SHA='main; echo injected'
+check "run: a sha that is not hex is an error" test "$RC" -eq 1
+echo "$C6" >"$FAKE/commit_sha"
+mk_compare "$C6" "$C7" diverged
+run_plan RUN_SHA="$C6"
+check "run: a commit that is not on main is refused" test "$RC" -eq 1
+run_plan EVENT=workflow_dispatch RUN_SHA= INPUT_SHA="$C6" INPUT_ONLY= INPUT_DRY_RUN=false
+check "dispatch: a refused (off-main) docs commit stays refused" test "$RC" -eq 1
+mk_compare "$C6" "$C7" ahead
+run_plan EVENT=workflow_dispatch RUN_SHA= INPUT_SHA="$C6" INPUT_ONLY= INPUT_DRY_RUN=false
+check "dispatch: the ignore rule does not apply to a manual run" test "$RC" -eq 0 -a "$(plan_out count)" -gt 0
+run_plan EVENT=push
+check "a plain push event is no longer supported" test "$RC" -eq 1
 
 new_case plan2
 run_plan BUMP_TOKEN=
@@ -692,21 +757,52 @@ check "no token: says so" grep -q "GO_COMMON_BUMP_TOKEN is not set" "$CASE/plan.
 new_case plan3
 echo "$C4" >"$FAKE/commit_sha"
 mk_compare "$C4" "$C5" ahead
-run_plan EVENT=workflow_dispatch PUSH_SHA= INPUT_SHA= INPUT_ONLY= INPUT_DRY_RUN=
+run_plan EVENT=workflow_dispatch RUN_SHA= INPUT_SHA= INPUT_ONLY= INPUT_DRY_RUN=
 check "dispatch: dry run unless told otherwise" test "$(plan_out dry_run)" = true
 check "dispatch: empty sha = head of main" test "$(plan_out sha)" = "$C4"
-run_plan EVENT=workflow_dispatch PUSH_SHA= INPUT_SHA="${C4:0:7}" INPUT_ONLY=auth-service INPUT_DRY_RUN=false
+run_plan EVENT=workflow_dispatch RUN_SHA= INPUT_SHA="${C4:0:7}" INPUT_ONLY=auth-service INPUT_DRY_RUN=false
 check "dispatch: dry_run=false is honoured" test "$(plan_out dry_run)" = false
 check "dispatch: only= keeps one consumer" test "$(plan_out count)" = 1 -a "$(matrix_repos)" = auth-service
-run_plan EVENT=workflow_dispatch PUSH_SHA= INPUT_SHA= INPUT_ONLY=geo-service INPUT_DRY_RUN=false
+run_plan EVENT=workflow_dispatch RUN_SHA= INPUT_SHA= INPUT_ONLY=geo-service INPUT_DRY_RUN=false
 check "dispatch: only= a disabled consumer opens nothing" test "$RC" -eq 0 -a "$(plan_out count)" = 0
-run_plan EVENT=workflow_dispatch PUSH_SHA= INPUT_SHA= INPUT_ONLY=no-such-service
+run_plan EVENT=workflow_dispatch RUN_SHA= INPUT_SHA= INPUT_ONLY=no-such-service
 check "dispatch: unknown only= is an error" test "$RC" -eq 1
-run_plan EVENT=workflow_dispatch PUSH_SHA= INPUT_SHA='main; echo injected'
+run_plan EVENT=workflow_dispatch RUN_SHA= INPUT_SHA='main; echo injected'
 check "dispatch: a sha that is not hex is an error" test "$RC" -eq 1
 mk_compare "$C4" "$C5" diverged
-run_plan EVENT=workflow_dispatch PUSH_SHA= INPUT_SHA="$C4"
+run_plan EVENT=workflow_dispatch RUN_SHA= INPUT_SHA="$C4"
 check "dispatch: a commit that is not on main is refused" test "$RC" -eq 1
+
+# --- 14c. the workflow's shape: a bump waits for a GREEN Go CI on main ------------------------
+echo "bump-consumers.yml"
+wf_has() { grep -qF -- "$1" "$workflow"; }
+on_block=$(awk '/^on:/ { grab = 1; next } grab && /^[A-Za-z]/ { exit } grab { print }' "$workflow")
+plan_block=$(awk '/^  plan:/ { grab = 1; next } grab && /^    runs-on:/ { exit } grab { print }' "$workflow")
+on_has() { grep -qF -- "$1" <<<"$on_block"; }
+plan_has() { grep -qF -- "$1" <<<"$plan_block"; }
+check "triggers on workflow_run" on_has "workflow_run:"
+check "waits for the workflow named «Go CI»" on_has 'workflows: ["Go CI"]'
+check "...which is the name of ci.yml" grep -qx 'name: Go CI' "$ci_workflow"
+check "starts when the run has COMPLETED" on_has "types: [completed]"
+check "only for main" on_has "branches: [main]"
+check "keeps workflow_dispatch" on_has "workflow_dispatch:"
+check "no push trigger any more" test -z "$(grep -E '^  (push|pull_request|pull_request_target):' <<<"$on_block")"
+check "no paths-ignore (not available for workflow_run)" test -z "$(grep -n 'paths-ignore' "$workflow" | grep -v '^[0-9]*: *#' || true)"
+check "the plan job is guarded: manual run, or ..." plan_has "github.event_name == 'workflow_dispatch'"
+check "...Go CI concluded success" plan_has "github.event.workflow_run.conclusion == 'success'"
+check "...for a push" plan_has "github.event.workflow_run.event == 'push'"
+check "...to main" plan_has "github.event.workflow_run.head_branch == 'main'"
+check "...of this repository, not a fork" plan_has "github.event.workflow_run.head_repository.full_name == github.repository"
+check "the bump job runs only behind the plan job" grep -qx '    needs: plan' "$workflow"
+# shellcheck disable=SC2016 # a literal workflow expression, not a shell one
+check "the pinned commit is the run's head_sha" wf_has 'RUN_SHA: ${{ github.event.workflow_run.head_sha }}'
+check "head_sha is the ONLY workflow_run value outside the guard" test "$(grep -F 'github.event.workflow_run' "$workflow" | grep -v '^ *#' | grep -vc 'conclusion ==\|\.event ==\|head_branch ==\|head_repository.full_name ==\|RUN_SHA:')" = 0
+check "no expression is interpolated into a run: line" test -z "$(grep -E '^ *run:.*\$\{\{' "$workflow" || true)"
+check "the old push inputs are gone" test -z "$(grep -E 'PUSH_SHA|PUSH_BEFORE|github\.event\.before|github\.sha' "$workflow" | grep -v '^ *#' || true)"
+check "the concurrency group is unchanged" grep -qx '  group: bump-consumers' "$workflow"
+check "...and does not cancel a running bump" grep -qx '  cancel-in-progress: false' "$workflow"
+check "the ignore list is one block of the workflow" test -n "$IGNORED_PATHS"
+check "...and holds the old paths-ignore rules" test "$(grep -cxF -e '**.md' -e '.agentrules' -e '.github/**' -e 'scripts/**' <<<"$IGNORED_PATHS")" = 4
 
 # --- 15. the consumer list -----------------------------------------------------------------
 echo "consumers.json"
@@ -715,6 +811,10 @@ check "parses" jq -e '.consumers | length > 0' "$list"
 check "every entry has repo, module_dir and required_checks" jq -e '[.consumers[] | has("repo") and has("module_dir") and has("required_checks")] | all' "$list"
 check "no repo twice" jq -e '[.consumers[].repo] | (length == (unique | length))' "$list"
 check "geo-service is explicitly switched off with a reason" jq -e '.consumers[] | select(.repo == "geo-service") | .enabled == false and (.note | length > 0)' "$list"
+check "i18n-catalog: root module, validate demanded, no deploy workflow" jq -e '.consumers[] | select(.repo == "i18n-catalog") | .module_dir == "." and .required_checks == ["validate"] and .deploy_workflow == ""' "$list"
+check "dev-setup: tools/dlqctl only, never auto-merged, no deploy workflow, with a note" jq -e '.consumers[] | select(.repo == "dev-setup") | .module_dir == "tools/dlqctl" and .auto_merge == false and .deploy_workflow == "" and (.note | length > 0) and .required_checks == ["test (tools/dlqctl) / build & test"]' "$list"
+check "inbox-service (retired) is not listed" jq -e '[.consumers[].repo] | index("inbox-service") == null' "$list"
+check "deploy_workflow, where present, is a string" jq -e '[.consumers[] | select(has("deploy_workflow")) | .deploy_workflow | type == "string"] | all' "$list"
 check "sale-service points at the outbox worker module" jq -e '.consumers[] | select(.repo == "sale-service") | .module_dir == "services/outbox-worker"' "$list"
 
 echo

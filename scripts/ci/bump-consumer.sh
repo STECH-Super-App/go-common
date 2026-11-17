@@ -22,9 +22,10 @@
 #   GOCOMMON_REPO         default STECH-Super-App/go-common
 #   AUTO_MERGE            'false' = never switch auto-merge on here (consumers.json)
 #   REQUIRED_CHECKS       JSON array of check names that must be required on main
-#   DEPLOY_WORKFLOW       workflow file whose run on the merge commit is awaited (deploy.yml)
+#   DEPLOY_WORKFLOW       workflow file whose run on the merge commit is awaited. UNSET =
+#                         deploy.yml; EMPTY = the consumer has no deploy workflow: the job
+#                         ends once the PR is merged
 #   DRY_RUN               'true' = compute everything, change nothing anywhere
-#   PUSH_BEFORE           the push's `before` sha: the push range is PUSH_BEFORE..GOCOMMON_SHA
 #   AUTH_PATHS, AUTH_DEPS see auth-paths.sh
 #   GEN_GO_PAT            read access to the private modules, as in go-common's ci.yml
 #                         (falls back to the bump token)
@@ -76,7 +77,7 @@ module_dir=${MODULE_DIR:-.}
 gocommon_repo=${GOCOMMON_REPO:-STECH-Super-App/go-common}
 auto_merge_flag=${AUTO_MERGE:-true}
 required_checks=${REQUIRED_CHECKS:-[]}
-deploy_workflow=${DEPLOY_WORKFLOW:-deploy.yml}
+deploy_workflow=${DEPLOY_WORKFLOW-deploy.yml}
 dry_run=${DRY_RUN:-false}
 wait_seconds=${WAIT_SECONDS:-1800}
 poll_seconds=${POLL_SECONDS:-20}
@@ -218,10 +219,12 @@ if [ "$auto_merge_flag" = "false" ]; then
 fi
 
 # Critical Rule 20 (Token size budget): a change to the token or the auth
-# middleware needs the owner's sign-off and a real login on dev. Two ranges: the
-# commits of THIS push (the owner's rule) and every commit since the consumer's
-# previous pin — a push that auto-merges must not carry an earlier auth change
-# along that was left unmerged without auto-merge.
+# middleware needs the owner's sign-off and a real login on dev. The range is every
+# commit since the consumer's previous pin. It contains the commits of the run being
+# bumped, and it also catches an earlier auth change that was left unmerged without
+# auto-merge. (There is no separate «this push» range: a workflow_run event does
+# not carry the push's `before`, and the range below is a superset of it. A pin that
+# cannot be mapped leaves it unchecked, which turns auto-merge off.)
 auth_lines=""
 check_auth_range() {
   local from=$1 label=$2 out rc=0
@@ -232,10 +235,6 @@ check_auth_range() {
     *) auth_lines+="[${label}] the range could not be checked (${out//$'\n'/; }) " ;;
   esac
 }
-push_before=${PUSH_BEFORE:-}
-if [ -n "$push_before" ] && [[ ! $push_before =~ ^0+$ ]]; then
-  check_auth_range "$push_before" "this push"
-fi
 if [ -n "$prev_sha" ]; then
   check_auth_range "$prev_sha" "since the previous pin"
 else
@@ -556,6 +555,11 @@ while :; do
 done
 echo "merged as ${merge_sha}"
 
+if [ -z "$deploy_workflow" ]; then
+  echo "${CONSUMER_REPO} has no deploy workflow (deploy_workflow is empty in consumers.json): not waiting for a deploy"
+  summary "- ${CONSUMER_REPO}: merged (${merge_sha:0:7}), no deploy workflow to wait for"
+  exit 0
+fi
 appear_deadline=$(($(date +%s) + deploy_appear_seconds))
 while :; do
   mapfile -t runs < <(gh run list -R "$CONSUMER_REPO" --workflow "$deploy_workflow" --commit "$merge_sha" \
